@@ -48,7 +48,7 @@ FUNCS = [
     ("trunc",      "trunc",        "trunc({x})",                "Округление", "same", True,  0, ""),
     ("frac",       "frac",         "fract({x})",                "Округление", "same", True,  0, ""),
     ("fmod",       "fmod",         "{a} - {x} * trunc({a} / {x})", "Округление", "same", True, 0, "x - y*trunc(x/y), семантика HLSL fmod"),
-    ("mod",        "mod (GLSL)",   "mod({a}, {x})",             "Округление", "same", True,  0, "Нет в HLSL: x - y*floor(x/y). В HLSL есть только fmod"),
+    ("mod",        "mod (GLSL)",   "mod({a}, {x})",             "Округление", "same", True,  0, "Встроенной в HLSL нет, пишется формулой. Отличается от fmod для отрицательных x"),
     # --- exp / pow
     ("sqrt",       "sqrt",         "sqrt({x})",                 "Степени и логарифмы", "same", True, 0, ""),
     ("rsqrt",      "rsqrt",        "inversesqrt({x})",          "Степени и логарифмы", "same", True, 0, ""),
@@ -72,12 +72,9 @@ FUNCS = [
     ("sinh",       "sinh",         "sinh({x})",                 "Гиперболические", "same", True, 0, ""),
     ("cosh",       "cosh",         "cosh({x})",                 "Гиперболические", "same", True, 0, ""),
     ("tanh",       "tanh",         "tanh({x})",                 "Гиперболические", "same", True, 0, ""),
-    ("asinh",      "asinh",        "asinh({x})",                "Гиперболические", "same", True, 0, "Встроенная в GLSL; в HLSL (FXC/DXC) её нет — см. формулу ниже"),
-    ("acosh",      "acosh",        "acosh({x})",                "Гиперболические", "same", True, 0, "Встроенная в GLSL; в HLSL (FXC/DXC) её нет — см. формулу ниже"),
-    ("atanh",      "atanh",        "atanh({x})",                "Гиперболические", "same", True, 0, "Встроенная в GLSL; в HLSL (FXC/DXC) её нет — см. формулу ниже"),
-    ("asinh_f",    "asinh (формула)", "log({x} + sqrt({x} * {x} + 1.0))", "Гиперболические", "same", True, 0, "Как пишут в HLSL: log(x + sqrt(x*x + 1))"),
-    ("acosh_f",    "acosh (формула)", "log({x} + sqrt({x} * {x} - 1.0))", "Гиперболические", "same", True, 0, "Как пишут в HLSL: log(x + sqrt(x*x - 1))"),
-    ("atanh_f",    "atanh (формула)", "0.5 * log((1.0 + {x}) / (1.0 - {x}))", "Гиперболические", "same", True, 0, "Как пишут в HLSL: 0.5 * log((1 + x) / (1 - x))"),
+    ("asinh",      "asinh",        "asinh({x})",                "Гиперболические", "same", True, 0, "Встроенной в HLSL нет, пишется формулой (стоит столько же)"),
+    ("acosh",      "acosh",        "acosh({x})",                "Гиперболические", "same", True, 0, "Встроенной в HLSL нет, пишется формулой (стоит столько же)"),
+    ("atanh",      "atanh",        "atanh({x})",                "Гиперболические", "same", True, 0, "Встроенной в HLSL нет, пишется формулой (стоит столько же)"),
     # --- derivatives
     ("ddx",        "ddx",          "dFdx({x})",                 "Производные", "same", True, 0, ""),
     ("ddy",        "ddy",          "dFdy({x})",                 "Производные", "same", True, 0, ""),
@@ -116,6 +113,13 @@ FUNCS = [
     ("isinf",      "isinf",        ("float(isinf({x}))", "{T}(isinf({x}))"), "Сравнения", "same", True, 0, ""),
     ("isfinite",   "isfinite",     ("float(!isinf({x}) && !isnan({x}))", "{T}(not(isinf({x}))) * {T}(not(isnan({x})))"),
                                                                 "Сравнения", "same", True, 0, "!isinf && !isnan"),
+    # --- branches (real if statements inside a helper; condition on .x for vectors)
+    ("if_small",   "if (x > a) x *= b", "if_small_({x}, {a}, {b})", "Ветвления", "same", True, 0,
+                   "Короткий if компилятор обычно превращает в select без перехода"),
+    ("if_else",    "if (x > a) sin else cos", "if_else_({x}, {a})", "Ветвления", "same", True, 0,
+                   "Компилятор считает обе ветки и выбирает результат (переход не делает). sin или cos отдельно = 8"),
+    ("if_skip",    "if (x > a) { 8× sin }", "if_skip_({x}, {a})", "Ветвления", "same", True, 0,
+                   "Тяжёлая ветка — настоящий переход. Основная цифра — если ветка выполнилась"),
     # --- conversions / half
     ("i2f",        "(float)(int)x", ("float(int({x}))", "{T}({I}({x}))"), "Конвертации", "same", True, 0, "float → int → float"),
     ("f32tof16",   "f32tof16",     {"float": "uintBitsToFloat(packHalf2x16(vec2({x}, 0.0)))", "vec2": "vec2(uintBitsToFloat(packHalf2x16(vec2({x}.x, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.y, 0.0))))", "vec4": "vec4(uintBitsToFloat(packHalf2x16(vec2({x}.x, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.y, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.z, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.w, 0.0))))"},
@@ -177,6 +181,9 @@ _POSPOW = "vec3 PositivePow(vec3 b, vec3 p) { return pow(max(abs(b), vec3(5.9604
 _UNPACK_AG = ("vec3 UnpackNormalAG(vec4 p) { vec3 n; n.xy = p.ag * 2.0 - 1.0; "
               "n.z = max(1.0e-16, sqrt(1.0 - clamp(dot(n.xy, n.xy), 0.0, 1.0))); return n; }\n")
 PRELUDE = {
+    "if_small": "{T} if_small_({T} v, {T} a, {T} b) { if ({V0} > {A0}) v = v * b; return v; }\n",
+    "if_else": "{T} if_else_({T} v, {T} a) { if ({V0} > {A0}) v = sin(v); else v = cos(v); return v; }\n",
+    "if_skip": "{T} if_skip_({T} v, {T} a) { if ({V0} > {A0}) { for (int i = 0; i < 8; i++) v = sin(v); } return v; }\n",
     "frexp": "{T} frexp_({T} v) { {I} e; {T} m = frexp(v, e); return m + {T}(e); }\n",
     "modf": "{T} modf_({T} v) { {T} i; {T} f = modf(v, i); return f * i; }\n",
     "unpack_rgb": "vec3 UnpackNormalRGBNoScale(vec4 p) { return p.rgb * 2.0 - 1.0; }\n",
@@ -231,7 +238,9 @@ def glsl_expr(expr, t):
 
 def prelude(fid, t, prec):
     p = PRELUDE.get(fid, "")
-    return p.replace("{T}", t).replace("{I}", _ivec(t)).replace("{MINV}", MINV[prec])
+    v0, a0 = ("v", "a") if t == "float" else ("v.x", "a.x")
+    return (p.replace("{T}", t).replace("{I}", _ivec(t)).replace("{MINV}", MINV[prec])
+             .replace("{V0}", v0).replace("{A0}", a0))
 
 
 def hlsl_type(prec, t):
@@ -254,15 +263,14 @@ HLSL_EXPR = {
     "clamp": "clamp(x, a, b)", "saturate": "saturate(x)", "lerp": "lerp(x, a, b)",
     "step": "step(a, x)", "smoothstep": "smoothstep(a, x, b)",
     "floor": "floor(x)", "ceil": "ceil(x)", "round": "round(x)", "trunc": "trunc(x)",
-    "frac": "frac(x)", "fmod": "fmod(a, x)", "mod": None,
+    "frac": "frac(x)", "fmod": "fmod(a, x)", "mod": "a - x * floor(a / x)",
     "sqrt": "sqrt(x)", "rsqrt": "rsqrt(x)", "exp2": "exp2(x)", "exp": "exp(x)",
     "log2": "log2(x)", "log": "log(x)", "pow": "pow(x, a)",
     "sin": "sin(x)", "cos": "cos(x)", "sincos": "sincos(x, s, c); s + c", "tan": "tan(x)",
     "asin": "asin(x)", "acos": "acos(x)", "atan": "atan(x)", "atan2": "atan2(x, a)",
     "radians": "radians(x)", "degrees": "degrees(x)",
     "sinh": "sinh(x)", "cosh": "cosh(x)", "tanh": "tanh(x)",
-    "asinh": None, "acosh": None, "atanh": None,
-    "asinh_f": "log(x + sqrt(x * x + 1))", "acosh_f": "log(x + sqrt(x * x - 1))", "atanh_f": "0.5 * log((1 + x) / (1 - x))",
+    "asinh": "log(x + sqrt(x * x + 1))", "acosh": "log(x + sqrt(x * x - 1))", "atanh": "0.5 * log((1 + x) / (1 - x))",
     "ddx": "ddx(x)", "ddy": "ddy(x)", "fwidth": "fwidth(x)",
     "dot": "dot(x, a)", "length": "length(x)", "distance": "distance(x, a)",
     "normalize": "normalize(x)", "reflect": "reflect(x, a)", "refract": "refract(x, a, s)",
@@ -270,6 +278,8 @@ HLSL_EXPR = {
     "pow2": "pow(x, 2)", "pow3": "pow(x, 3)", "pow4": "pow(x, 4)", "pow5": "pow(x, 5)",
     "pow05": "pow(x, 0.5)", "pow22": "pow(x, 2.2)", "pow1_22": "pow(x, 1.0 / 2.2)",
     "log10": "log10(x)", "ldexp": "ldexp(a, x)", "frexp": "frexp(x, e)", "modf": "modf(x, ip)",
+    "if_small": "if (x > a) x *= b;", "if_else": "if (x > a) x = sin(x); else x = cos(x);",
+    "if_skip": "if (x > a) { for (int i = 0; i < 8; i++) x = sin(x); }",
     "select": "x > a ? b : x", "cmp": "(float)(x > a)", "any": "any(x > a)", "all": "all(x > a)",
     "isnan": "isnan(x)", "isinf": "isinf(x)", "isfinite": "isfinite(x)",
     "i2f": "(float)(int)x", "f32tof16": "asfloat(f32tof16(x))", "f16tof32": "f16tof32(asuint(x))",

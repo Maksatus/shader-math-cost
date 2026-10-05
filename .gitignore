@@ -6,3 +6,4 @@ __pycache__/
 .claude/
 # old hand-made table
 Instruction Cycles*
+bench/errors.txt

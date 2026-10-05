@@ -83,6 +83,7 @@ def compile_one(malioc, api, core, src):
         res = {
             "ok": True,
             "cycles": dict(zip(perf["pipelines"], perf["longest_path_cycles"]["cycle_count"])),
+            "short": dict(zip(perf["pipelines"], perf["shortest_path_cycles"]["cycle_count"])),
             "bound": perf["longest_path_cycles"]["bound_pipelines"],
             "props": {p["name"]: p["value"] for p in v["properties"]},
             "driver": j["shaders"][0].get("driver", ""),
@@ -98,8 +99,8 @@ def arith(c):
     return {p: c[p] for p in ARITH_PIPES + ("texture",) if p in c}
 
 
-def slope(r1, r2, n1, n2):
-    a, b = arith(r1["cycles"]), arith(r2["cycles"])
+def slope(r1, r2, n1, n2, key="cycles"):
+    a, b = arith(r1.get(key, r1["cycles"])), arith(r2.get(key, r2["cycles"]))
     return {p: (b[p] - a[p]) / (n2 - n1) for p in a}
 
 
@@ -187,10 +188,17 @@ def main():
                 p["pair"] += 1
                 retry.append(p)
                 continue
+            if any(v is None for r in rs_all for c in (r["cycles"], r.get("short", {})) for v in c.values()):
+                # e.g. malioc 8.4 (Midgard) cannot bound a path through a loop
+                errors.append((p["core"], p["api"], p["variant"], p["fid"], "malioc returned no cycle count"))
+                continue
             s = slope(results[f1], results[f2], n1, n2)
+            ss = slope(results[f1], results[f2], n1, n2, "short")
             if b1:
                 sb = slope(results[b1], results[b2], n1, n2)
                 s = {k: s[k] - sb[k] for k in s}
+                ss = {k: ss[k] - sb[k] for k in ss}
+            p["short"] = ss
             slopes[(p["core"], p["api"], p["variant"], p["fid"])] = s
             p["slope"], p["r2"], p["rs"] = s, results[f2], results[fs]
             p["spill"] = any(spills(r) for r in rs_all)
@@ -201,12 +209,14 @@ def main():
     for p in plan:
         if "slope" not in p:
             continue
-        s = dict(p["slope"])
+        s, sh = dict(p["slope"]), dict(p["short"])
         if p["extra"]:
             add = slopes[(p["core"], p["api"], p["variant"], "add")]
             # 'add' of the variant type; extra adds are on the same type
             s = {k: s[k] - p["extra"] * add[k] for k in s}
+            sh = {k: sh[k] - p["extra"] * add[k] for k in sh}
         s = {k: max(0.0, v) for k, v in s.items()}
+        short = max([max(0.0, v) for k, v in sh.items() if k != "texture"] or [0.0])
         tex = s.pop("texture", 0.0)
         unit = slopes.get((p["core"], p["api"], "float", "mad"), {})
         unit_c = max(v for k, v in unit.items() if k != "texture") if unit else 0
@@ -230,6 +240,9 @@ def main():
             "cycles": round(cyc, 5),
             "rel_fma": round(cyc / unit_c, 3) if unit_c else "",
             "unit": "tex2D" if p["kind"] == "tex" else "FMA",
+            # cost on the shortest path (a skipped branch); empty when it equals the longest path
+            "rel_short": round(short / unit_c, 3)
+                         if unit_c and p["kind"] != "tex" and abs(short - cyc) > 1e-6 else "",
             "alu_fma": round(alu / max(v for k, v in unit.items() if k != "texture"), 3)
                        if p["kind"] == "tex" and unit else "",
             "fma": round(s["arith_fma"], 5) if "arith_fma" in s else "",
@@ -253,7 +266,7 @@ def main():
         w.writerows(rows)
     print(f"wrote {len(rows)} rows -> {os.path.abspath(out)}")
     if errors:
-        epath = os.path.join(args.out, "errors.txt")
+        epath = os.path.join(HERE, "errors.txt")
         with open(epath, "w", encoding="utf-8") as f:
             for e in errors:
                 f.write(" | ".join(map(str, e[:4])) + "\n" + e[4] + "\n\n")

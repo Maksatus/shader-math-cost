@@ -207,7 +207,7 @@ function parseCSV(text) {
 
 function ingest(text) {
   const rows = parseCSV(text.replace(/^﻿/, ""));
-  const num = ["cycles", "rel_fma", "fma", "cvt", "sfu", "fp16_pct", "work_regs_1call", "uniform_regs_1call", "alu_fma"];
+  const num = ["cycles", "rel_fma", "fma", "cvt", "sfu", "fp16_pct", "work_regs_1call", "uniform_regs_1call", "alu_fma", "rel_short"];
   for (const r of rows) for (const k of num) r[k] = r[k] === "" ? null : +r[k];
   const gpuMap = new Map();
   for (const r of rows) if (!gpuMap.has(r.gpu)) gpuMap.set(r.gpu, { name: r.gpu, arch: r.arch, malioc: r.malioc });
@@ -257,15 +257,16 @@ function gpuTitle(g) {
 const get = (fid, g, v = S.variant, api = S.api) => D.idx.get(`${api}|${v}|${fid}|${g}`);
 
 function stats(fid) {
-  const vals = [], alus = [], bounds = {}; let r0 = null;
+  const vals = [], alus = [], shorts = [], bounds = {}; let r0 = null;
   for (const g of D.gpus) {
     const r = get(fid, g.name); if (!r || r.rel_fma == null) continue;
     r0 = r0 || r; vals.push(r.rel_fma); bounds[r.bound] = (bounds[r.bound] || 0) + 1;
     if (r.alu_fma != null) alus.push(r.alu_fma);
+    if (r.rel_short != null) shorts.push(r.rel_short);
   }
   const bound = Object.entries(bounds).filter(e => e[0] !== "-").sort((a, b) => b[1] - a[1]).map(e => e[0])[0] || "–";
   return { med: median(vals), min: vals.length ? Math.min(...vals) : null, max: vals.length ? Math.max(...vals) : null,
-           alu: median(alus), typ: r0 ? r0.type : "", hexpr: r0 ? (r0.hlsl_expr || r0.glsl) : "", glsl: r0 ? r0.glsl : "", bound };
+           alu: median(alus), short: median(shorts), typ: r0 ? r0.type : "", hexpr: r0 ? (r0.hlsl_expr || r0.glsl) : "", glsl: r0 ? r0.glsl : "", bound };
 }
 const BOUND_RU = { FMA: "FMA", CVT: "CVT", SFU: "SFU", A: "ALU", TEX: "TEX" };
 const BOUND_HELP = {
@@ -327,7 +328,8 @@ function render() {
       `<td class="heat big" style="${heat(s.med)}">${fmt(s.med)}</td>` +
       `<td class="l"><span class="range"><i style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i></span> <span class="code">${fmt(s.min)}–${fmt(s.max)}</span></td>`;
     archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
-    const texNote = f.unit === "tex2D" && s.alu ? `+${fmt(s.alu)} FMA на координаты. ` : "";
+    const texNote = f.unit === "tex2D" && s.alu ? `+${fmt(s.alu)} FMA на координаты. `
+      : s.short != null ? `Если ветка пропущена: ${fmt(s.short)}. ` : "";
     h += `<td class="note gl">${esc(texNote + f.note)}</td></tr>`;
   }
   wrap.innerHTML = h + `</tbody></table>`;
@@ -358,17 +360,17 @@ function openDrawer(fid) {
     <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, ${f.unit === "tex2D" ? "× tex2D" : "FMA"}</div></div>`).join("")}</div>
     <p class="sub">Блок, где считается функция: <b>${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b> — ${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}. Блоки FMA, CVT и SFU работают параллельно: если шейдер в основном умножает и складывает, функция в CVT/SFU частично «прячется» за ними.</p>
     <p class="sub">OpenGL ES и Vulkan: ${diff ? `отличаются в ${diff} из ${tot} случаев (колонка «Разница»)` : "одинаково на всех GPU"}.</p>
-    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>${f.unit === "tex2D" ? "× tex2D" : "FMA"}</th><th></th>${f.unit === "tex2D" ? "<th>ALU, FMA</th>" : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
+    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>${f.unit === "tex2D" ? "× tex2D" : "FMA"}</th><th></th>${f.unit === "tex2D" ? "<th>ALU, FMA</th>" : ""}${s.short != null ? "<th>ветка пропущена</th>" : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
   let prev = null;
   const vmax = Math.max(0, ...D.gpus.map(g => get(fid, g.name)?.rel_fma || 0));
   for (const g of D.gpus) {
     const r = get(fid, g.name); if (!r) continue;
-    if (g.arch !== prev) { const G = GROUPS[g.arch]; h += `<tr class="cat"><td colspan="14">${G.name} · ${G.years}</td></tr>`; prev = g.arch; }
+    if (g.arch !== prev) { const G = GROUPS[g.arch]; h += `<tr class="cat"><td colspan="15">${G.name} · ${G.years}</td></tr>`; prev = g.arch; }
     const o = get(fid, g.name, S.variant, S.api === "GLES" ? "Vulkan" : "GLES");
     const d = o && o.rel_fma != null && r.rel_fma != null ? o.rel_fma - r.rel_fma : null;
     const [y, segm] = GPU_INFO[g.name] || ["?", ""];
     h += `<tr title="${esc(gpuTitle(g))}"><td class="l">${g.name}</td><td class="l">${y}</td><td class="l code">${segm}</td>
-      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${f.unit === "tex2D" ? `<td>${fmt(r.alu_fma)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
+      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${f.unit === "tex2D" ? `<td>${fmt(r.alu_fma)}</td>` : ""}${s.short != null ? `<td>${fmt(r.rel_short)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
       <td class="l code">${BOUND_RU[r.bound] || r.bound}</td><td>${r.work_regs_1call ?? "–"}</td>
       <td class="l code">${r.chain || "–"}${r.spill === "True" ? " ⚠" : ""}</td>
       <td class="code">${d == null ? "–" : Math.abs(d) < 1e-3 ? "так же" : (d > 0 ? "+" : "") + d.toFixed(2)}</td></tr>`;
