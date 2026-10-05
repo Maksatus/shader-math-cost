@@ -135,6 +135,7 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
   <div class="controls">
     <div class="group"><label>API</label><div class="seg" id="api"></div></div>
     <div class="group"><label>Тип</label><div class="seg" id="variant"></div></div>
+    <div class="group"><label>Колонки</label><div class="seg" id="cols"></div></div>
     <div class="group"><input type="search" id="q" placeholder="Поиск функции…"></div>
     <div class="group" style="margin-left:auto">
       <button class="btn" id="load">Загрузить CSV</button>
@@ -148,7 +149,7 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
     <span><span class="tier medium">средняя</span> ≤ 10</span>
     <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
     <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
-    <span><span class="apx" style="cursor:default">≈ быстрее</span> — есть быстрая замена.</span>
+    <span><span class="apx" style="cursor:default">≈ до ×2</span> — есть быстрая замена.</span>
   </div>
   <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
 
@@ -156,7 +157,7 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
     <summary>Как измерялось и как читать</summary>
     <ul>
       <li><b>Единица «FMA»</b> — стоимость одной скалярной highp FMA (<span class="code">a*b+c</span>) на том же GPU. У разных GPU такты в разном масштабе, а в FMA видно, сколько «обычных операций» стоит функция. Сырые такты есть в подробностях (клик по строке).</li>
-      <li><b>Почему на новых GPU функции «дорожают».</b> Они не стали медленнее: например, <span class="code">sqrt</span> на ядре G78 занимает 0.25 такта, на G715 — 0.125, на Mali G2 — 0.0625. Но в G715 и 5th Gen блоки FMA удвоили, а блок спецфункций (SFU) — нет, поэтому относительно обычной арифметики <span class="code">sqrt</span>, деление, <span class="code">sin</span>, <span class="code">exp</span> подорожали вдвое. На таких GPU выгоднее экономить именно на этих функциях. На старых Bifrost и Midgard, наоборот, сама FMA медленная, поэтому спецфункции там выглядят дешёвыми. Если цена функции заметно отличается между 5th Gen и Valhall, это написано в заметке.</li>
+      <li><b>Почему на новых GPU функции «дорожают».</b> Они не стали медленнее: например, <span class="code">sqrt</span> на ядре G78 занимает 0.25 такта, на G715 — 0.125, на Mali G2 — 0.0625. Но в G715 и 5th Gen блоки FMA удвоили, а блок спецфункций (SFU) — нет, поэтому относительно обычной арифметики <span class="code">sqrt</span>, деление, <span class="code">sin</span>, <span class="code">exp</span> подорожали вдвое. На таких GPU выгоднее экономить именно на этих функциях. На старых Bifrost и Midgard, наоборот, сама FMA медленная, поэтому спецфункции там выглядят дешёвыми.</li>
       <li>Цифры относятся только к Mali (Android на MediaTek, старых Exynos, Kirin, Google Tensor G1–G4). У Adreno (Snapdragon), Apple GPU и Xclipse (Exynos 2022+) они другие.</li>
       <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <span class="code">x = f(x, a) + w</span> во фрагментном шейдере (если не хватает регистров — 8 и 16 или 4 и 8). Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
       <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому умножение в конце функции сливается со следующим сложением в FMA: <span class="code">pow(x, 2)</span> и <span class="code">radians</span> стоят ≈0, а <span class="code">log10</span> — как <span class="code">log2</span>. Исключение — строки <span class="code">add</span>, <span class="code">mul</span> и <span class="code">mad</span>: это сами базовые операции, они меряются цепочкой без <span class="code">+ w</span> (<span class="code">x = x * a</span>), поэтому <span class="code">mul</span> = 1. <span class="code">abs</span>, <span class="code">saturate</span> и <span class="code">f16tof32</span> часто бесплатны, потому что это модификаторы операндов.</li>
@@ -214,7 +215,8 @@ const GPU_INFO = {
   "Mali-T760": [2013, "флагман", "Exynos 7420 (S6)"], "Mali-T720": [2013, "бюджетный", ""],
 };
 const VARIANTS = ["float", "half", "float4", "half4"];
-const S = { api: "GLES", variant: "float", q: "", sort: null };
+const COL_SHORT = { "Arm 5th Generation": "5th Gen", "Valhall": "Valhall", "Bifrost": "Bifrost", "Midgard": "Midgard", "Midgard budget": "Midgard бюдж." };
+const S = { api: "GLES", variant: "float", q: "", sort: null, cols: ["Arm 5th Generation", "Valhall", "Bifrost"] };
 let D = null;
 
 function parseCSV(text) {
@@ -269,6 +271,13 @@ function seg(id, opts, key) {
 function buildControls() {
   seg("api", [["GLES", "OpenGL ES"], ["Vulkan", "Vulkan"]], "api");
   seg("variant", VARIANTS.map(v => [v, v]), "variant");
+  const el = document.getElementById("cols"); el.innerHTML = "";
+  for (const a of ARCH_ORDER.filter(a => D.gpus.some(g => groupOf(g) === a))) {
+    const b = document.createElement("button"); b.textContent = COL_SHORT[a]; b.className = S.cols.includes(a) ? "on" : "";
+    b.title = `${GROUPS[a].name} · ${GROUPS[a].years}`;
+    b.onclick = () => { S.cols = S.cols.includes(a) ? S.cols.filter(x => x !== a) : [...S.cols, a]; save(); buildControls(); render(); };
+    el.appendChild(b);
+  }
 }
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -322,11 +331,12 @@ function render() {
   const q = S.q.trim().toLowerCase();
   const funcs = D.funcs.filter(f => !q || [f.id, f.hlsl, f.category].some(s => s.toLowerCase().includes(q)));
   if (!funcs.length) { wrap.innerHTML = `<div class="empty">Ничего не найдено</div>`; return; }
-  const archs = ARCH_ORDER.filter(a => D.gpus.some(g => groupOf(g) === a));
+  const allArchs = ARCH_ORDER.filter(a => D.gpus.some(g => groupOf(g) === a));
+  const archs = allArchs.filter(a => S.cols.includes(a));
   const st = new Map(funcs.map(f => {
     const s = stats(f.id);
     s.grp = {};
-    for (const a of archs) s.grp[a] = median(D.gpus.filter(g => groupOf(g) === a).map(g => get(f.id, g.name)?.rel_fma).filter(v => v != null));
+    for (const a of allArchs) s.grp[a] = median(D.gpus.filter(g => groupOf(g) === a).map(g => get(f.id, g.name)?.rel_fma).filter(v => v != null));
     return [f.id, s];
   }));
   const gmax = Math.max(...[...st.values()].map(s => s.max ?? 0), 1e-9);
@@ -342,7 +352,7 @@ function render() {
     });
   }
   const arrow = k => S.sort && S.sort.key === k ? (S.sort.dir > 0 ? " ▲" : " ▼") : "";
-  const ncol = 6 + archs.length;
+  const ncol = 7 + archs.length;
   let h = `<table class="main"><thead><tr class="n">` +
     `<th class="l fn sortable" data-k="fn">Функция${arrow("fn")}</th><th class="l">Тип</th><th class="l">Уровень</th>` +
     `<th class="sortable" data-k="med" title="Медиана по всем GPU">Медиана${arrow("med")}</th><th class="l">Разброс по GPU</th>`;
@@ -350,33 +360,30 @@ function render() {
     const G = GROUPS[a];
     h += `<th class="grpc sortable ${G.cls} ${i === 0 ? "gl" : ""}" data-k="${a}" title="Медиана по GPU группы: ${G.years}">${G.name}${arrow(a)}<small>${G.years}</small></th>`;
   });
-  h += `<th class="l gl">Заметка</th></tr></thead><tbody>`;
+  h += `<th class="l gl" title="Быстрая замена встроенной функции">Замена</th><th class="l">Заметка</th></tr></thead><tbody>`;
 
   let lastCat = null;
   for (const f of order) {
     const s = st.get(f.id);
     if (!S.sort && f.category !== lastCat) {
-      const un = isTex(f) ? `<span class="catnote"> — тоже в FMA. Текстурный блок работает параллельно с арифметикой: если шейдер упирается в математику, выборка почти бесплатна, если в текстуры — формулу дешевле этой цифры выгоднее посчитать, чем запечь. «× tex2D» в заметке — во сколько раз дольше обычной выборки, «N FMA на координаты» — арифметика на подготовку. malioc считает билинейную фильтрацию 32-битной текстуры; трилинейная, анизотропная и широкие форматы на устройстве дороже.</span>` : "";
+      const un = isTex(f) ? `<span class="catnote"> — тоже в FMA. Текстурный блок работает параллельно с математикой. «× tex2D» — во сколько раз дольше обычной выборки. Замер — билинейная 32-битная текстура, трилинейная и анизотропная дороже.</span>` : "";
       h += `<tr class="cat"><td colspan="${ncol}">${esc(f.category)}${un}</td></tr>`;
       lastCat = f.category;
     }
     const t = tier(s.med, f.unit);
     const lo = s.min != null ? s.min / gmax * 100 : 0, hi = s.max != null ? s.max / gmax * 100 : 0;
     const ax = apxFor(f.id);
-    const axBtn = ax.length ? `<button class="apx" data-apx="${f.id}">≈ быстрее ×${fmt(Math.max(...ax.map(a => apxSpeed(a).all)))}</button> ` : "";
+    const axBtn = ax.length ? `<button class="apx" data-apx="${f.id}" title="${ax.length} вар.: ${esc(ax.map(a => a.name).join(", "))}">≈ до ×${fmt(Math.max(...ax.map(a => apxSpeed(a).all)))}</button>` : "";
     h += `<tr data-f="${f.id}"><td class="l fn">${esc(f.hlsl)}<div class="code">${esc(s.hexpr)}</div></td>` +
       `<td class="l code">${esc(s.typ)}</td><td class="l">${t ? `<span class="tier ${t}">${TIER_RU[t]}</span>` : ""}</td>` +
       `<td class="heat big" style="${heat(s.med)}">${fmt(s.med)}</td>` +
       `<td class="l"><span class="range"><i style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i></span> <span class="code">${fmt(s.min)}–${fmt(s.max)}</span></td>`;
     archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
-    const texNote = isTex(f) ? `${fmt(s.tex)} × tex2D` + (s.alu ? `, ${fmt(s.alu)} FMA на координаты. ` : ". ")
-      : s.short != null ? (isBranch(f) ? `Если ветка пропущена: ${fmt(s.short)}. ` : `Внутри есть переход, короткий путь: ${fmt(s.short)}. `) : "";
-    // the unit is this GPU's FMA: flag functions whose relative cost changed between generations
-    const g5 = s.grp["Arm 5th Generation"], gv = s.grp["Valhall"];
-    const k = f.unit === "FMA" && g5 >= 0.5 && gv >= 0.5 ? g5 / gv : 1;
-    const trend = k >= 1.5 ? `На 5th Gen ×${fmt(k)} к Valhall (относительно FMA). `
-      : k <= 1 / 1.5 ? `На 5th Gen ×${fmt(k)} к Valhall (относительно FMA). ` : "";
-    h += `<td class="note gl">${axBtn}${esc(texNote + trend + f.note)}</td></tr>`;
+    const notes = [];
+    if (isTex(f)) notes.push(`${fmt(s.tex)} × tex2D` + (s.alu ? `, +${fmt(s.alu)} FMA на uv` : ""));
+    else if (s.short != null) notes.push(`${isBranch(f) ? "Ветка пропущена" : "Короткий путь"}: ${fmt(s.short)}`);
+    if (f.note) notes.push(f.note);
+    h += `<td class="l gl">${axBtn}</td><td class="note">${esc(notes.join(". "))}</td></tr>`;
   }
   wrap.innerHTML = h + `</tbody></table>`;
   wrap.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
@@ -520,10 +527,11 @@ function openDrawer(fid) {
 function closeDrawer() { document.getElementById("drawer").classList.remove("open"); }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
 
-function save() { try { localStorage.setItem("maliCost2", JSON.stringify({ api: S.api, variant: S.variant })); } catch (e) {} }
+function save() { try { localStorage.setItem("maliCost2", JSON.stringify({ api: S.api, variant: S.variant, cols: S.cols })); } catch (e) {} }
 function restore() {
   try { const o = JSON.parse(localStorage.getItem("maliCost2") || "null"); if (o) Object.assign(S, o); } catch (e) {}
   if (!VARIANTS.includes(S.variant)) S.variant = "float";
+  if (!Array.isArray(S.cols)) S.cols = ["Arm 5th Generation", "Valhall", "Bifrost"];
   try { const t = localStorage.getItem("maliTheme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 }
 document.getElementById("theme").onclick = () => {
