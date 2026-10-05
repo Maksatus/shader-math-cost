@@ -9,7 +9,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from run import MALIOC_NEW, MALIOC_OLD, compile_one, list_gpus, slope, spills
+from run import MALIOC_NEW, compile_one, list_gpus, slope, spills
 from shadergen import build
 
 PAIRS = [(8, 24), (8, 16), (4, 8)]
@@ -17,13 +17,8 @@ TYPES = {"float": ("highp", "float"), "half": ("mediump", "float"),
          "float4": ("highp", "vec4"), "half4": ("mediump", "vec4")}
 
 
-def vulkan_gpus(legacy=True):
-    gpus = [(MALIOC_NEW, n, a) for n, a, apis in list_gpus(MALIOC_NEW) if "Vulkan" in apis]
-    if legacy and os.path.exists(MALIOC_OLD):
-        known = {g[1] for g in gpus}
-        gpus += [(MALIOC_OLD, n, a) for n, a, apis in list_gpus(MALIOC_OLD)
-                 if n not in known and a == "Midgard" and "Vulkan" in apis]
-    return gpus
+def vulkan_gpus():
+    return [(MALIOC_NEW, n, a) for n, a, apis in list_gpus(MALIOC_NEW) if "Vulkan" in apis]
 
 
 def _cost(malioc, core, prec, t, expr, prelude, combine):

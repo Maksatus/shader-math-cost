@@ -7,13 +7,13 @@ Per-call cost = slope of arithmetic cycles between chain lengths N1 and N2
 (8 -> 24; falls back to 8 -> 16 or 4 -> 8 if the shader spills registers), minus the slope of the same chain without the function (only the '+ w_i'
 adds). The slope cancels fixed shader overhead, which matters on Bifrost.
 Cost is taken on the bottleneck arithmetic pipe (FMA / CVT / SFU run in
-parallel on Valhall and 5th Gen; Bifrost/Midgard report one pipe).
+parallel on Valhall and 5th Gen; Bifrost reports one pipe).
 
 malioc results are cached in .cache/ by shader source. Results that look like a
 corrupted cache (a strongly negative per-pipe cost, or a different FMA unit in
 GLES and Vulkan on the same GPU) are reported in errors.txt: delete .cache/ and rerun.
 
-Usage: python run.py [--jobs 16] [--gpus Mali-G57,Mali-G52] [--no-legacy] [--out ../docs]
+Usage: python run.py [--jobs 16] [--gpus Mali-G57,Mali-G52] [--out ../docs]
 """
 import argparse
 import concurrent.futures as cf
@@ -30,7 +30,6 @@ from shadergen import build
 from functions import FUNCS, HLSL_EXPR, glsl_type, glsl_expr, hlsl_type, prelude
 
 MALIOC_NEW = r"C:\Program Files\Arm\Arm Performance Studio 2026.5\mali_offline_compiler\malioc.exe"
-MALIOC_OLD = r"C:\Program Files\Arm\Arm Performance Studio 2024.1\mali_offline_compiler\malioc.exe"
 
 PAIRS = [(8, 24), (8, 16), (4, 8)]  # chain lengths (N1, N2), tried in order
 VARIANTS = [  # name, precision, vector size
@@ -120,15 +119,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     ap.add_argument("--gpus", default="")
-    ap.add_argument("--no-legacy", action="store_true", help="skip Midgard (old malioc)")
     ap.add_argument("--out", default=os.path.join(HERE, "..", "docs"))
     args = ap.parse_args()
 
     gpus = [(MALIOC_NEW, n, a, apis) for n, a, apis in list_gpus(MALIOC_NEW)]
-    if not args.no_legacy and os.path.exists(MALIOC_OLD):
-        known = {g[1] for g in gpus}
-        gpus += [(MALIOC_OLD, n, a, apis) for n, a, apis in list_gpus(MALIOC_OLD)
-                 if n not in known and a == "Midgard"]
     if args.gpus:
         want = set(args.gpus.split(","))
         gpus = [g for g in gpus if g[1] in want]
@@ -197,7 +191,6 @@ def main():
                 retry.append(p)
                 continue
             if any(v is None for r in rs_all for c in (r["cycles"], r["short"]) for v in c.values()):
-                # e.g. malioc 8.4 (Midgard) cannot bound a path through a loop
                 errors.append((p["core"], p["api"], p["variant"], p["fid"], "malioc returned no cycle count"))
                 continue
             s = slope(results[f1], results[f2], n1, n2)
@@ -251,7 +244,7 @@ def main():
         rows.append({
             "api": "GLES" if p["api"] == "gles" else "Vulkan",
             "gpu": p["core"], "arch": p["arch"],
-            "malioc": "2026.5" if p["malioc"] == MALIOC_NEW else "8.4 (legacy)",
+            "malioc": "2026.5",
             "variant": p["variant"], "type": hlsl_type(p["prec"], p["t"]),
             "category": p["category"], "func": p["fid"], "hlsl": p["hlsl"],
             "hlsl_expr": HLSL_EXPR[p["fid"]] or "— (нет в HLSL)",
