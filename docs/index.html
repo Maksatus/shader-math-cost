@@ -120,11 +120,10 @@ details p, details li { color: var(--muted); max-width: 1000px; }
     </div>
   </div>
   <div class="legend">
-    <span>Числа — во сколько раз функция дороже одной <b>FMA</b> (умножение-сложение) <b>на этом же GPU</b>: «8» = как 8 обычных операций. Сравнивайте функции внутри колонки, а не колонки между собой.</span>
+    <span>Числа — стоимость в <b>FMA</b> (одно умножение-сложение): «sin = 8» значит, что sin стоит как 8 обычных операций.</span>
     <span><span class="tier cheap">дешёвая</span> ≤ 1.5</span>
     <span><span class="tier medium">средняя</span> ≤ 10</span>
     <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
-    <span>Текстуры — тоже в FMA: сколько FMA этого GPU помещается во время выборки (или в подготовку координат, если она дольше).</span>
     <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
   </div>
   <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
