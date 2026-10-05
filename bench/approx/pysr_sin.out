@@ -1,0 +1,14 @@
+C:\Users\User\AppData\Local\Programs\Python\Python313\Lib\site-packages\pysr\sr.py:3649: UserWarning: `numprocs` is specified but will be ignored since `parallelism='multithreading'`
+  warnings.warn(
+C:\Users\User\AppData\Local\Programs\Python\Python313\Lib\site-packages\pysr\sr.py:2406: UserWarning: Note: Setting `random_state` without also setting `deterministic=True` and `parallelism='serial'` will result in non-deterministic searches.
+  warnings.warn(
+  1  maxerr=1.00e+00  0.0
+  3  maxerr=9.54e-01  x * 0.3035324
+  7  maxerr=9.54e-01  ((x * 0.3035324) + x) - x
+  9  maxerr=2.03e-01  x * ((x * (x * -0.0933732)) + 0.85691845)
+ 11  maxerr=2.02e-01  x * ((((x * x) - -0.042377364) * -0.09330499) + 0.8605481)
+ 13  maxerr=2.02e-01  x * (((((x * x) + 0.021100463) + 0.021100463) * -0.09330499) + 0.8605481)
+ 15  maxerr=1.60e-02  x * ((x * (x * (((x * x) * 0.0056446507) + -0.15528868))) + 0.9878957)
+ 19  maxerr=1.56e-02  (((x * x) * (x + ((((x * 0.0056380886) * x) - x) + -0.15522867))) + 0.98782104) * x
+ 21  maxerr=6.48e-04  x * (0.9994227 + (x * (((((x * (x * -0.00014754628)) + 0.007995074) * (x * x)) + -0.16581947) * x)))
+ 23  maxerr=6.52e-04  x * (((x * (((x * x) * ((((x * -0.00024662295) * x) + 0.013353993) * 0.5989382)) + -0.16583632)) * x) + 0.99944097)

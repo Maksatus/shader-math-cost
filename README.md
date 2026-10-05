@@ -16,3 +16,14 @@ python bench/build_site.py
 ```
 
 Функции задаются в `bench/functions.py`.
+
+## Аппроксимации
+
+Быстрые замены функций (кнопка «≈ быстрее» в таблице) лежат в `docs/approx.js`. Пересобрать: нужны numpy, scipy и malioc, PySR только для поиска формы формулы (`bench/approx/pysr_*.py`).
+
+```
+cd bench/approx
+python build_approx.py
+```
+
+Формулы, диапазоны и результаты замеров на устройствах задаются в `bench/approx/build_approx.py`.
