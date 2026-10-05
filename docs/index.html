@@ -149,7 +149,7 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
     <span><span class="tier medium">средняя</span> ≤ 10</span>
     <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
     <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
-    <span><span class="apx" style="cursor:default">≈ до ×2</span> — есть быстрая замена.</span>
+    <span><span class="apx" style="cursor:default">Аппроксимация</span> — есть более дешёвая формула.</span>
   </div>
   <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
 
@@ -360,7 +360,7 @@ function render() {
     const G = GROUPS[a];
     h += `<th class="grpc sortable ${G.cls} ${i === 0 ? "gl" : ""}" data-k="${a}" title="Медиана по GPU группы: ${G.years}">${G.name}${arrow(a)}<small>${G.years}</small></th>`;
   });
-  h += `<th class="l gl" title="Быстрая замена встроенной функции">Замена</th><th class="l">Заметка</th></tr></thead><tbody>`;
+  h += `<th class="l gl"></th><th class="l">Заметка</th></tr></thead><tbody>`;
 
   let lastCat = null;
   for (const f of order) {
@@ -373,7 +373,7 @@ function render() {
     const t = tier(s.med, f.unit);
     const lo = s.min != null ? s.min / gmax * 100 : 0, hi = s.max != null ? s.max / gmax * 100 : 0;
     const ax = apxFor(f.id);
-    const axBtn = ax.length ? `<button class="apx" data-apx="${f.id}" title="${ax.length} вар.: ${esc(ax.map(a => a.name).join(", "))}">≈ до ×${fmt(Math.max(...ax.map(a => apxSpeed(a).all)))}</button>` : "";
+    const axBtn = ax.length ? `<button class="apx" data-apx="${f.id}" title="${ax.length} вар.: ${esc(ax.map(a => a.name).join(", "))}">Аппроксимация</button>` : "";
     h += `<tr data-f="${f.id}"><td class="l fn">${esc(f.hlsl)}<div class="code">${esc(s.hexpr)}</div></td>` +
       `<td class="l code">${esc(s.typ)}</td><td class="l">${t ? `<span class="tier ${t}">${TIER_RU[t]}</span>` : ""}</td>` +
       `<td class="heat big" style="${heat(s.med)}">${fmt(s.med)}</td>` +
@@ -502,7 +502,7 @@ function openDrawer(fid) {
     <h2>${esc(f.hlsl)} <span class="code">${esc(s.typ)}</span></h2>
     <div class="code">HLSL: ${esc(s.hexpr)} &nbsp;·&nbsp; GLSL: ${esc(s.glsl)}</div>
     <p class="sub">${esc(f.category)}${f.note ? " · " + esc(f.note) : ""}</p>
-    ${apxFor(fid).length ? `<p><button class="apx" onclick="openApprox('${fid}')">≈ быстрая замена</button></p>` : ""}
+    ${apxFor(fid).length ? `<p><button class="apx" onclick="openApprox('${fid}')">Аппроксимация</button></p>` : ""}
     <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, FMA</div></div>`).join("")}</div>
     <p class="sub">Блок, где считается функция: <b>${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b> — ${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}. Блоки FMA, CVT и SFU работают параллельно: если шейдер в основном умножает и складывает, функция в CVT/SFU частично «прячется» за ними.</p>
     <p class="sub">OpenGL ES и Vulkan: ${diff ? `отличаются в ${diff} из ${tot} случаев (колонка «Разница»)` : "одинаково на всех GPU"}.</p>
