@@ -9,6 +9,10 @@ adds). The slope cancels fixed shader overhead, which matters on Bifrost.
 Cost is taken on the bottleneck arithmetic pipe (FMA / CVT / SFU run in
 parallel on Valhall and 5th Gen; Bifrost/Midgard report one pipe).
 
+malioc results are cached in .cache/ by shader source. Results that look like a
+corrupted cache (a strongly negative per-pipe cost, or a different FMA unit in
+GLES and Vulkan on the same GPU) are reported in errors.txt: delete .cache/ and rerun.
+
 Usage: python run.py [--jobs 16] [--gpus Mali-G57,Mali-G52] [--no-legacy] [--out ../docs]
 """
 import argparse
@@ -40,6 +44,7 @@ ARITH_PIPES = ("arith_fma", "arith_cvt", "arith_sfu", "arithmetic")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, ".cache")
+CACHE_VERSION = 2  # bump when the stored result format changes: older entries get recompiled
 os.makedirs(CACHE, exist_ok=True)
 _tls = threading.local()
 
@@ -62,7 +67,9 @@ def compile_one(malioc, api, core, src):
     cpath = os.path.join(CACHE, key + ".json")
     if os.path.exists(cpath):
         with open(cpath, encoding="utf-8") as f:
-            return json.load(f)
+            res = json.load(f)
+        if res.get("v") == CACHE_VERSION:
+            return res
     if not hasattr(_tls, "fn"):
         # malioc writes intermediate SPIR-V to %TEMP%\moc-temp, so every
         # worker thread needs its own TEMP dir to run in parallel.
@@ -81,6 +88,7 @@ def compile_one(malioc, api, core, src):
         v = j["shaders"][0]["variants"][0]
         perf = v["performance"]
         res = {
+            "v": CACHE_VERSION,
             "ok": True,
             "cycles": dict(zip(perf["pipelines"], perf["longest_path_cycles"]["cycle_count"])),
             "short": dict(zip(perf["pipelines"], perf["shortest_path_cycles"]["cycle_count"])),
@@ -100,7 +108,7 @@ def arith(c):
 
 
 def slope(r1, r2, n1, n2, key="cycles"):
-    a, b = arith(r1.get(key, r1["cycles"])), arith(r2.get(key, r2["cycles"]))
+    a, b = arith(r1[key]), arith(r2[key])
     return {p: (b[p] - a[p]) / (n2 - n1) for p in a}
 
 
@@ -188,7 +196,7 @@ def main():
                 p["pair"] += 1
                 retry.append(p)
                 continue
-            if any(v is None for r in rs_all for c in (r["cycles"], r.get("short", {})) for v in c.values()):
+            if any(v is None for r in rs_all for c in (r["cycles"], r["short"]) for v in c.values()):
                 # e.g. malioc 8.4 (Midgard) cannot bound a path through a loop
                 errors.append((p["core"], p["api"], p["variant"], p["fid"], "malioc returned no cycle count"))
                 continue
@@ -206,6 +214,15 @@ def main():
             print(f"  {len(retry)} measurements spill registers, retrying with shorter chains", flush=True)
         todo = retry
 
+    # Corrupted cache entries (results of another shader) showed up as a different FMA unit
+    # in GLES and Vulkan on one GPU and as strongly negative per-pipe costs.
+    warnings = []
+    for core in dict.fromkeys(p["core"] for p in plan):
+        u = {api: max(v for k, v in slopes[(core, api, "float", "mad")].items() if k != "texture")
+             for api in APIS if (core, api, "float", "mad") in slopes}
+        if len(u) == 2 and abs(u["gles"] - u["vulkan"]) > 0.2 * max(u.values()):
+            warnings.append(f"{core}: FMA unit differs, GLES {u['gles']:.5f} vs Vulkan {u['vulkan']:.5f} cycles")
+
     for p in plan:
         if "slope" not in p:
             continue
@@ -215,11 +232,16 @@ def main():
             # 'add' of the variant type; extra adds are on the same type
             s = {k: s[k] - p["extra"] * add[k] for k in s}
             sh = {k: sh[k] - p["extra"] * add[k] for k in sh}
+        unit = slopes.get((p["core"], p["api"], "float", "mad"), {})
+        unit_c = max(v for k, v in unit.items() if k != "texture") if unit else 0
+        # a function may move a little work off a pipe vs the baseline, but not several FMAs
+        neg = min((v, k) for k, v in s.items() if k != "texture")
+        if unit_c and neg[0] < -4 * unit_c:
+            warnings.append(f"{p['core']} | {p['api']} | {p['variant']} | {p['fid']}: "
+                            f"{neg[1]} = {neg[0] / unit_c:.1f} FMA per call")
         s = {k: max(0.0, v) for k, v in s.items()}
         short = max([max(0.0, v) for k, v in sh.items() if k != "texture"] or [0.0])
         tex = s.pop("texture", 0.0)
-        unit = slopes.get((p["core"], p["api"], "float", "mad"), {})
-        unit_c = max(v for k, v in unit.items() if k != "texture") if unit else 0
         alu = max(s.values()) if s else 0.0
         if p["kind"] == "tex":
             # texture rows: cost in texture-unit cycles relative to a plain tex2D
@@ -240,9 +262,9 @@ def main():
             "cycles": round(cyc, 5),
             "rel_fma": round(cyc / unit_c, 3) if unit_c else "",
             "unit": "tex2D" if p["kind"] == "tex" else "FMA",
-            # cost on the shortest path (a skipped branch); empty when it equals the longest path
+            # cost on the shortest path (a skipped branch); empty unless cheaper than the longest path
             "rel_short": round(short / unit_c, 3)
-                         if unit_c and p["kind"] != "tex" and abs(short - cyc) > 1e-6 else "",
+                         if unit_c and p["kind"] != "tex" and short < cyc - 1e-6 else "",
             "alu_fma": round(alu / max(v for k, v in unit.items() if k != "texture"), 3)
                        if p["kind"] == "tex" and unit else "",
             "fma": round(s["arith_fma"], 5) if "arith_fma" in s else "",
@@ -265,12 +287,19 @@ def main():
         w.writeheader()
         w.writerows(rows)
     print(f"wrote {len(rows)} rows -> {os.path.abspath(out)}")
-    if errors:
-        epath = os.path.join(HERE, "errors.txt")
+    epath = os.path.join(HERE, "errors.txt")
+    if errors or warnings:
         with open(epath, "w", encoding="utf-8") as f:
             for e in errors:
                 f.write(" | ".join(map(str, e[:4])) + "\n" + e[4] + "\n\n")
-        print(f"{len(errors)} failed measurements -> {epath}")
+            for w in warnings:
+                f.write("SUSPICIOUS " + w + "\n")
+        if errors:
+            print(f"{len(errors)} failed measurements -> {epath}")
+        if warnings:
+            print(f"{len(warnings)} suspicious results, the cache may be corrupted: delete {CACHE} and rerun -> {epath}")
+    elif os.path.exists(epath):
+        os.remove(epath)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,10 @@ FUNCS = [
     ("saturate",   "saturate",     "clamp({x}, 0.0, 1.0)",      "Арифметика", "same", True,  0, "Обычно бесплатный модификатор результата"),
     ("lerp",       "lerp",         "mix({x}, {a}, {b})",        "Арифметика", "same", True,  0, ""),
     ("step",       "step",         "step({a}, {x})",            "Арифметика", "same", True,  0, ""),
-    ("smoothstep", "smoothstep",   "smoothstep({a}, {x}, {b})", "Арифметика", "same", True,  0, "Границы — переменные"),
+    ("smoothstep", "smoothstep",   "smoothstep({a}, {x}, {b})", "Арифметика", "same", True,  0,
+                   "Границы — переменные, поэтому внутри деление. С константными границами — строка ниже"),
+    ("smoothstep_c", "smoothstep (константы)", "smoothstep(0.2, 0.8, {x})", "Арифметика", "same", True, 0,
+                   "Константные границы: деление сворачивается в умножение"),
     # --- rounding
     ("floor",      "floor",        "floor({x})",                "Округление", "same", True,  0, ""),
     ("ceil",       "ceil",         "ceil({x})",                 "Округление", "same", True,  0, ""),
@@ -101,7 +104,7 @@ FUNCS = [
     ("log10",      "log10",        "log2({x}) * 0.30102999566", "Степени и логарифмы", "same", True, 0, "В GLSL нет, разворачивается в log2 × const"),
     ("ldexp",      "ldexp",        "{a} * exp2({x})",           "Степени и логарифмы", "same", True, 0, "HLSL: x * exp2(e)"),
     ("frexp",      "frexp",        "frexp_({x})",               "Степени и логарифмы", "same", True, 1, "Мантисса и порядок"),
-    ("modf",       "modf",         "modf_({x})",                "Округление", "same", True, 1, "Дробная и целая часть"),
+    ("modf",       "modf",         "modf_({x})",                "Округление", "same", True, 0, "Дробная и целая часть (целая получается попутно)"),
     # --- comparisons / select
     ("select",     "x > a ? b : x", ("({x} > {a}) ? {b} : {x}", "mix({x}, {b}, greaterThan({x}, {a}))"),
                                                                 "Сравнения", "same", True, 0, "Тернарный оператор (поэлементный выбор)"),
@@ -117,7 +120,7 @@ FUNCS = [
     ("if_small",   "if (x > a) x *= b", "if_small_({x}, {a}, {b})", "Ветвления", "same", True, 0,
                    "Короткий if компилятор обычно превращает в select без перехода"),
     ("if_else",    "if (x > a) sin else cos", "if_else_({x}, {a})", "Ветвления", "same", True, 0,
-                   "Компилятор считает обе ветки и выбирает результат (переход не делает). sin или cos отдельно = 8"),
+                   "Компилятор считает обе ветки и выбирает результат (переход не делает): стоит примерно как sincos"),
     ("if_skip",    "if (x > a) { 8× sin }", "if_skip_({x}, {a})", "Ветвления", "same", True, 0,
                    "Тяжёлая ветка — настоящий переход. Основная цифра — если ветка выполнилась"),
     # --- conversions / half
@@ -185,7 +188,9 @@ PRELUDE = {
     "if_else": "{T} if_else_({T} v, {T} a) { if ({V0} > {A0}) v = sin(v); else v = cos(v); return v; }\n",
     "if_skip": "{T} if_skip_({T} v, {T} a) { if ({V0} > {A0}) { for (int i = 0; i < 8; i++) v = sin(v); } return v; }\n",
     "frexp": "{T} frexp_({T} v) { {I} e; {T} m = frexp(v, e); return m + {T}(e); }\n",
-    "modf": "{T} modf_({T} v) { {T} i; {T} f = modf(v, i); return f * i; }\n",
+    # f = v - trunc(v) already computes the integer part; returning f * i would fuse the
+    # mul with the chain's '+ w' into one FMA, f + i is folded back to v.
+    "modf": "{T} modf_({T} v) { {T} i; {T} f = modf(v, i); return f; }\n",
     "unpack_rgb": "vec3 UnpackNormalRGBNoScale(vec4 p) { return p.rgb * 2.0 - 1.0; }\n",
     "unpack_ag": _UNPACK_AG,
     "unpack_rgag": _UNPACK_AG + "vec3 UnpackNormalmapRGorAG(vec4 p) { p.a *= p.r; return UnpackNormalAG(p); }\n",
@@ -261,7 +266,7 @@ HLSL_EXPR = {
     "add": "x + a", "mul": "x * a", "mad": "mad(x, a, b)", "div": "a / x", "rcp": "rcp(x)",
     "abs": "abs(x)", "sign": "sign(x)", "min": "min(x, a)", "max": "max(x, a)",
     "clamp": "clamp(x, a, b)", "saturate": "saturate(x)", "lerp": "lerp(x, a, b)",
-    "step": "step(a, x)", "smoothstep": "smoothstep(a, x, b)",
+    "step": "step(a, x)", "smoothstep": "smoothstep(a, x, b)", "smoothstep_c": "smoothstep(0.2, 0.8, x)",
     "floor": "floor(x)", "ceil": "ceil(x)", "round": "round(x)", "trunc": "trunc(x)",
     "frac": "frac(x)", "fmod": "fmod(a, x)", "mod": "a - x * floor(a / x)",
     "sqrt": "sqrt(x)", "rsqrt": "rsqrt(x)", "exp2": "exp2(x)", "exp": "exp(x)",

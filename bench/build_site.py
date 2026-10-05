@@ -1,6 +1,8 @@
 """Packs docs/mali_math_cost.csv into docs/data.js so that index.html
 works when opened straight from disk (file:// cannot fetch() a CSV).
 Also writes docs/summary_<api>.csv: function x variant, median per architecture.
+Midgard is split in two: malioc 8.4 models T720/T820/T830 very differently from
+T760/T860/T880, and a median of the six falls between the two families.
 
 Usage: python build_site.py [site_dir]
 """
@@ -21,8 +23,17 @@ with open(os.path.join(res, "data.js"), "w", encoding="utf-8") as f:
     f.write("window.MALI_CSV = " + json.dumps(text, ensure_ascii=False) + ";\n")
 
 rows = list(csv.DictReader(text.splitlines()))
-ARCH_ORDER = ["Midgard", "Bifrost", "Valhall", "Arm 5th Generation"]
-archs = [a for a in ARCH_ORDER if any(r["arch"] == a for r in rows)]
+MIDGARD_BUDGET = {"Mali-T720", "Mali-T820", "Mali-T830"}
+
+
+def group(r):
+    if r["arch"] == "Midgard":
+        return "Midgard T720/T820/T830" if r["gpu"] in MIDGARD_BUDGET else "Midgard T760/T860/T880"
+    return r["arch"]
+
+
+GROUP_ORDER = ["Midgard T720/T820/T830", "Midgard T760/T860/T880", "Bifrost", "Valhall", "Arm 5th Generation"]
+archs = [a for a in GROUP_ORDER if any(group(r) == a for r in rows)]
 funcs = list(dict.fromkeys(r["func"] for r in rows))
 variants = ["float", "half", "float4", "half4"]
 
@@ -32,7 +43,7 @@ for api in ("GLES", "Vulkan"):
     for r in rows:
         if r["api"] != api or r["rel_fma"] == "":
             continue
-        g[(r["func"], r["variant"], r["arch"])].append(float(r["rel_fma"]))
+        g[(r["func"], r["variant"], group(r))].append(float(r["rel_fma"]))
         g[(r["func"], r["variant"], "*")].append(float(r["rel_fma"]))
         meta[r["func"]] = (r["category"], r["hlsl"])
     path = os.path.join(res, f"summary_{api.lower()}.csv")

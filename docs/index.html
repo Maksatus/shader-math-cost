@@ -124,7 +124,7 @@ details p, details li { color: var(--muted); max-width: 1000px; }
     <span><span class="tier cheap">дешёвая</span> ≤ 1.5</span>
     <span><span class="tier medium">средняя</span> ≤ 10</span>
     <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
-    <span>Текстуры — в своих единицах (1 = обычная выборка tex2D).</span>
+    <span>Текстуры — в своих единицах: 1 = обычная выборка tex2D (дешёвая), до 2 — средняя, больше — тяжёлая.</span>
     <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
   </div>
   <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
@@ -134,16 +134,18 @@ details p, details li { color: var(--muted); max-width: 1000px; }
     <ul>
       <li><b>Единица «FMA»</b> — стоимость одной скалярной highp FMA (<span class="code">a*b+c</span>) на том же GPU. У разных GPU такты в разном масштабе, а в FMA видно, сколько «обычных операций» стоит функция. Сырые такты есть в подробностях (клик по строке).</li>
       <li>Цифры относятся только к Mali (Android на MediaTek, старых Exynos, Kirin, Google Tensor G1–G4). У Adreno (Snapdragon), Apple GPU и Xclipse (Exynos 2022+) они другие.</li>
-      <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <span class="code">x = f(x, a) + w</span> во фрагментном шейдере. Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
-      <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому <span class="code">mul</span> и <span class="code">pow(x, 2)</span>, за которыми идёт сложение, сливаются в FMA и стоят ≈0. <span class="code">abs</span>, <span class="code">saturate</span> и <span class="code">f16tof32</span> часто бесплатны, потому что это модификаторы операндов.</li>
+      <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <span class="code">x = f(x, a) + w</span> во фрагментном шейдере (если не хватает регистров — 8 и 16 или 4 и 8). Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
+      <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому умножение в конце функции сливается со следующим сложением в FMA: <span class="code">pow(x, 2)</span> и <span class="code">radians</span> стоят ≈0, а <span class="code">log10</span> — как <span class="code">log2</span>. Исключение — строки <span class="code">add</span>, <span class="code">mul</span> и <span class="code">mad</span>: это сами базовые операции, они меряются цепочкой без <span class="code">+ w</span> (<span class="code">x = x * a</span>), поэтому <span class="code">mul</span> = 1. <span class="code">abs</span>, <span class="code">saturate</span> и <span class="code">f16tof32</span> часто бесплатны, потому что это модификаторы операндов.</li>
       <li><b>Блок</b> (в подробностях) — где внутри GPU считается функция. На Valhall и 5th Gen их три, и работают они параллельно:
-        <b>FMA</b> — умножение и сложение (<span class="code">+ * mad lerp dot min max</span>);
-        <b>CVT</b> — конвертации и округления (<span class="code">floor frac step (int)x</span>, сдвиги);
-        <b>SFU</b> — специальные функции (<span class="code">rcp sqrt exp2 log2 sin cos</span>, деление).
+        <b>FMA</b> — умножение и сложение (<span class="code">+ * mad lerp dot</span>), на G615/G715 и 5th Gen также округления и <span class="code">(int)x</span>;
+        <b>CVT</b> — сравнения и выбор (<span class="code">min max clamp step sign ?:</span>) и целочисленное сложение, на G57–G710 также округления и <span class="code">(int)x</span>, на G615/G715 и 5th Gen — сдвиги и побитовые операции;
+        <b>SFU</b> — специальные функции (<span class="code">rcp sqrt exp2 log2 sin cos</span>), деление и целочисленное умножение, на G57–G710 также сдвиги и побитовые операции.
         Функция в CVT или SFU в шейдере, где в основном умножения и сложения, может оказаться частично бесплатной, а много SFU-функций подряд упрутся в SFU. У Bifrost и Midgard блок один — «ALU». «—» — бесплатно.</li>
       <li>Колонки <b>float/half</b>: векторные функции (dot, length, normalize…) меряются на float3, матрицы — на float3x3. <b>float4/half4</b> — на float4 и float4x4. Хелперы Unity — всегда на своём типе.</li>
       <li><b>half</b> = <span class="code">mediump</span>. Целочисленные операции меряются только в 32 битах, mediump int (min16int) ведёт себя нестабильно.</li>
-      <li>Midgard измерен старым malioc 8.4, новый его не поддерживает. Это статическая оценка компилятора, а не замер на устройстве: она хороша для сравнения функций между собой.</li>
+      <li>Midgard измерен старым malioc 8.4, новый его не поддерживает. В модели malioc 8.4 у бюджетных T720/T820/T830 векторная операция стоит как четыре скалярные, а у T760/T860/T880 — как одна, поэтому это две отдельные колонки. Цифры Midgard наименее надёжны.</li>
+      <li>Тест написан на GLSL. Unity (без <span class="code">#pragma use_dxc</span>) переводит HLSL через FXC и HLSLcc, и часть функций там разворачивается иначе: например, <span class="code">atan2</span>, <span class="code">asin</span> и <span class="code">acos</span> FXC раскладывает в полиномы сам, а <span class="code">sign</span> в HLSL возвращает int. Для таких функций цена в Unity может отличаться.</li>
+      <li>Это статическая оценка компилятора, а не замер на устройстве: она хороша для сравнения функций между собой.</li>
     </ul>
   </details>
 </main>
@@ -153,13 +155,17 @@ details p, details li { color: var(--muted); max-width: 1000px; }
 <script src="data.js"></script>
 <script>
 "use strict";
-const ARCH_ORDER = ["Arm 5th Generation", "Valhall", "Bifrost", "Midgard"];
+const ARCH_ORDER = ["Arm 5th Generation", "Valhall", "Bifrost", "Midgard", "Midgard budget"];
 const GROUPS = {
   "Arm 5th Generation": { name: "Новые", years: "5th Gen · 2023+", cls: "g-new" },
   "Valhall":            { name: "Актуальные", years: "Valhall · 2019–2022", cls: "g-cur" },
   "Bifrost":            { name: "Старые", years: "Bifrost · 2016–2018", cls: "g-old" },
-  "Midgard":            { name: "Очень старые", years: "Midgard · 2013–2015", cls: "g-vold" },
+  "Midgard":            { name: "Очень старые", years: "Midgard · T760 T860 T880", cls: "g-vold" },
+  "Midgard budget":     { name: "Очень старые бюджетные", years: "Midgard · T720 T820 T830", cls: "g-vold" },
 };
+// malioc 8.4 models budget Midgard very differently: a median of all six falls between the two families
+const MIDGARD_BUDGET = new Set(["Mali-T720", "Mali-T820", "Mali-T830"]);
+const groupOf = g => g.arch === "Midgard" && MIDGARD_BUDGET.has(g.name) ? "Midgard budget" : g.arch;
 // year, segment, example chips (where known)
 const GPU_INFO = {
   "Mali G2": [2026, "флагман", ""], "Mali G1": [2025, "флагман", "Dimensity 9500"],
@@ -213,15 +219,17 @@ function ingest(text) {
   for (const r of rows) if (!gpuMap.has(r.gpu)) gpuMap.set(r.gpu, { name: r.gpu, arch: r.arch, malioc: r.malioc });
   const year = g => (GPU_INFO[g.name] || [0])[0];
   const gpus = [...gpuMap.values()].sort((a, b) =>
-    ARCH_ORDER.indexOf(a.arch) - ARCH_ORDER.indexOf(b.arch) || year(b) - year(a));
+    ARCH_ORDER.indexOf(groupOf(a)) - ARCH_ORDER.indexOf(groupOf(b)) || year(b) - year(a));
   const funcs = [], seen = new Set();
   for (const r of rows) if (!seen.has(r.func)) { seen.add(r.func); funcs.push({ id: r.func, hlsl: r.hlsl, category: r.category, note: r.note, unit: r.unit || "FMA" }); }
   const idx = new Map();
   for (const r of rows) idx.set(`${r.api}|${r.variant}|${r.func}|${r.gpu}`, r);
   D = { rows, gpus, funcs, idx };
   const mv = [...new Set(rows.map(r => r.malioc))].join(", ");
+  const n = funcs.length, n10 = n % 10, n100 = n % 100;
+  const word = n10 === 1 && n100 !== 11 ? "функция" : n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14) ? "функции" : "функций";
   document.getElementById("sub").textContent =
-    `Mali Offline Compiler ${mv} · ${gpus.length} GPU · ${funcs.length} функций · фрагментный шейдер · OpenGL ES и Vulkan`;
+    `Mali Offline Compiler ${mv} · ${gpus.length} GPU · ${n} ${word} · фрагментный шейдер · OpenGL ES и Vulkan`;
   buildControls(); render();
 }
 
@@ -257,22 +265,27 @@ function gpuTitle(g) {
 const get = (fid, g, v = S.variant, api = S.api) => D.idx.get(`${api}|${v}|${fid}|${g}`);
 
 function stats(fid) {
-  const vals = [], alus = [], shorts = [], bounds = {}; let r0 = null;
+  const vals = [], alus = [], shorts = [], bounds = {}; let r0 = null, anyShort = false;
   for (const g of D.gpus) {
     const r = get(fid, g.name); if (!r || r.rel_fma == null) continue;
     r0 = r0 || r; vals.push(r.rel_fma); bounds[r.bound] = (bounds[r.bound] || 0) + 1;
     if (r.alu_fma != null) alus.push(r.alu_fma);
-    if (r.rel_short != null) shorts.push(r.rel_short);
+    // empty rel_short = the shortest path costs the same, so the median covers the same GPUs as med
+    shorts.push(r.rel_short ?? r.rel_fma); anyShort = anyShort || r.rel_short != null;
   }
   const bound = Object.entries(bounds).filter(e => e[0] !== "-").sort((a, b) => b[1] - a[1]).map(e => e[0])[0] || "–";
-  return { med: median(vals), min: vals.length ? Math.min(...vals) : null, max: vals.length ? Math.max(...vals) : null,
-           alu: median(alus), short: median(shorts), typ: r0 ? r0.type : "", hexpr: r0 ? (r0.hlsl_expr || r0.glsl) : "", glsl: r0 ? r0.glsl : "", bound };
+  const med = median(vals), sh = anyShort ? median(shorts) : null;
+  return { med, min: vals.length ? Math.min(...vals) : null, max: vals.length ? Math.max(...vals) : null,
+           alu: median(alus), anyShort, short: sh != null && med - sh > Math.max(0.05, 0.02 * med) ? sh : null,
+           typ: r0 ? r0.type : "", hexpr: r0 ? (r0.hlsl_expr || r0.glsl) : "", glsl: r0 ? r0.glsl : "", bound };
 }
+// malioc's shortest path: a skipped user branch, or a fast path inside the compiled code (integer division)
+const isBranch = f => f.category === "Ветвления";
 const BOUND_RU = { FMA: "FMA", CVT: "CVT", SFU: "SFU", A: "ALU", TEX: "TEX" };
 const BOUND_HELP = {
-  FMA: "FMA — блок умножения и сложения (+, *, mad, lerp, dot, min/max)",
-  CVT: "CVT — блок конвертаций и округлений (floor, frac, step, (int)x, сдвиги)",
-  SFU: "SFU — блок специальных функций (rcp, sqrt, exp2, log2, sin/cos, деление)",
+  FMA: "FMA — блок умножения и сложения (+, *, mad, lerp, dot), на G615/G715 и 5th Gen также округления и (int)x",
+  CVT: "CVT — блок сравнений и выбора (min/max, clamp, step, ?:) и целочисленного сложения, на G57–G710 также округления, на G615/G715 и 5th Gen — сдвиги",
+  SFU: "SFU — блок специальных функций (rcp, sqrt, exp2, log2, sin/cos), деления и целочисленного умножения, на G57–G710 также сдвиги",
   A: "ALU — у Bifrost/Midgard malioc не разделяет блоки",
   TEX: "TEX — текстурный блок",
   "—": "Бесплатно: компилятор встраивает операцию в соседнюю инструкцию",
@@ -283,11 +296,11 @@ function render() {
   const q = S.q.trim().toLowerCase();
   const funcs = D.funcs.filter(f => !q || [f.id, f.hlsl, f.category].some(s => s.toLowerCase().includes(q)));
   if (!funcs.length) { wrap.innerHTML = `<div class="empty">Ничего не найдено</div>`; return; }
-  const archs = ARCH_ORDER.filter(a => D.gpus.some(g => g.arch === a));
+  const archs = ARCH_ORDER.filter(a => D.gpus.some(g => groupOf(g) === a));
   const st = new Map(funcs.map(f => {
     const s = stats(f.id);
     s.grp = {};
-    for (const a of archs) s.grp[a] = median(D.gpus.filter(g => g.arch === a).map(g => get(f.id, g.name)?.rel_fma).filter(v => v != null));
+    for (const a of archs) s.grp[a] = median(D.gpus.filter(g => groupOf(g) === a).map(g => get(f.id, g.name)?.rel_fma).filter(v => v != null));
     return [f.id, s];
   }));
   const gmax = Math.max(...[...st.values()].map(s => s.max ?? 0), 1e-9);
@@ -329,7 +342,7 @@ function render() {
       `<td class="l"><span class="range"><i style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i></span> <span class="code">${fmt(s.min)}–${fmt(s.max)}</span></td>`;
     archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
     const texNote = f.unit === "tex2D" && s.alu ? `+${fmt(s.alu)} FMA на координаты. `
-      : s.short != null ? `Если ветка пропущена: ${fmt(s.short)}. ` : "";
+      : s.short != null ? (isBranch(f) ? `Если ветка пропущена: ${fmt(s.short)}. ` : `Внутри есть переход, короткий путь: ${fmt(s.short)}. `) : "";
     h += `<td class="note gl">${esc(texNote + f.note)}</td></tr>`;
   }
   wrap.innerHTML = h + `</tbody></table>`;
@@ -360,17 +373,17 @@ function openDrawer(fid) {
     <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, ${f.unit === "tex2D" ? "× tex2D" : "FMA"}</div></div>`).join("")}</div>
     <p class="sub">Блок, где считается функция: <b>${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b> — ${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}. Блоки FMA, CVT и SFU работают параллельно: если шейдер в основном умножает и складывает, функция в CVT/SFU частично «прячется» за ними.</p>
     <p class="sub">OpenGL ES и Vulkan: ${diff ? `отличаются в ${diff} из ${tot} случаев (колонка «Разница»)` : "одинаково на всех GPU"}.</p>
-    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>${f.unit === "tex2D" ? "× tex2D" : "FMA"}</th><th></th>${f.unit === "tex2D" ? "<th>ALU, FMA</th>" : ""}${s.short != null ? "<th>ветка пропущена</th>" : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
+    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>${f.unit === "tex2D" ? "× tex2D" : "FMA"}</th><th></th>${f.unit === "tex2D" ? "<th>ALU, FMA</th>" : ""}${s.anyShort ? `<th>${isBranch(f) ? "ветка пропущена" : "короткий путь"}</th>` : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
   let prev = null;
   const vmax = Math.max(0, ...D.gpus.map(g => get(fid, g.name)?.rel_fma || 0));
   for (const g of D.gpus) {
     const r = get(fid, g.name); if (!r) continue;
-    if (g.arch !== prev) { const G = GROUPS[g.arch]; h += `<tr class="cat"><td colspan="15">${G.name} · ${G.years}</td></tr>`; prev = g.arch; }
+    if (groupOf(g) !== prev) { prev = groupOf(g); const G = GROUPS[prev]; h += `<tr class="cat"><td colspan="15">${G.name} · ${G.years}</td></tr>`; }
     const o = get(fid, g.name, S.variant, S.api === "GLES" ? "Vulkan" : "GLES");
     const d = o && o.rel_fma != null && r.rel_fma != null ? o.rel_fma - r.rel_fma : null;
     const [y, segm] = GPU_INFO[g.name] || ["?", ""];
     h += `<tr title="${esc(gpuTitle(g))}"><td class="l">${g.name}</td><td class="l">${y}</td><td class="l code">${segm}</td>
-      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${f.unit === "tex2D" ? `<td>${fmt(r.alu_fma)}</td>` : ""}${s.short != null ? `<td>${fmt(r.rel_short)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
+      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${f.unit === "tex2D" ? `<td>${fmt(r.alu_fma)}</td>` : ""}${s.anyShort ? `<td>${fmt(r.rel_short ?? r.rel_fma)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
       <td class="l code">${BOUND_RU[r.bound] || r.bound}</td><td>${r.work_regs_1call ?? "–"}</td>
       <td class="l code">${r.chain || "–"}${r.spill === "True" ? " ⚠" : ""}</td>
       <td class="code">${d == null ? "–" : Math.abs(d) < 1e-3 ? "так же" : (d > 0 ? "+" : "") + d.toFixed(2)}</td></tr>`;
