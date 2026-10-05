@@ -120,7 +120,7 @@ details p, details li { color: var(--muted); max-width: 1000px; }
     </div>
   </div>
   <div class="legend">
-    <span>Числа — стоимость в <b>FMA</b> (одно умножение-сложение): «8» = как 8 обычных операций.</span>
+    <span>Числа — во сколько раз функция дороже одной <b>FMA</b> (умножение-сложение) <b>на этом же GPU</b>: «8» = как 8 обычных операций. Сравнивайте функции внутри колонки, а не колонки между собой.</span>
     <span><span class="tier cheap">дешёвая</span> ≤ 1.5</span>
     <span><span class="tier medium">средняя</span> ≤ 10</span>
     <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
@@ -133,6 +133,7 @@ details p, details li { color: var(--muted); max-width: 1000px; }
     <summary>Как измерялось и как читать</summary>
     <ul>
       <li><b>Единица «FMA»</b> — стоимость одной скалярной highp FMA (<span class="code">a*b+c</span>) на том же GPU. У разных GPU такты в разном масштабе, а в FMA видно, сколько «обычных операций» стоит функция. Сырые такты есть в подробностях (клик по строке).</li>
+      <li><b>Почему на новых GPU функции «дорожают».</b> Они не стали медленнее: например, <span class="code">sqrt</span> на ядре G78 занимает 0.25 такта, на G715 — 0.125, на Mali G2 — 0.0625. Но в G715 и 5th Gen блоки FMA удвоили, а блок спецфункций (SFU) — нет, поэтому относительно обычной арифметики <span class="code">sqrt</span>, деление, <span class="code">sin</span>, <span class="code">exp</span> подорожали вдвое. На таких GPU выгоднее экономить именно на этих функциях. На старых Bifrost и Midgard, наоборот, сама FMA медленная, поэтому спецфункции там выглядят дешёвыми. Если цена функции заметно отличается между 5th Gen и Valhall, это написано в заметке.</li>
       <li>Цифры относятся только к Mali (Android на MediaTek, старых Exynos, Kirin, Google Tensor G1–G4). У Adreno (Snapdragon), Apple GPU и Xclipse (Exynos 2022+) они другие.</li>
       <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <span class="code">x = f(x, a) + w</span> во фрагментном шейдере (если не хватает регистров — 8 и 16 или 4 и 8). Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
       <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому умножение в конце функции сливается со следующим сложением в FMA: <span class="code">pow(x, 2)</span> и <span class="code">radians</span> стоят ≈0, а <span class="code">log10</span> — как <span class="code">log2</span>. Исключение — строки <span class="code">add</span>, <span class="code">mul</span> и <span class="code">mad</span>: это сами базовые операции, они меряются цепочкой без <span class="code">+ w</span> (<span class="code">x = x * a</span>), поэтому <span class="code">mul</span> = 1. <span class="code">abs</span>, <span class="code">saturate</span> и <span class="code">f16tof32</span> часто бесплатны, потому что это модификаторы операндов.</li>
@@ -343,7 +344,12 @@ function render() {
     archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
     const texNote = f.unit === "tex2D" && s.alu ? `+${fmt(s.alu)} FMA на координаты. `
       : s.short != null ? (isBranch(f) ? `Если ветка пропущена: ${fmt(s.short)}. ` : `Внутри есть переход, короткий путь: ${fmt(s.short)}. `) : "";
-    h += `<td class="note gl">${esc(texNote + f.note)}</td></tr>`;
+    // the unit is this GPU's FMA: flag functions whose relative cost changed between generations
+    const g5 = s.grp["Arm 5th Generation"], gv = s.grp["Valhall"];
+    const k = f.unit === "FMA" && g5 >= 0.5 && gv >= 0.5 ? g5 / gv : 1;
+    const trend = k >= 1.5 ? `На 5th Gen ×${fmt(k)} к Valhall (относительно FMA). `
+      : k <= 1 / 1.5 ? `На 5th Gen ×${fmt(k)} к Valhall (относительно FMA). ` : "";
+    h += `<td class="note gl">${esc(texNote + trend + f.note)}</td></tr>`;
   }
   wrap.innerHTML = h + `</tbody></table>`;
   wrap.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
