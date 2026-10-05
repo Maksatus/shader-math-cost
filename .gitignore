@@ -1,0 +1,8 @@
+# malioc result cache (tens of thousands of files, rebuilt by bench/run.py)
+bench/.cache/
+__pycache__/
+*.log
+# local tool config
+.claude/
+# old hand-made table
+Instruction Cycles*

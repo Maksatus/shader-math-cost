@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mali Shader Math Cost</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #667080; --line: #e3e6ea;
+  --accent: #2f6fde; --chip: #eef1f5; --hover: #f0f4fb;
+  --cheap: #1f9d55; --medium: #c98a00; --heavy: #d0402b;
+  --heat-l: 50%; --heat-a: .22;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
+    --accent: #6a9cff; --chip: #232932; --hover: #20262f;
+    --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55; --heat-a: .30;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
+  --accent: #6a9cff; --chip: #232932; --hover: #20262f;
+  --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55; --heat-a: .30;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { padding: 20px 24px 6px; max-width: 1800px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0; }
+main { max-width: 1800px; margin: 0 auto; padding: 0 24px 40px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 14px; margin: 12px 0 8px; }
+.group { display: flex; align-items: center; gap: 6px; }
+.group > label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--text); padding: 5px 11px; cursor: pointer; font: inherit; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent); color: #fff; }
+input[type=search] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 9px; font: inherit; width: 200px; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px;
+  padding: 5px 10px; cursor: pointer; font: inherit; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+.tier { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.tier.cheap { color: var(--cheap); background: color-mix(in srgb, var(--cheap) 14%, transparent); }
+.tier.medium { color: var(--medium); background: color-mix(in srgb, var(--medium) 14%, transparent); }
+.tier.heavy { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 14%, transparent); }
+.wrap { overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; max-height: calc(100vh - 170px); }
+table { border-collapse: separate; border-spacing: 0; }
+th, td { padding: 5px 7px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+thead th { position: sticky; background: var(--panel); z-index: 2; font-weight: 600; font-size: 12px; vertical-align: bottom; }
+thead tr.n th { top: 0; }
+table.main { width: 100%; }
+th.grpc { text-align: center; font-size: 12px; min-width: 84px; }
+th.grpc small { display: block; font-weight: 400; color: var(--muted); font-size: 10px; }
+.catnote { text-transform: none; letter-spacing: 0; font-weight: 400; }
+tr.cat td { white-space: normal; }
+th.sortable { cursor: pointer; }
+th.l, td.l { text-align: left; }
+.fn { position: sticky; left: 0; background: var(--panel); z-index: 1; font-weight: 600; min-width: 150px; }
+thead .fn { z-index: 3; }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--hover); }
+tr.cat td { background: var(--chip) !important; font-weight: 600; text-align: left; cursor: default; color: var(--muted);
+  font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--muted); }
+td.fn .code { font-weight: 400; }
+td.note { color: var(--muted); font-size: 12px; white-space: normal; min-width: 220px; text-align: left; }
+td.heat { font-variant-numeric: tabular-nums; }
+td.big { font-weight: 700; }
+th.gpu { font-weight: 600; text-align: center; min-width: 46px; cursor: help; }
+th.gpu small { display: block; font-weight: 400; color: var(--muted); font-size: 10px; }
+th.grp { text-align: center; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; border-left: 2px solid var(--line); }
+th.grp span { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.gl { border-left: 2px solid var(--line); }
+.g-new { color: var(--cheap); } .g-cur { color: var(--accent); } .g-old { color: var(--medium); } .g-vold { color: var(--muted); }
+.range { display: inline-block; width: 70px; height: 6px; background: var(--chip); border-radius: 3px; position: relative; vertical-align: middle; }
+.range i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; opacity: .7; }
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
+details summary { cursor: pointer; font-weight: 600; }
+details p, details li { color: var(--muted); max-width: 1000px; }
+.drawer { position: fixed; inset: 0 0 0 auto; width: min(960px, 100vw); background: var(--panel); border-left: 1px solid var(--line);
+  box-shadow: -10px 0 30px rgba(0,0,0,.18); transform: translateX(100%); transition: transform .2s; z-index: 20; overflow: auto; padding: 18px 20px; }
+.drawer.open { transform: none; }
+.drawer h2 { margin: 0 0 4px; font-size: 20px; }
+.drawer .x { float: right; }
+.drawer table { margin-top: 10px; width: 100%; }
+.drawer td, .drawer th { font-size: 12px; position: static; }
+.bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--accent); opacity: .7; vertical-align: middle; }
+.kpis { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.kpi { background: var(--chip); border-radius: 8px; padding: 8px 12px; min-width: 100px; }
+.kpi .v { font-size: 20px; font-weight: 700; }
+.kpi .k { font-size: 11px; color: var(--muted); }
+.drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+@media (max-width: 700px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+  input[type=search] { width: 100%; }
+  .fn { min-width: 110px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Стоимость математических функций в шейдерах на Mali</h1>
+  <p class="sub" id="sub">Mali Offline Compiler · фрагментный шейдер · OpenGL ES и Vulkan</p>
+</header>
+<main>
+  <div class="controls">
+    <div class="group"><label>API</label><div class="seg" id="api"></div></div>
+    <div class="group"><label>Тип</label><div class="seg" id="variant"></div></div>
+    <div class="group"><input type="search" id="q" placeholder="Поиск функции…"></div>
+    <div class="group" style="margin-left:auto">
+      <button class="btn" id="load">Загрузить CSV</button>
+      <input type="file" id="file" accept=".csv" hidden>
+      <button class="btn" id="theme" title="Тема">◐</button>
+    </div>
+  </div>
+  <div class="legend">
+    <span>Числа — стоимость в <b>FMA</b> (одно умножение-сложение): «8» = как 8 обычных операций.</span>
+    <span><span class="tier cheap">дешёвая</span> ≤ 1.5</span>
+    <span><span class="tier medium">средняя</span> ≤ 10</span>
+    <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
+    <span>Текстуры — в своих единицах (1 = обычная выборка tex2D).</span>
+    <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
+  </div>
+  <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
+
+  <details>
+    <summary>Как измерялось и как читать</summary>
+    <ul>
+      <li><b>Единица «FMA»</b> — стоимость одной скалярной highp FMA (<span class="code">a*b+c</span>) на том же GPU. У разных GPU такты в разном масштабе, а в FMA видно, сколько «обычных операций» стоит функция. Сырые такты есть в подробностях (клик по строке).</li>
+      <li>Цифры относятся только к Mali (Android на MediaTek, старых Exynos, Kirin, Google Tensor G1–G4). У Adreno (Snapdragon), Apple GPU и Xclipse (Exynos 2022+) они другие.</li>
+      <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <span class="code">x = f(x, a) + w</span> во фрагментном шейдере. Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
+      <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому <span class="code">mul</span> и <span class="code">pow(x, 2)</span>, за которыми идёт сложение, сливаются в FMA и стоят ≈0. <span class="code">abs</span>, <span class="code">saturate</span> и <span class="code">f16tof32</span> часто бесплатны, потому что это модификаторы операндов.</li>
+      <li><b>Блок</b> (в подробностях) — где внутри GPU считается функция. На Valhall и 5th Gen их три, и работают они параллельно:
+        <b>FMA</b> — умножение и сложение (<span class="code">+ * mad lerp dot min max</span>);
+        <b>CVT</b> — конвертации и округления (<span class="code">floor frac step (int)x</span>, сдвиги);
+        <b>SFU</b> — специальные функции (<span class="code">rcp sqrt exp2 log2 sin cos</span>, деление).
+        Функция в CVT или SFU в шейдере, где в основном умножения и сложения, может оказаться частично бесплатной, а много SFU-функций подряд упрутся в SFU. У Bifrost и Midgard блок один — «ALU». «—» — бесплатно.</li>
+      <li>Колонки <b>float/half</b>: векторные функции (dot, length, normalize…) меряются на float3, матрицы — на float3x3. <b>float4/half4</b> — на float4 и float4x4. Хелперы Unity — всегда на своём типе.</li>
+      <li><b>half</b> = <span class="code">mediump</span>. Целочисленные операции меряются только в 32 битах, mediump int (min16int) ведёт себя нестабильно.</li>
+      <li>Midgard измерен старым malioc 8.4, новый его не поддерживает. Это статическая оценка компилятора, а не замер на устройстве: она хороша для сравнения функций между собой.</li>
+    </ul>
+  </details>
+</main>
+
+<aside class="drawer" id="drawer"></aside>
+
+<script src="data.js"></script>
+<script>
+"use strict";
+const ARCH_ORDER = ["Arm 5th Generation", "Valhall", "Bifrost", "Midgard"];
+const GROUPS = {
+  "Arm 5th Generation": { name: "Новые", years: "5th Gen · 2023+", cls: "g-new" },
+  "Valhall":            { name: "Актуальные", years: "Valhall · 2019–2022", cls: "g-cur" },
+  "Bifrost":            { name: "Старые", years: "Bifrost · 2016–2018", cls: "g-old" },
+  "Midgard":            { name: "Очень старые", years: "Midgard · 2013–2015", cls: "g-vold" },
+};
+// year, segment, example chips (where known)
+const GPU_INFO = {
+  "Mali G2": [2026, "флагман", ""], "Mali G1": [2025, "флагман", "Dimensity 9500"],
+  "Immortalis-G925": [2024, "флагман", "Dimensity 9400"], "Mali-G725": [2024, "верхний средний", ""],
+  "Mali-G625": [2024, "средний", ""], "Immortalis-G720": [2023, "флагман", "Dimensity 9300"],
+  "Mali-G720": [2023, "верхний средний", "Dimensity 8400"], "Mali-G620": [2023, "средний", ""],
+  "Immortalis-G715": [2022, "флагман", "Dimensity 9200"], "Mali-G715": [2022, "флагман", "Tensor G3, G4 (Pixel 8, 9)"],
+  "Mali-G615": [2022, "средний", "Dimensity 8300, 7300"], "Mali-G710": [2021, "флагман", "Dimensity 9000, Tensor G2 (Pixel 7)"],
+  "Mali-G610": [2021, "средний", "Dimensity 8100, 8200"], "Mali-G510": [2021, "бюджетный", ""],
+  "Mali-G310": [2021, "начальный", ""], "Mali-G78AE": [2021, "автомобильный", ""],
+  "Mali-G78": [2020, "флагман", "Exynos 2100 (S21), Kirin 9000, Tensor G1 (Pixel 6)"],
+  "Mali-G68": [2020, "средний", "Dimensity 900, 1080, Exynos 1280"],
+  "Mali-G77": [2019, "флагман", "Exynos 990 (S20), Dimensity 1000, 1200"],
+  "Mali-G57": [2019, "бюджетный / средний", "Helio G99, Dimensity 700, 810"],
+  "Mali-G76": [2018, "флагман", "Exynos 9820 (S10), Kirin 980, Helio G90T"],
+  "Mali-G52": [2018, "бюджетный", "Helio G85, G88, Exynos 850"],
+  "Mali-G31": [2018, "начальный", ""], "Mali-G72": [2017, "флагман", "Exynos 9810 (S9), Kirin 970, Helio P60"],
+  "Mali-G71": [2016, "флагман", "Exynos 8895 (S8), Kirin 960"], "Mali-G51": [2016, "бюджетный", "Kirin 710"],
+  "Mali-T880": [2015, "флагман", "Exynos 8890 (S7), Kirin 950"], "Mali-T860": [2015, "средний", "Helio P10"],
+  "Mali-T830": [2015, "бюджетный", "Exynos 7870"], "Mali-T820": [2015, "бюджетный", ""],
+  "Mali-T760": [2013, "флагман", "Exynos 7420 (S6)"], "Mali-T720": [2013, "бюджетный", ""],
+};
+const VARIANTS = ["float", "half", "float4", "half4"];
+const S = { api: "GLES", variant: "float", q: "", sort: null };
+let D = null;
+
+function parseCSV(text) {
+  const out = []; let row = [], f = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; }
+      else f += c;
+    } else if (c === '"') q = true;
+    else if (c === ",") { row.push(f); f = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(f); f = ""; if (row.length > 1 || row[0] !== "") out.push(row); row = [];
+    } else f += c;
+  }
+  if (f !== "" || row.length) { row.push(f); out.push(row); }
+  const h = out.shift();
+  return out.map(r => Object.fromEntries(h.map((k, i) => [k, r[i] ?? ""])));
+}
+
+function ingest(text) {
+  const rows = parseCSV(text.replace(/^﻿/, ""));
+  const num = ["cycles", "rel_fma", "fma", "cvt", "sfu", "fp16_pct", "work_regs_1call", "uniform_regs_1call", "alu_fma"];
+  for (const r of rows) for (const k of num) r[k] = r[k] === "" ? null : +r[k];
+  const gpuMap = new Map();
+  for (const r of rows) if (!gpuMap.has(r.gpu)) gpuMap.set(r.gpu, { name: r.gpu, arch: r.arch, malioc: r.malioc });
+  const year = g => (GPU_INFO[g.name] || [0])[0];
+  const gpus = [...gpuMap.values()].sort((a, b) =>
+    ARCH_ORDER.indexOf(a.arch) - ARCH_ORDER.indexOf(b.arch) || year(b) - year(a));
+  const funcs = [], seen = new Set();
+  for (const r of rows) if (!seen.has(r.func)) { seen.add(r.func); funcs.push({ id: r.func, hlsl: r.hlsl, category: r.category, note: r.note, unit: r.unit || "FMA" }); }
+  const idx = new Map();
+  for (const r of rows) idx.set(`${r.api}|${r.variant}|${r.func}|${r.gpu}`, r);
+  D = { rows, gpus, funcs, idx };
+  const mv = [...new Set(rows.map(r => r.malioc))].join(", ");
+  document.getElementById("sub").textContent =
+    `Mali Offline Compiler ${mv} · ${gpus.length} GPU · ${funcs.length} функций · фрагментный шейдер · OpenGL ES и Vulkan`;
+  buildControls(); render();
+}
+
+function seg(id, opts, key) {
+  const el = document.getElementById(id); el.innerHTML = "";
+  for (const [v, label] of opts) {
+    const b = document.createElement("button"); b.textContent = label; b.className = S[key] === v ? "on" : "";
+    b.onclick = () => { S[key] = v; save(); buildControls(); render(); };
+    el.appendChild(b);
+  }
+}
+function buildControls() {
+  seg("api", [["GLES", "OpenGL ES"], ["Vulkan", "Vulkan"]], "api");
+  seg("variant", VARIANTS.map(v => [v, v]), "variant");
+}
+
+const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const fmt = v => v == null ? "–" : v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v === 0 ? "0" : v.toFixed(2);
+const tier = (v, unit) => v == null ? "" : unit === "tex2D" ? (v <= 1.05 ? "cheap" : v <= 2.05 ? "medium" : "heavy")
+  : v <= 1.5 ? "cheap" : v <= 10 ? "medium" : "heavy";
+const TIER_RU = { cheap: "дешёвая", medium: "средняя", heavy: "тяжёлая" };
+function heat(v) {
+  if (v == null) return "";
+  const t = Math.min(1, Math.log2(1 + v) / Math.log2(1 + 64));
+  return `background: hsla(${(145 - 145 * t).toFixed(0)}, 75%, var(--heat-l), calc(var(--heat-a) * ${(0.35 + 0.65 * t).toFixed(2)}))`;
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const short = n => n.replace("Mali-", "").replace("Mali ", "").replace("Immortalis-", "Imm-");
+function gpuTitle(g) {
+  const [y, segm, ex] = GPU_INFO[g.name] || ["?", "", ""];
+  return `${g.name} · ${g.arch === "Arm 5th Generation" ? "5th Gen" : g.arch} · ${y}` + (segm ? ` · ${segm}` : "") + (ex ? `\nНапример: ${ex}` : "");
+}
+const get = (fid, g, v = S.variant, api = S.api) => D.idx.get(`${api}|${v}|${fid}|${g}`);
+
+function stats(fid) {
+  const vals = [], alus = [], bounds = {}; let r0 = null;
+  for (const g of D.gpus) {
+    const r = get(fid, g.name); if (!r || r.rel_fma == null) continue;
+    r0 = r0 || r; vals.push(r.rel_fma); bounds[r.bound] = (bounds[r.bound] || 0) + 1;
+    if (r.alu_fma != null) alus.push(r.alu_fma);
+  }
+  const bound = Object.entries(bounds).filter(e => e[0] !== "-").sort((a, b) => b[1] - a[1]).map(e => e[0])[0] || "–";
+  return { med: median(vals), min: vals.length ? Math.min(...vals) : null, max: vals.length ? Math.max(...vals) : null,
+           alu: median(alus), typ: r0 ? r0.type : "", hexpr: r0 ? (r0.hlsl_expr || r0.glsl) : "", glsl: r0 ? r0.glsl : "", bound };
+}
+const BOUND_RU = { FMA: "FMA", CVT: "CVT", SFU: "SFU", A: "ALU", TEX: "TEX" };
+const BOUND_HELP = {
+  FMA: "FMA — блок умножения и сложения (+, *, mad, lerp, dot, min/max)",
+  CVT: "CVT — блок конвертаций и округлений (floor, frac, step, (int)x, сдвиги)",
+  SFU: "SFU — блок специальных функций (rcp, sqrt, exp2, log2, sin/cos, деление)",
+  A: "ALU — у Bifrost/Midgard malioc не разделяет блоки",
+  TEX: "TEX — текстурный блок",
+  "—": "Бесплатно: компилятор встраивает операцию в соседнюю инструкцию",
+};
+
+function render() {
+  const wrap = document.getElementById("wrap");
+  const q = S.q.trim().toLowerCase();
+  const funcs = D.funcs.filter(f => !q || [f.id, f.hlsl, f.category].some(s => s.toLowerCase().includes(q)));
+  if (!funcs.length) { wrap.innerHTML = `<div class="empty">Ничего не найдено</div>`; return; }
+  const archs = ARCH_ORDER.filter(a => D.gpus.some(g => g.arch === a));
+  const st = new Map(funcs.map(f => {
+    const s = stats(f.id);
+    s.grp = {};
+    for (const a of archs) s.grp[a] = median(D.gpus.filter(g => g.arch === a).map(g => get(f.id, g.name)?.rel_fma).filter(v => v != null));
+    return [f.id, s];
+  }));
+  const gmax = Math.max(...[...st.values()].map(s => s.max ?? 0), 1e-9);
+
+  let order = funcs;
+  if (S.sort) {
+    const { key, dir } = S.sort;
+    const val = f => key === "med" ? st.get(f.id).med : key === "fn" ? f.hlsl.toLowerCase() : st.get(f.id).grp[key];
+    order = [...funcs].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (va == null) return 1; if (vb == null) return -1;
+      return (va > vb ? 1 : va < vb ? -1 : 0) * dir;
+    });
+  }
+  const arrow = k => S.sort && S.sort.key === k ? (S.sort.dir > 0 ? " ▲" : " ▼") : "";
+  const ncol = 6 + archs.length;
+  let h = `<table class="main"><thead><tr class="n">` +
+    `<th class="l fn sortable" data-k="fn">Функция${arrow("fn")}</th><th class="l">Тип</th><th class="l">Уровень</th>` +
+    `<th class="sortable" data-k="med" title="Медиана по всем GPU">Медиана${arrow("med")}</th><th class="l">Разброс по GPU</th>`;
+  archs.forEach((a, i) => {
+    const G = GROUPS[a];
+    h += `<th class="grpc sortable ${G.cls} ${i === 0 ? "gl" : ""}" data-k="${a}" title="Медиана по GPU группы: ${G.years}">${G.name}${arrow(a)}<small>${G.years}</small></th>`;
+  });
+  h += `<th class="l gl">Заметка</th></tr></thead><tbody>`;
+
+  let lastCat = null;
+  for (const f of order) {
+    const s = st.get(f.id);
+    if (!S.sort && f.category !== lastCat) {
+      const un = f.unit === "tex2D" ? `<span class="catnote"> — в выборках tex2D (1 = одна обычная выборка), не в FMA. «+N FMA» в заметке — сколько арифметики уходит на подготовку координат. malioc считает билинейную фильтрацию 32-битной текстуры; трилинейная, анизотропная и широкие форматы на устройстве дороже.</span>` : "";
+      h += `<tr class="cat"><td colspan="${ncol}">${esc(f.category)}${un}</td></tr>`;
+      lastCat = f.category;
+    }
+    const t = tier(s.med, f.unit);
+    const lo = s.min != null ? s.min / gmax * 100 : 0, hi = s.max != null ? s.max / gmax * 100 : 0;
+    h += `<tr data-f="${f.id}"><td class="l fn">${esc(f.hlsl)}<div class="code">${esc(s.hexpr)}</div></td>` +
+      `<td class="l code">${esc(s.typ)}</td><td class="l">${t ? `<span class="tier ${t}">${TIER_RU[t]}</span>` : ""}</td>` +
+      `<td class="heat big" style="${heat(s.med)}">${fmt(s.med)}</td>` +
+      `<td class="l"><span class="range"><i style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i></span> <span class="code">${fmt(s.min)}–${fmt(s.max)}</span></td>`;
+    archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
+    const texNote = f.unit === "tex2D" && s.alu ? `+${fmt(s.alu)} FMA на координаты. ` : "";
+    h += `<td class="note gl">${esc(texNote + f.note)}</td></tr>`;
+  }
+  wrap.innerHTML = h + `</tbody></table>`;
+  wrap.querySelectorAll("th.sortable").forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    S.sort = S.sort && S.sort.key === k ? (S.sort.dir === 1 ? { key: k, dir: -1 } : null) : { key: k, dir: 1 };
+    render();
+  });
+  wrap.querySelectorAll("tbody tr[data-f]").forEach(tr => tr.onclick = () => openDrawer(tr.dataset.f));
+}
+
+function openDrawer(fid) {
+  const f = D.funcs.find(x => x.id === fid), s = stats(fid);
+  const byVar = VARIANTS.map(v => {
+    const a = D.gpus.map(g => get(fid, g.name, v)).filter(r => r && r.rel_fma != null);
+    return [v, median(a.map(r => r.rel_fma)), a[0]?.type];
+  });
+  let diff = 0, tot = 0;
+  for (const g of D.gpus) for (const v of VARIANTS) {
+    const a = get(fid, g.name, v, "GLES"), b = get(fid, g.name, v, "Vulkan");
+    if (a && b) { tot++; if (Math.abs(a.cycles - b.cycles) > 1e-4) diff++; }
+  }
+  const n = x => x == null ? "–" : String(+(+x).toFixed(4));
+  let h = `<button class="btn x" onclick="closeDrawer()">✕</button>
+    <h2>${esc(f.hlsl)} <span class="code">${esc(s.typ)}</span></h2>
+    <div class="code">HLSL: ${esc(s.hexpr)} &nbsp;·&nbsp; GLSL: ${esc(s.glsl)}</div>
+    <p class="sub">${esc(f.category)}${f.note ? " · " + esc(f.note) : ""}</p>
+    <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, ${f.unit === "tex2D" ? "× tex2D" : "FMA"}</div></div>`).join("")}</div>
+    <p class="sub">Блок, где считается функция: <b>${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b> — ${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}. Блоки FMA, CVT и SFU работают параллельно: если шейдер в основном умножает и складывает, функция в CVT/SFU частично «прячется» за ними.</p>
+    <p class="sub">OpenGL ES и Vulkan: ${diff ? `отличаются в ${diff} из ${tot} случаев (колонка «Разница»)` : "одинаково на всех GPU"}.</p>
+    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>${f.unit === "tex2D" ? "× tex2D" : "FMA"}</th><th></th>${f.unit === "tex2D" ? "<th>ALU, FMA</th>" : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
+  let prev = null;
+  const vmax = Math.max(0, ...D.gpus.map(g => get(fid, g.name)?.rel_fma || 0));
+  for (const g of D.gpus) {
+    const r = get(fid, g.name); if (!r) continue;
+    if (g.arch !== prev) { const G = GROUPS[g.arch]; h += `<tr class="cat"><td colspan="14">${G.name} · ${G.years}</td></tr>`; prev = g.arch; }
+    const o = get(fid, g.name, S.variant, S.api === "GLES" ? "Vulkan" : "GLES");
+    const d = o && o.rel_fma != null && r.rel_fma != null ? o.rel_fma - r.rel_fma : null;
+    const [y, segm] = GPU_INFO[g.name] || ["?", ""];
+    h += `<tr title="${esc(gpuTitle(g))}"><td class="l">${g.name}</td><td class="l">${y}</td><td class="l code">${segm}</td>
+      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${f.unit === "tex2D" ? `<td>${fmt(r.alu_fma)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
+      <td class="l code">${BOUND_RU[r.bound] || r.bound}</td><td>${r.work_regs_1call ?? "–"}</td>
+      <td class="l code">${r.chain || "–"}${r.spill === "True" ? " ⚠" : ""}</td>
+      <td class="code">${d == null ? "–" : Math.abs(d) < 1e-3 ? "так же" : (d > 0 ? "+" : "") + d.toFixed(2)}</td></tr>`;
+  }
+  h += `</tbody></table><p class="sub">Тип ${S.variant}, ${S.api === "GLES" ? "OpenGL ES" : "Vulkan"}. «FMA» — стоимость в FMA; «такты», «FMA-блок», «CVT», «SFU» — сырые такты malioc на один вызов (у Bifrost/Midgard один общий ALU). «Рег.» — регистры шейдера с одним вызовом. «Цепочка» — длины цепочек, между которыми снят замер (⚠ — регистры вытесняются в память).</p>`;
+  const dr = document.getElementById("drawer"); dr.innerHTML = h; dr.classList.add("open");
+}
+function closeDrawer() { document.getElementById("drawer").classList.remove("open"); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+function save() { try { localStorage.setItem("maliCost2", JSON.stringify({ api: S.api, variant: S.variant })); } catch (e) {} }
+function restore() {
+  try { const o = JSON.parse(localStorage.getItem("maliCost2") || "null"); if (o) Object.assign(S, o); } catch (e) {}
+  if (!VARIANTS.includes(S.variant)) S.variant = "float";
+  try { const t = localStorage.getItem("maliTheme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+}
+document.getElementById("theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const nx = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = nx; try { localStorage.setItem("maliTheme", nx); } catch (e) {}
+};
+document.getElementById("q").oninput = e => { S.q = e.target.value; render(); };
+document.getElementById("load").onclick = () => document.getElementById("file").click();
+document.getElementById("file").onchange = e => { const f = e.target.files[0]; if (f) f.text().then(ingest); };
+document.addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("drop"); });
+document.addEventListener("dragleave", () => document.body.classList.remove("drop"));
+document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drop"); const f = e.dataTransfer.files[0]; if (f) f.text().then(ingest); });
+
+restore();
+(async () => {
+  if (window.MALI_CSV) return ingest(window.MALI_CSV);
+  try { const r = await fetch("mali_math_cost.csv", { cache: "no-store" }); if (r.ok) return ingest(await r.text()); } catch (e) {}
+  document.getElementById("wrap").innerHTML = `<div class="empty">Нет data.js рядом со страницей — перетащите сюда mali_math_cost.csv или нажмите «Загрузить CSV».</div>`;
+})();
+</script>
+</body>
+</html>
