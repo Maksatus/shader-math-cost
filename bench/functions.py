@@ -162,8 +162,8 @@ FUNCS = [
     ("lin2srgb",   "LinearToSRGB", "LinearToSRGB({x})", "Unity (URP)", "fixed3", True, 0, "Точная, через pow"),
     ("lin2srgb_f", "FastLinearToSRGB", "FastLinearToSRGB({x})", "Unity (URP)", "fixed3", True, 0, "То же, что LinearToGammaSpace"),
     ("safenorm",   "SafeNormalize", "SafeNormalize({x})", "Unity (URP)", "fixed3", True, 0, "normalize без деления на 0"),
-    # --- texture sampling: cost in texture-unit cycles, 1 = one plain tex2D on the same GPU
-    ("tex2D",      "tex2D",        "texture(uT2, {x}.xy)",                   "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D; эталон = 1"),
+    # --- texture sampling: cost in FMA like the rest (busiest of texture pipe and arithmetic)
+    ("tex2D",      "tex2D",        "texture(uT2, {x}.xy)",                   "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D"),
     ("tex2Dlod",   "tex2Dlod",     "textureLod(uT2, {x}.xy, {x}.z)",         "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D_LOD"),
     ("tex2Dbias",  "tex2Dbias",    "texture(uT2, {x}.xy, {x}.z)",            "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D_BIAS"),
     ("tex2Dgrad",  "tex2Dgrad",    "textureGrad(uT2, {x}.xy, {a}.xy, {b}.xy)", "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D_GRAD"),

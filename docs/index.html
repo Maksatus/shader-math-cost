@@ -124,7 +124,7 @@ details p, details li { color: var(--muted); max-width: 1000px; }
     <span><span class="tier cheap">дешёвая</span> ≤ 1.5</span>
     <span><span class="tier medium">средняя</span> ≤ 10</span>
     <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
-    <span>Текстуры — в своих единицах: 1 = обычная выборка tex2D (дешёвая), до 2 — средняя, больше — тяжёлая.</span>
+    <span>Текстуры — тоже в FMA: сколько FMA этого GPU помещается во время выборки (или в подготовку координат, если она дольше).</span>
     <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
   </div>
   <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
@@ -214,7 +214,7 @@ function parseCSV(text) {
 
 function ingest(text) {
   const rows = parseCSV(text.replace(/^﻿/, ""));
-  const num = ["cycles", "rel_fma", "fma", "cvt", "sfu", "fp16_pct", "work_regs_1call", "uniform_regs_1call", "alu_fma", "rel_short"];
+  const num = ["cycles", "rel_fma", "fma", "cvt", "sfu", "fp16_pct", "work_regs_1call", "uniform_regs_1call", "alu_fma", "rel_short", "rel_tex"];
   for (const r of rows) for (const k of num) r[k] = r[k] === "" ? null : +r[k];
   const gpuMap = new Map();
   for (const r of rows) if (!gpuMap.has(r.gpu)) gpuMap.set(r.gpu, { name: r.gpu, arch: r.arch, malioc: r.malioc });
@@ -249,8 +249,7 @@ function buildControls() {
 
 const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const fmt = v => v == null ? "–" : v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v === 0 ? "0" : v.toFixed(2);
-const tier = (v, unit) => v == null ? "" : unit === "tex2D" ? (v <= 1.05 ? "cheap" : v <= 2.05 ? "medium" : "heavy")
-  : v <= 1.5 ? "cheap" : v <= 10 ? "medium" : "heavy";
+const tier = v => v == null ? "" : v <= 1.5 ? "cheap" : v <= 10 ? "medium" : "heavy";
 const TIER_RU = { cheap: "дешёвая", medium: "средняя", heavy: "тяжёлая" };
 function heat(v) {
   if (v == null) return "";
@@ -266,22 +265,24 @@ function gpuTitle(g) {
 const get = (fid, g, v = S.variant, api = S.api) => D.idx.get(`${api}|${v}|${fid}|${g}`);
 
 function stats(fid) {
-  const vals = [], alus = [], shorts = [], bounds = {}; let r0 = null, anyShort = false;
+  const vals = [], alus = [], texs = [], shorts = [], bounds = {}; let r0 = null, anyShort = false;
   for (const g of D.gpus) {
     const r = get(fid, g.name); if (!r || r.rel_fma == null) continue;
     r0 = r0 || r; vals.push(r.rel_fma); bounds[r.bound] = (bounds[r.bound] || 0) + 1;
     if (r.alu_fma != null) alus.push(r.alu_fma);
+    if (r.rel_tex != null) texs.push(r.rel_tex);
     // empty rel_short = the shortest path costs the same, so the median covers the same GPUs as med
     shorts.push(r.rel_short ?? r.rel_fma); anyShort = anyShort || r.rel_short != null;
   }
   const bound = Object.entries(bounds).filter(e => e[0] !== "-").sort((a, b) => b[1] - a[1]).map(e => e[0])[0] || "–";
   const med = median(vals), sh = anyShort ? median(shorts) : null;
   return { med, min: vals.length ? Math.min(...vals) : null, max: vals.length ? Math.max(...vals) : null,
-           alu: median(alus), anyShort, short: sh != null && med - sh > Math.max(0.05, 0.02 * med) ? sh : null,
+           alu: median(alus), tex: median(texs), anyShort, short: sh != null && med - sh > Math.max(0.05, 0.02 * med) ? sh : null,
            typ: r0 ? r0.type : "", hexpr: r0 ? (r0.hlsl_expr || r0.glsl) : "", glsl: r0 ? r0.glsl : "", bound };
 }
 // malioc's shortest path: a skipped user branch, or a fast path inside the compiled code (integer division)
 const isBranch = f => f.category === "Ветвления";
+const isTex = f => f.category === "Текстуры";
 const BOUND_RU = { FMA: "FMA", CVT: "CVT", SFU: "SFU", A: "ALU", TEX: "TEX" };
 const BOUND_HELP = {
   FMA: "FMA — блок умножения и сложения (+, *, mad, lerp, dot), на G615/G715 и 5th Gen также округления и (int)x",
@@ -331,7 +332,7 @@ function render() {
   for (const f of order) {
     const s = st.get(f.id);
     if (!S.sort && f.category !== lastCat) {
-      const un = f.unit === "tex2D" ? `<span class="catnote"> — в выборках tex2D (1 = одна обычная выборка), не в FMA. «+N FMA» в заметке — сколько арифметики уходит на подготовку координат. malioc считает билинейную фильтрацию 32-битной текстуры; трилинейная, анизотропная и широкие форматы на устройстве дороже.</span>` : "";
+      const un = isTex(f) ? `<span class="catnote"> — тоже в FMA. Текстурный блок работает параллельно с арифметикой: если шейдер упирается в математику, выборка почти бесплатна, если в текстуры — формулу дешевле этой цифры выгоднее посчитать, чем запечь. «× tex2D» в заметке — во сколько раз дольше обычной выборки, «N FMA на координаты» — арифметика на подготовку. malioc считает билинейную фильтрацию 32-битной текстуры; трилинейная, анизотропная и широкие форматы на устройстве дороже.</span>` : "";
       h += `<tr class="cat"><td colspan="${ncol}">${esc(f.category)}${un}</td></tr>`;
       lastCat = f.category;
     }
@@ -342,7 +343,7 @@ function render() {
       `<td class="heat big" style="${heat(s.med)}">${fmt(s.med)}</td>` +
       `<td class="l"><span class="range"><i style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i></span> <span class="code">${fmt(s.min)}–${fmt(s.max)}</span></td>`;
     archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
-    const texNote = f.unit === "tex2D" && s.alu ? `+${fmt(s.alu)} FMA на координаты. `
+    const texNote = isTex(f) ? `${fmt(s.tex)} × tex2D` + (s.alu ? `, ${fmt(s.alu)} FMA на координаты. ` : ". ")
       : s.short != null ? (isBranch(f) ? `Если ветка пропущена: ${fmt(s.short)}. ` : `Внутри есть переход, короткий путь: ${fmt(s.short)}. `) : "";
     // the unit is this GPU's FMA: flag functions whose relative cost changed between generations
     const g5 = s.grp["Arm 5th Generation"], gv = s.grp["Valhall"];
@@ -376,10 +377,10 @@ function openDrawer(fid) {
     <h2>${esc(f.hlsl)} <span class="code">${esc(s.typ)}</span></h2>
     <div class="code">HLSL: ${esc(s.hexpr)} &nbsp;·&nbsp; GLSL: ${esc(s.glsl)}</div>
     <p class="sub">${esc(f.category)}${f.note ? " · " + esc(f.note) : ""}</p>
-    <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, ${f.unit === "tex2D" ? "× tex2D" : "FMA"}</div></div>`).join("")}</div>
+    <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, FMA</div></div>`).join("")}</div>
     <p class="sub">Блок, где считается функция: <b>${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b> — ${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}. Блоки FMA, CVT и SFU работают параллельно: если шейдер в основном умножает и складывает, функция в CVT/SFU частично «прячется» за ними.</p>
     <p class="sub">OpenGL ES и Vulkan: ${diff ? `отличаются в ${diff} из ${tot} случаев (колонка «Разница»)` : "одинаково на всех GPU"}.</p>
-    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>${f.unit === "tex2D" ? "× tex2D" : "FMA"}</th><th></th>${f.unit === "tex2D" ? "<th>ALU, FMA</th>" : ""}${s.anyShort ? `<th>${isBranch(f) ? "ветка пропущена" : "короткий путь"}</th>` : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
+    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>FMA</th><th></th>${isTex(f) ? "<th>× tex2D</th><th>коорд., FMA</th>" : ""}${s.anyShort ? `<th>${isBranch(f) ? "ветка пропущена" : "короткий путь"}</th>` : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
   let prev = null;
   const vmax = Math.max(0, ...D.gpus.map(g => get(fid, g.name)?.rel_fma || 0));
   for (const g of D.gpus) {
@@ -389,7 +390,7 @@ function openDrawer(fid) {
     const d = o && o.rel_fma != null && r.rel_fma != null ? o.rel_fma - r.rel_fma : null;
     const [y, segm] = GPU_INFO[g.name] || ["?", ""];
     h += `<tr title="${esc(gpuTitle(g))}"><td class="l">${g.name}</td><td class="l">${y}</td><td class="l code">${segm}</td>
-      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${f.unit === "tex2D" ? `<td>${fmt(r.alu_fma)}</td>` : ""}${s.anyShort ? `<td>${fmt(r.rel_short ?? r.rel_fma)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
+      <td class="heat big" style="${heat(r.rel_fma)}">${fmt(r.rel_fma)}</td><td class="l"><span class="bar" style="width:${vmax ? Math.max(1, (r.rel_fma || 0) / vmax * 120) : 0}px"></span></td>${isTex(f) ? `<td>${fmt(r.rel_tex)}</td><td>${fmt(r.alu_fma)}</td>` : ""}${s.anyShort ? `<td>${fmt(r.rel_short ?? r.rel_fma)}</td>` : ""}<td>${n(r.cycles)}</td><td>${n(r.fma)}</td><td>${n(r.cvt)}</td><td>${n(r.sfu)}</td>
       <td class="l code">${BOUND_RU[r.bound] || r.bound}</td><td>${r.work_regs_1call ?? "–"}</td>
       <td class="l code">${r.chain || "–"}${r.spill === "True" ? " ⚠" : ""}</td>
       <td class="code">${d == null ? "–" : Math.abs(d) < 1e-3 ? "так же" : (d > 0 ? "+" : "") + d.toFixed(2)}</td></tr>`;

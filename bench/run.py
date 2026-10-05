@@ -243,13 +243,10 @@ def main():
         short = max([max(0.0, v) for k, v in sh.items() if k != "texture"] or [0.0])
         tex = s.pop("texture", 0.0)
         alu = max(s.values()) if s else 0.0
-        if p["kind"] == "tex":
-            # texture rows: cost in texture-unit cycles relative to a plain tex2D
-            ref = slopes.get((p["core"], p["api"], "float", "tex2D"), {}).get("texture", 0)
-            cyc, unit_c, bound = tex, ref, "TEX"
-        else:
-            cyc = alu
-            bound = max(s, key=s.get) if cyc > 1e-9 else "-"
+        # the texture pipe runs in parallel with arithmetic: like FMA/CVT/SFU, the busiest pipe is the cost
+        cyc = max(alu, tex)
+        bound = ("TEX" if tex >= alu else max(s, key=s.get)) if cyc > 1e-9 else "-"
+        ref = slopes.get((p["core"], p["api"], "float", "tex2D"), {}).get("texture", 0)
         props2, props1 = p["r2"]["props"], p["rs"]["props"]
         rows.append({
             "api": "GLES" if p["api"] == "gles" else "Vulkan",
@@ -261,12 +258,13 @@ def main():
             "glsl": p["glsl"], "note": p["note"],
             "cycles": round(cyc, 5),
             "rel_fma": round(cyc / unit_c, 3) if unit_c else "",
-            "unit": "tex2D" if p["kind"] == "tex" else "FMA",
+            "unit": "FMA",
             # cost on the shortest path (a skipped branch); empty unless cheaper than the longest path
             "rel_short": round(short / unit_c, 3)
                          if unit_c and p["kind"] != "tex" and short < cyc - 1e-6 else "",
-            "alu_fma": round(alu / max(v for k, v in unit.items() if k != "texture"), 3)
-                       if p["kind"] == "tex" and unit else "",
+            # texture rows: arithmetic for the coordinates (FMA) and texture time in plain tex2D samples
+            "alu_fma": round(alu / unit_c, 3) if p["kind"] == "tex" and unit_c else "",
+            "rel_tex": round(tex / ref, 3) if p["kind"] == "tex" and ref else "",
             "fma": round(s["arith_fma"], 5) if "arith_fma" in s else "",
             "cvt": round(s["arith_cvt"], 5) if "arith_cvt" in s else "",
             "sfu": round(s["arith_sfu"], 5) if "arith_sfu" in s else "",
