@@ -7,3 +7,19 @@ __pycache__/
 # old hand-made table
 Instruction Cycles*
 bench/errors.txt
+
+# shaderopt: only the code goes to git. Exports, measurements, reports and frame
+# snapshots contain project shaders and assets and must never reach this public repository.
+shaderopt/corpus/real/
+shaderopt/out/
+**/_compiled/
+measurements.csv
+measurements.jsonl
+report.html
+report.csv
+frame*.json
+export.json
+unity_batch.log
+*.egg-info/
+frame_cost.csv
+frame_report.html

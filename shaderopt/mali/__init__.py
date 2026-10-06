@@ -1,0 +1,251 @@
+"""malioc wrapper shared by bench/run.py and shaderopt.
+
+compile() runs malioc on GLSL source with a cache keyed by the source text,
+parse() turns malioc JSON into a flat record: every variant (Main for fragment
+shaders, Position and Varying for IDVS vertex shaders), cycles per pipe on the
+longest / shortest path and in total, bound pipes, registers, spilling, fp16 %
+and uniform computation. Longest path cycles are None when malioc reports N/A
+(dynamic loops, e.g. the URP additional lights loop).
+
+Cache entries written by the old bench/run.py (v2) hold only the parsed main
+variant; they are still served to callers that need just that (run.py), and
+recompiled when the raw JSON is needed.
+"""
+import hashlib
+import json
+import os
+import subprocess
+import threading
+import time
+
+MALIOC = os.environ.get(
+    "MALIOC", r"C:\Program Files\Arm\Arm Performance Studio 2026.5\mali_offline_compiler\malioc.exe")
+CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "bench", ".cache")
+CACHE_VERSION = 3        # v3 = v2 fields + "raw" (malioc JSON without descriptions)
+LEGACY_VERSIONS = (2, 3)  # versions that carry the v2 fields
+STAGES = {".vert": "vertex", ".frag": "fragment", ".comp": "compute"}
+EXT = {v: k for k, v in STAGES.items()}
+SPIRV_EXT = ".spv"  # binary SPIR-V: shader.frag.spv (Vulkan only)
+PIPE_NAMES = {  # malioc pipeline name -> short name
+    "arith_total": "arith", "arithmetic": "arith", "arith_fma": "fma", "arith_cvt": "cvt",
+    "arith_sfu": "sfu", "load_store": "ls", "varying": "v", "texture": "t",
+}
+
+_tls = threading.local()
+
+
+class MaliocError(RuntimeError):
+    pass
+
+
+def list_cores(malioc=MALIOC):
+    """[(core, architecture, [apis])] as reported by `malioc --list`."""
+    out = subprocess.run([malioc, "--list"], capture_output=True, text=True).stdout
+    cores, arch = [], None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.endswith("architecture"):
+            arch = line.replace(" architecture", "")
+        elif "(" in line and arch:
+            name, apis = line.split(" (", 1)
+            cores.append((name, arch, [a.strip() for a in apis.rstrip(")").split(",")]))
+    return cores
+
+
+def version(malioc=MALIOC):
+    out = subprocess.run([malioc, "--version"], capture_output=True, text=True).stdout
+    for tok in out.split():
+        if tok.startswith("v") and tok[1:2].isdigit():
+            return tok[1:]
+    return ""
+
+
+def stage_of(path):
+    """Shader stage from a file name (shader.frag, shader.vert.spv, ...), or None."""
+    base = path[:-len(SPIRV_EXT)] if path.endswith(SPIRV_EXT) else path
+    return STAGES.get(os.path.splitext(base)[1])
+
+
+def read_source(path):
+    """GLSL text, or bytes for a binary SPIR-V file."""
+    if path.endswith(SPIRV_EXT):
+        with open(path, "rb") as f:
+            return f.read()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def cache_key(src, core, api, stage="fragment", malioc=MALIOC):
+    """src: GLSL text or SPIR-V bytes."""
+    if isinstance(src, bytes):
+        return hashlib.sha1(f"{malioc}|{api}|{core}|spirv|{stage}|".encode() + src).hexdigest()
+    # fragment keys match the old bench/run.py keys, so its cache stays valid
+    tail = "" if stage == "fragment" else f"|{stage}"
+    return hashlib.sha1(f"{malioc}|{api}|{core}|{src}{tail}".encode()).hexdigest()
+
+
+def _strip(o):
+    """malioc JSON without descriptions and file names (they bloat the cache)."""
+    if isinstance(o, dict):
+        return {k: _strip(v) for k, v in o.items() if k not in ("description", "filename")}
+    if isinstance(o, list):
+        return [_strip(v) for v in o]
+    return o
+
+
+def run_malioc(src, core, api, stage="fragment", malioc=MALIOC, tmp_root=CACHE):
+    """Compile once, no cache. src: GLSL text or SPIR-V bytes. Returns malioc JSON; raises MaliocError."""
+    spv = isinstance(src, bytes)
+    if spv and api != "vulkan":
+        raise MaliocError("SPIR-V input needs the Vulkan API (--api vulkan)")
+    if not hasattr(_tls, "tmp"):
+        # malioc writes intermediate SPIR-V to %TEMP%\moc-temp, so every
+        # worker thread needs its own TEMP dir to run in parallel.
+        _tls.tmp = os.path.join(tmp_root, f"tmp_{threading.get_ident()}")
+        os.makedirs(_tls.tmp, exist_ok=True)
+        _tls.env = dict(os.environ, TEMP=_tls.tmp, TMP=_tls.tmp)
+    fn = os.path.join(_tls.tmp, "shader" + EXT[stage] + (SPIRV_EXT if spv else ""))
+    with open(fn, "wb" if spv else "w") as f:
+        f.write(src)
+    r = subprocess.run([malioc, "--opengles" if api == "gles" else "--vulkan",
+                        "-c", core, "--format", "json", fn],
+                       capture_output=True, text=True, env=_tls.env)
+    try:
+        j = json.loads(r.stdout)
+    except Exception:
+        raise MaliocError((r.stdout + r.stderr)[-1500:])
+    try:
+        j["shaders"][0]["variants"][0]["performance"]
+    except Exception:
+        # compile errors come as JSON with schema "error": keep just the messages
+        errs = [e for s in j.get("shaders", []) for e in s.get("errors", [])]
+        raise MaliocError("\n".join(errs) if errs else (r.stdout + r.stderr)[-1500:])
+    return j
+
+
+def _legacy(j):
+    """Fields of the old bench/run.py cache entry (main / first variant)."""
+    v = j["shaders"][0]["variants"][0]
+    perf = v["performance"]
+    return {
+        "cycles": dict(zip(perf["pipelines"], perf["longest_path_cycles"]["cycle_count"])),
+        "short": dict(zip(perf["pipelines"], perf["shortest_path_cycles"]["cycle_count"])),
+        "bound": perf["longest_path_cycles"]["bound_pipelines"],
+        "props": {p["name"]: p["value"] for p in v["properties"]},
+        "driver": j["shaders"][0].get("driver", ""),
+    }
+
+
+_key_locks = {}
+_key_locks_guard = threading.Lock()
+
+
+def _key_lock(key):
+    with _key_locks_guard:
+        return _key_locks.setdefault(key, threading.Lock())
+
+
+def _read_cache(cpath):
+    """Cache entry or None. On Windows a file being replaced by another process
+    cannot be opened for a moment: retry, then treat it as a miss."""
+    for attempt in range(5):
+        try:
+            with open(cpath, encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
+        except (PermissionError, json.JSONDecodeError):
+            time.sleep(0.05 * (attempt + 1))
+    return None
+
+
+def compile(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE, need_raw=False):
+    """Cached malioc run. Returns {"ok": True, cycles, short, bound, props, driver[, raw][, cached]}
+    or {"ok": False, "error": text}; failures are not cached.
+    need_raw: recompile old cache entries that lack the raw JSON."""
+    os.makedirs(cache, exist_ok=True)
+    key = cache_key(src, core, api, stage, malioc)
+    # variants with identical sources share the key: one thread compiles, the others wait and read
+    with _key_lock(key):
+        return _compile_locked(src, core, api, stage, malioc, cache, need_raw,
+                               os.path.join(cache, key + ".json"))
+
+
+def _compile_locked(src, core, api, stage, malioc, cache, need_raw, cpath):
+    res = _read_cache(cpath)
+    if res and res.get("v") in LEGACY_VERSIONS and (res.get("raw") or not need_raw):
+        res["cached"] = True
+        return res
+    try:
+        j = _strip(run_malioc(src, core, api, stage, malioc, cache))
+    except MaliocError as e:
+        return {"ok": False, "error": str(e)}
+    res = {"v": CACHE_VERSION, "ok": True, **_legacy(j), "raw": j}
+    tmp = cpath + f".{threading.get_ident()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(res, f)
+    try:
+        os.replace(tmp, cpath)
+    except PermissionError:
+        # Windows: another process is reading or writing the same entry; the result is the same
+        os.remove(tmp)
+    return res
+
+
+def _cycles(perf, key):
+    c = perf.get(key)
+    # malioc reports N/A (null) for the longest path of shaders with dynamic loops
+    if not c or all(v is None for v in c["cycle_count"]):
+        return None, []
+    return ({PIPE_NAMES.get(p, p): v for p, v in zip(perf["pipelines"], c["cycle_count"])},
+            [PIPE_NAMES.get(p, p) for p in c["bound_pipelines"]])
+
+
+def parse(j):
+    """Flat record from malioc JSON (raw or stripped)."""
+    sh = j["shaders"][0]
+    sprops = {p["name"]: p["value"] for p in sh.get("properties", [])}
+    variants = {}
+    for v in sh["variants"]:
+        perf = v["performance"]
+        props = {p["name"]: p["value"] for p in v["properties"]}
+        longest, bound = _cycles(perf, "longest_path_cycles")
+        shortest, _ = _cycles(perf, "shortest_path_cycles")
+        total, _ = _cycles(perf, "total_cycles")
+        variants[v["name"].lower()] = {
+            "longest": longest, "shortest": shortest, "total": total, "bound": bound,
+            "work_regs": props.get("work_registers_used"),
+            "uniform_regs": props.get("uniform_registers_used"),
+            "occupancy": props.get("thread_occupancy"),
+            "spilling": props.get("has_stack_spilling"),
+            "spill_bytes": props.get("stack_spill_bytes"),
+            "fp16_pct": props.get("fp16_arithmetic"),
+        }
+    hw = sh["hardware"]
+    return {
+        "core": hw["core"], "arch": hw["architecture"],
+        "api": "gles" if sh["shader"]["api"] == "OpenGL ES" else "vulkan",
+        "stage": sh["shader"]["type"].lower(),
+        "driver": sh.get("driver", ""),
+        "malioc": ".".join(map(str, j["producer"]["version"])),
+        "uniform_computation": sprops.get("has_uniform_computation"),
+        "variants": variants,
+        "notes": sh.get("notes", []),
+    }
+
+
+def measure(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE):
+    """compile() + parse(): the full record, or {"ok": False, "error": ...}."""
+    r = compile(src, core, api, stage, malioc, cache, need_raw=True)
+    if not r["ok"]:
+        return r
+    return {"ok": True, "cached": r.get("cached", False),
+            "source_sha1": hashlib.sha1(src if isinstance(src, bytes) else src.encode()).hexdigest(),
+            **parse(r["raw"])}
+
+
+def spills(rec):
+    """True if any variant spills (parsed record) or the v2 entry spills."""
+    if "variants" in rec:
+        return any(v["spilling"] for v in rec["variants"].values())
+    return bool(rec["props"].get("has_stack_spilling"))

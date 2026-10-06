@@ -1,0 +1,42 @@
+#version 310 es
+precision highp float;
+layout(std140, binding=0) uniform U { highp mat4 uM4; highp mat3 uM3; };
+layout(binding=2) uniform highp sampler2D uT2;
+layout(location=0) in highp vec4 vX;
+layout(location=1) in highp vec4 vP0;
+layout(location=2) in highp vec4 vP1;
+layout(location=3) in highp vec4 vP2;
+layout(location=4) in highp vec4 vP3;
+layout(location=5) in highp vec4 vP4;
+layout(location=6) in highp vec4 vP5;
+layout(location=7) in highp vec4 vP6;
+layout(location=8) in highp vec4 vP7;
+layout(location=0) out highp vec4 o;
+void main() {
+  highp vec4 x = vX;
+  x = (texture(uT2, x.xy)) + vP0.xyzw;
+  x = (texture(uT2, x.xy)) + vP1.xyzw;
+  x = (texture(uT2, x.xy)) + vP2.xyzw;
+  x = (texture(uT2, x.xy)) + vP3.xyzw;
+  x = (texture(uT2, x.xy)) + vP4.xyzw;
+  x = (texture(uT2, x.xy)) + vP5.xyzw;
+  x = (texture(uT2, x.xy)) + vP6.xyzw;
+  x = (texture(uT2, x.xy)) + vP7.xyzw;
+  x = (texture(uT2, x.xy)) + vP0.yzwx;
+  x = (texture(uT2, x.xy)) + vP1.yzwx;
+  x = (texture(uT2, x.xy)) + vP2.yzwx;
+  x = (texture(uT2, x.xy)) + vP3.yzwx;
+  x = (texture(uT2, x.xy)) + vP4.yzwx;
+  x = (texture(uT2, x.xy)) + vP5.yzwx;
+  x = (texture(uT2, x.xy)) + vP6.yzwx;
+  x = (texture(uT2, x.xy)) + vP7.yzwx;
+  x = (texture(uT2, x.xy)) + vP0.zwxy;
+  x = (texture(uT2, x.xy)) + vP1.zwxy;
+  x = (texture(uT2, x.xy)) + vP2.zwxy;
+  x = (texture(uT2, x.xy)) + vP3.zwxy;
+  x = (texture(uT2, x.xy)) + vP4.zwxy;
+  x = (texture(uT2, x.xy)) + vP5.zwxy;
+  x = (texture(uT2, x.xy)) + vP6.zwxy;
+  x = (texture(uT2, x.xy)) + vP7.zwxy;
+  o = x;
+}

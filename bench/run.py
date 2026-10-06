@@ -18,18 +18,16 @@ Usage: python run.py [--jobs 16] [--gpus Mali-G57,Mali-G52] [--out ../docs]
 import argparse
 import concurrent.futures as cf
 import csv
-import hashlib
-import json
 import os
-import subprocess
 import sys
-import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from shadergen import build
 from functions import FUNCS, HLSL_EXPR, glsl_type, glsl_expr, hlsl_type, prelude
+from shaderopt import mali
 
-MALIOC_NEW = r"C:\Program Files\Arm\Arm Performance Studio 2026.5\mali_offline_compiler\malioc.exe"
+MALIOC_NEW = mali.MALIOC
 
 PAIRS = [(8, 24), (8, 16), (4, 8)]  # chain lengths (N1, N2), tried in order
 VARIANTS = [  # name, precision, vector size
@@ -43,63 +41,14 @@ ARITH_PIPES = ("arith_fma", "arith_cvt", "arith_sfu", "arithmetic")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, ".cache")
-CACHE_VERSION = 2  # bump when the stored result format changes: older entries get recompiled
-os.makedirs(CACHE, exist_ok=True)
-_tls = threading.local()
 
 
 def list_gpus(malioc):
-    out = subprocess.run([malioc, "--list"], capture_output=True, text=True).stdout
-    gpus, arch = [], None
-    for line in out.splitlines():
-        line = line.strip()
-        if line.endswith("architecture"):
-            arch = line.replace(" architecture", "")
-        elif "(" in line and arch:
-            name, apis = line.split(" (", 1)
-            gpus.append((name, arch, [a.strip() for a in apis.rstrip(")").split(",")]))
-    return gpus
+    return mali.list_cores(malioc)
 
 
 def compile_one(malioc, api, core, src):
-    key = hashlib.sha1(f"{malioc}|{api}|{core}|{src}".encode()).hexdigest()
-    cpath = os.path.join(CACHE, key + ".json")
-    if os.path.exists(cpath):
-        with open(cpath, encoding="utf-8") as f:
-            res = json.load(f)
-        if res.get("v") == CACHE_VERSION:
-            return res
-    if not hasattr(_tls, "fn"):
-        # malioc writes intermediate SPIR-V to %TEMP%\moc-temp, so every
-        # worker thread needs its own TEMP dir to run in parallel.
-        tid = threading.get_ident()
-        _tls.tmp = os.path.join(CACHE, f"tmp_{tid}")
-        os.makedirs(_tls.tmp, exist_ok=True)
-        _tls.fn = os.path.join(_tls.tmp, "shader.frag")
-        _tls.env = dict(os.environ, TEMP=_tls.tmp, TMP=_tls.tmp)
-    with open(_tls.fn, "w") as f:
-        f.write(src)
-    r = subprocess.run([malioc, "--opengles" if api == "gles" else "--vulkan",
-                        "-c", core, "--format", "json", _tls.fn],
-                       capture_output=True, text=True, env=_tls.env)
-    try:
-        j = json.loads(r.stdout)
-        v = j["shaders"][0]["variants"][0]
-        perf = v["performance"]
-        res = {
-            "v": CACHE_VERSION,
-            "ok": True,
-            "cycles": dict(zip(perf["pipelines"], perf["longest_path_cycles"]["cycle_count"])),
-            "short": dict(zip(perf["pipelines"], perf["shortest_path_cycles"]["cycle_count"])),
-            "bound": perf["longest_path_cycles"]["bound_pipelines"],
-            "props": {p["name"]: p["value"] for p in v["properties"]},
-            "driver": j["shaders"][0].get("driver", ""),
-        }
-    except Exception:
-        return {"ok": False, "error": (r.stdout + r.stderr)[-1500:]}  # not cached
-    with open(cpath, "w", encoding="utf-8") as f:
-        json.dump(res, f)
-    return res
+    return mali.compile(src, core, api, malioc=malioc, cache=CACHE)
 
 
 def arith(c):
@@ -111,8 +60,7 @@ def slope(r1, r2, n1, n2, key="cycles"):
     return {p: (b[p] - a[p]) / (n2 - n1) for p in a}
 
 
-def spills(r):
-    return bool(r["props"].get("has_stack_spilling"))
+spills = mali.spills
 
 
 def main():

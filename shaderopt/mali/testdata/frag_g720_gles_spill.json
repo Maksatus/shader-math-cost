@@ -1,0 +1,215 @@
+{
+ "producer": {
+  "build": "922df8",
+  "documentation": "https://developer.arm.com/tools-and-software/graphics-and-gaming/arm-mobile-studio/learn/mali-offline-compiler-documentation",
+  "name": "Mali Offline Compiler",
+  "version": [
+   2026,
+   5,
+   0
+  ]
+ },
+ "schema": {
+  "name": "performance",
+  "version": 2
+ },
+ "shaders": [
+  {
+   "driver": "r56p1-00rel0",
+   "hardware": {
+    "architecture": "Arm 5th Generation",
+    "core": "Immortalis-G720",
+    "pipelines": [
+     {
+      "display_name": "Arithmetic",
+      "name": "arith_total"
+     },
+     {
+      "display_name": "Arith CVT",
+      "name": "arith_cvt"
+     },
+     {
+      "display_name": "Arith FMA",
+      "name": "arith_fma"
+     },
+     {
+      "display_name": "Load/Store",
+      "name": "load_store"
+     },
+     {
+      "display_name": "Arith SFU",
+      "name": "arith_sfu"
+     },
+     {
+      "display_name": "Texture",
+      "name": "texture"
+     },
+     {
+      "display_name": "Varying",
+      "name": "varying"
+     }
+    ],
+    "revision": "r0p0"
+   },
+   "notes": [],
+   "properties": [
+    {
+     "display_name": "Has uniform computation",
+     "name": "has_uniform_computation",
+     "value": false
+    },
+    {
+     "display_name": "Has side-effects",
+     "name": "has_side_effects",
+     "value": false
+    },
+    {
+     "display_name": "Modifies coverage",
+     "name": "modifies_coverage",
+     "value": false
+    },
+    {
+     "display_name": "Uses late ZS test",
+     "name": "uses_late_zs_test",
+     "value": false
+    },
+    {
+     "display_name": "Uses late ZS update",
+     "name": "uses_late_zs_update",
+     "value": false
+    },
+    {
+     "display_name": "Reads color buffer",
+     "name": "reads_color_buffer",
+     "value": false
+    }
+   ],
+   "shader": {
+    "api": "OpenGL ES",
+    "type": "Fragment"
+   },
+   "variants": [
+    {
+     "name": "Main",
+     "performance": {
+      "longest_path_cycles": {
+       "bound_pipelines": [
+        "load_store"
+       ],
+       "cycle_count": [
+        16.0,
+        9.0,
+        0.375,
+        16.0,
+        179.0,
+        1.125,
+        0.0
+       ]
+      },
+      "pipelines": [
+       "arith_total",
+       "arith_fma",
+       "arith_cvt",
+       "arith_sfu",
+       "load_store",
+       "varying",
+       "texture"
+      ],
+      "shortest_path_cycles": {
+       "bound_pipelines": [
+        "load_store"
+       ],
+       "cycle_count": [
+        16.0,
+        9.0,
+        0.375,
+        16.0,
+        179.0,
+        1.125,
+        0.0
+       ]
+      },
+      "total_cycles": {
+       "bound_pipelines": [
+        "arith_total",
+        "arith_sfu"
+       ],
+       "cycle_count": [
+        16.0,
+        9.0,
+        0.375,
+        16.0,
+        11.199999809265137,
+        1.125,
+        0.0
+       ]
+      }
+     },
+     "properties": [
+      {
+       "display_name": "Work Registers Used",
+       "name": "work_registers_used",
+       "value": 64
+      },
+      {
+       "display_name": "Thread Occupancy",
+       "name": "thread_occupancy",
+       "value": 50
+      },
+      {
+       "display_name": "Uniform Registers Used",
+       "name": "uniform_registers_used",
+       "value": 32
+      },
+      {
+       "display_name": "Stack Size",
+       "name": "stack_size",
+       "value": 352
+      },
+      {
+       "display_name": "Has Stack Spilling",
+       "name": "has_stack_spilling",
+       "value": true
+      },
+      {
+       "display_name": "Stack Spill Size (bytes)",
+       "name": "stack_spill_bytes",
+       "value": 352
+      },
+      {
+       "display_name": "Stack Alloca Size (bytes)",
+       "name": "stack_alloca_bytes",
+       "value": 0
+      },
+      {
+       "display_name": "Stack Usage (bytes)",
+       "name": "stack_usage",
+       "value": 948
+      },
+      {
+       "display_name": "Stack Alloca Usage (bytes)",
+       "name": "stack_alloca_usage",
+       "value": 0
+      },
+      {
+       "display_name": "Stack Spill Usage (bytes)",
+       "name": "stack_spill_usage",
+       "value": 948
+      },
+      {
+       "display_name": "16-bit Arithmetic",
+       "name": "fp16_arithmetic",
+       "value": 0
+      },
+      {
+       "display_name": "16-bit Arithmetic Idle Lanes",
+       "name": "fp16_idle_lanes",
+       "value": -1
+      }
+     ]
+    }
+   ],
+   "warnings": []
+  }
+ ]
+}

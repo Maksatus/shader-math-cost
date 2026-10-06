@@ -1,0 +1,341 @@
+{
+ "core": "Mali-G78",
+ "api": "gles",
+ "malioc": "2026.5.0",
+ "table": "docs/mali_math_cost.csv",
+ "order_fragment": [
+  "sin4_x16.frag",
+  "mad4_x64.frag",
+  "div_x48.frag",
+  "tex_x24.frag",
+  "acos_x8.frag",
+  "sin_x16.frag",
+  "sqrt_x16.frag",
+  "mad4h_x64.frag",
+  "branch_sin16.frag",
+  "sin_x4.frag",
+  "clean.frag"
+ ],
+ "shaders": {
+  "sin_x4.frag": {
+   "what": "4 x sin (float), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 1.0,
+      "cvt": 0.09375,
+      "sfu": 1.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 4 x table[sin, float] (fma 0.21875, cvt 0.0, sfu 0.25, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 1.0
+  },
+  "sin_x16.frag": {
+   "what": "16 x sin (float), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 4.0,
+      "cvt": 0.09375,
+      "sfu": 4.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 16 x table[sin, float] (fma 0.21875, cvt 0.0, sfu 0.25, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 4.0
+  },
+  "sin4_x16.frag": {
+   "what": "16 x sin (float4), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 16.0,
+      "cvt": 0.0,
+      "sfu": 16.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 16 x table[sin, float4] (fma 0.875, cvt 0.0, sfu 1.0, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 16.0
+  },
+  "acos_x8.frag": {
+   "what": "8 x acos (float), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 3.25,
+      "cvt": 0.09375,
+      "sfu": 5.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 8 x table[acos, float] (fma 0.375, cvt 0.0, sfu 0.625, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 5.0
+  },
+  "div_x48.frag": {
+   "what": "48 x div (float), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 1.5,
+      "cvt": 0.09375,
+      "sfu": 6.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 48 x table[div, float] (fma 0.0, cvt 0.0, sfu 0.125, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 6.0
+  },
+  "sqrt_x16.frag": {
+   "what": "16 x sqrt (float), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 0.5,
+      "cvt": 0.09375,
+      "sfu": 4.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 16 x table[sqrt, float] (fma 0.0, cvt 0.0, sfu 0.25, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 4.0
+  },
+  "tex_x24.frag": {
+   "what": "24 x tex2D (float), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 3.0,
+      "cvt": 0.0625,
+      "sfu": 0.0,
+      "t": 6.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 24 x table[tex2D, float] (fma 0.0, cvt 0.0, sfu 0.0, t 0.25)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 6.0
+  },
+  "mad4_x64.frag": {
+   "what": "64 x mad (float4), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 8.0,
+      "cvt": 0.25024,
+      "sfu": 0.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 64 x table[mad, float4] (fma 0.125, cvt 0.00391, sfu 0.0, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 8.0
+  },
+  "mad4h_x64.frag": {
+   "what": "64 x mad (half4), chain from shadergen.py",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 4.0,
+      "cvt": 0.37504,
+      "sfu": 0.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "baseline chain + 64 x table[mad, half4] (fma 0.0625, cvt 0.00586, sfu 0.0, t 0.0)"
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 4.0
+  },
+  "branch_sin16.frag": {
+   "what": "sin_x16 inside if (vX.y > 0.5)",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "cycles": {
+      "fma": 4.0,
+      "cvt": 0.09375,
+      "sfu": 4.0,
+      "t": 0.0
+     },
+     "tol": 0.1,
+     "from": "same as sin_x16"
+    },
+    {
+     "variant": "main",
+     "path": "shortest",
+     "max_bound_cycles": 0.59375,
+     "from": "empty shader + 0.5 cycle for the branch"
+    }
+   ],
+   "expected_bound_cycles": 4.0
+  },
+  "spill_32xvec4.frag": {
+   "what": "32 vec4 sin values alive at once",
+   "checks": [
+    {
+     "variant": "main",
+     "spilling": true
+    },
+    {
+     "variant": "main",
+     "bound": [
+      "ls"
+     ]
+    }
+   ]
+  },
+  "loop_dynamic.frag": {
+   "what": "sin in a loop with a uniform trip count",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "na": true
+    },
+    {
+     "variant": "main",
+     "path": "total",
+     "na": false
+    }
+   ]
+  },
+  "clean.frag": {
+   "what": "texture * uniform color, mediump",
+   "checks": [
+    {
+     "variant": "main",
+     "path": "longest",
+     "max_bound_cycles": 0.5
+    },
+    {
+     "variant": "main",
+     "spilling": false
+    }
+   ],
+   "expected_bound_cycles": 0.25
+  },
+  "basic.vert": {
+   "what": "MVP transform, pass-through varyings",
+   "checks": []
+  },
+  "wave_pos.vert": {
+   "what": "8 sin on the position",
+   "checks": [
+    {
+     "greater": [
+      "wave_pos.vert",
+      "position",
+      "sfu"
+     ],
+     "than": [
+      "basic.vert",
+      "position",
+      "sfu"
+     ],
+     "by": 1.8
+    }
+   ]
+  },
+  "sin_varying.vert": {
+   "what": "8 vec4 sin on a varying, position as basic.vert",
+   "checks": [
+    {
+     "greater": [
+      "sin_varying.vert",
+      "varying",
+      "sfu"
+     ],
+     "than": [
+      "sin_varying.vert",
+      "position",
+      "sfu"
+     ],
+     "by": 7.2
+    },
+    {
+     "equal": [
+      "sin_varying.vert",
+      "position",
+      "bound_cycles"
+     ],
+     "to": [
+      "basic.vert",
+      "position",
+      "bound_cycles"
+     ],
+     "tol": 0.1
+    }
+   ]
+  }
+ }
+}
