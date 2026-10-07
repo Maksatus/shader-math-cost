@@ -18,6 +18,7 @@ import json
 import os
 
 from shaderopt import mali
+from shaderopt import progress
 from shaderopt.profile.score import add_cycles
 
 PIPES = ("arith", "fma", "cvt", "sfu", "ls", "v", "t")
@@ -92,8 +93,16 @@ def run(folder, cores=("Mali-G78",), api="gles", out=None, jobs=None):
     out = out or folder
     shaders = find_shaders(folder)
     tasks = [(s, core) for s in shaders for core in cores]
+    progress.phase("measure", len(tasks))
+    tick = progress.counter(len(tasks))
+
+    def job(t):
+        r = measure_one(t[0][0], t[1], api)
+        tick()
+        return r
+
     with cf.ThreadPoolExecutor(jobs or os.cpu_count()) as ex:
-        results = list(ex.map(lambda t: measure_one(t[0][0], t[1], api), tasks))
+        results = list(ex.map(job, tasks))
 
     records, failures = [], []
     os.makedirs(out, exist_ok=True)

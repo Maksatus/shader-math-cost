@@ -8,12 +8,14 @@
   python -m shaderopt cost <frame folder> [--project <Unity>] [--cores preset:mobile]
                            [--main-core Mali-G78] [--api vulkan|gles] [--variants DIR] [--no-compile]
                            [--recompile] [--retry-failed] [--loop-iters 2] [--loop-iters-shader NAME=N ...] [--materials]
+  python -m shaderopt ui [--port 8765] [--no-window]   local web UI: the function cost site, runs with progress, reports
 """
 import argparse
 import os
 import sys
 
 from shaderopt import mali
+from shaderopt import progress
 from shaderopt.profile import cores as core_presets
 from shaderopt.profile import measure, report
 
@@ -150,6 +152,7 @@ def cmd_cost(args):
     if args.materials:
         if not project or not os.path.isdir(project):
             sys.exit(f"--materials needs the Unity project (--project), got {project}")
+        progress.phase("materials")
         mat_keys, mat_skipped = project_variants(project, events, args, root)
     try:
         state = variants.run(events + (shaders.pseudo_events(mat_keys) if mat_keys else []), project, root, cores,
@@ -158,6 +161,7 @@ def cmd_cost(args):
     except variants.VariantsError as e:
         sys.exit(f"variants failed: {e}")
     state["loops"] = loops.for_frame(state, root, cores, args.jobs)
+    progress.phase("report")
     c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
                            loop_iters=args.loop_iters, loop_overrides=overrides)
     c["variants_checked"] = state["checked"]
@@ -249,6 +253,7 @@ def cmd_export(args):
     cores = parse_cores(args) if args.measure else None
     out = args.out or os.path.join(REAL, os.path.basename(os.path.abspath(args.project)))
     try:
+        progress.phase("unity_export")
         res = export.export(args.project, args.shaders, out, args.platforms.split(","), args.mode, args.timeout)
     except export.ExportError as e:
         sys.exit(f"export failed: {e}")
@@ -291,11 +296,12 @@ def add_core_args(p):
     p.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
 
 
-def main(argv=None):
-    # names of shaders and objects may have characters the console code page cannot print (cp1251 into a pipe)
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
+def cmd_ui(args):
+    from shaderopt.ui import server
+    return server.serve(args.port, open_window=not args.no_window)
+
+
+def build_parser():
     ap = argparse.ArgumentParser(prog="shaderopt")
     sub = ap.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("measure", help="measure every .vert / .frag (GLSL) and .vert.spv / .frag.spv "
@@ -373,7 +379,21 @@ def main(argv=None):
     c.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
     c.add_argument("--out", help="output folder (default: the snapshot folder)")
     c.set_defaults(func=cmd_cost)
-    args = ap.parse_args(argv)
+
+    u = sub.add_parser("ui", help="local web UI (127.0.0.1): the function cost site, the commands with their "
+                                  "progress, the reports of the snapshots")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--no-window", action="store_true", help="do not open the window (Edge app mode or the browser)")
+    u.set_defaults(func=cmd_ui)
+    return ap
+
+
+def main(argv=None):
+    # names of shaders and objects may have characters the console code page cannot print (cp1251 into a pipe)
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 

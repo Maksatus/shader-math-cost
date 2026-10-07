@@ -20,6 +20,7 @@ import re
 import struct
 
 from shaderopt import mali
+from shaderopt import progress as progress_ui
 from shaderopt.profile import score as heavy
 
 NS = (0, 1, 2)  # measured trip counts
@@ -255,18 +256,23 @@ def for_frame(state, root, cores, jobs=None, progress=print):
            if any(r.get("ok", True) and heavy.combined(r)["longest"] is None
                   for r in state["measurements"].get(fn, {}).values())]
     if not dyn:
+        progress_ui.skip("loops")
         return {}
     progress(f"pricing dynamic loops of {len(dyn)} files at n = {', '.join(map(str, NS))} ...")
+    progress_ui.phase("loops", len(dyn) * len(cores))
     forced = {}
     for fn in dyn:
         src = mali.read_source(os.path.join(root, fn))
         forced[fn] = [force(src, n) for n in NS]
     tasks = [(fn, c) for fn in dyn for c in cores]
+    tick = progress_ui.counter(len(tasks))
 
     def job(t):
         fn, core = t
         api = "vulkan" if fn.endswith(mali.SPIRV_EXT) else "gles"
-        return parametric(forced[fn], api, mali.stage_of(fn), core)
+        r = parametric(forced[fn], api, mali.stage_of(fn), core)
+        tick()
+        return r
 
     with cf.ThreadPoolExecutor(jobs or os.cpu_count()) as ex:
         res = list(ex.map(job, tasks))

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from shadergen import build
 from functions import FUNCS, HLSL_EXPR, glsl_type, glsl_expr, hlsl_type, prelude
 from shaderopt import mali
+from shaderopt import progress
 
 MALIOC_NEW = mali.MALIOC
 MALIOC_VERSION = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"
@@ -105,12 +106,15 @@ def main():
     def compile_all(keys):
         keys = [k for k in dict.fromkeys(keys) if k not in results]
         print(f"  compiling {len(keys)} shaders", flush=True)
+        progress.phase("bench_compile", len(keys))
+        tick = progress.counter(len(keys))
         done = 0
         with cf.ThreadPoolExecutor(args.jobs) as ex:
             futs = {ex.submit(compile_one, *k): k for k in keys}
             for fut in cf.as_completed(futs):
                 results[futs[fut]] = fut.result()
                 done += 1
+                tick()
                 if done % 5000 == 0:
                     print(f"  {done}/{len(keys)}", flush=True)
 

@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shaderopt</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #667080; --line: #e3e6ea;
+  --accent: #2f6fde; --chip: #eef1f5; --hover: #f0f4fb;
+  --cheap: #1f9d55; --medium: #c98a00; --heavy: #d0402b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
+    --accent: #6a9cff; --chip: #232932; --hover: #20262f;
+    --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
+  --accent: #6a9cff; --chip: #232932; --hover: #20262f;
+  --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.top { display: flex; align-items: center; gap: 18px; padding: 8px 16px; background: var(--panel);
+  border-bottom: 1px solid var(--line); flex: none; }
+.brand { font-weight: 700; white-space: nowrap; }
+.brand span { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+nav { display: flex; gap: 4px; overflow-x: auto; }
+nav button { border: 0; background: transparent; color: var(--muted); padding: 7px 12px; border-radius: 8px;
+  font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+nav button:hover { background: var(--hover); color: var(--text); }
+nav button.on { background: var(--chip); color: var(--text); }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 999px; margin-left: 6px;
+  vertical-align: 1px; }
+.pill.run { color: #fff; background: var(--accent); }
+.pill.ok { color: var(--cheap); background: color-mix(in srgb, var(--cheap) 15%, transparent); }
+.pill.bad { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 15%, transparent); }
+section { display: none; flex: 1; min-height: 0; }
+section.on { display: flex; flex-direction: column; }
+iframe { border: 0; width: 100%; flex: 1; background: var(--bg); }
+.page { overflow: auto; flex: 1; padding: 16px; }
+.cols { display: grid; grid-template-columns: minmax(380px, 560px) minmax(0, 1fr); gap: 16px; align-items: start;
+  max-width: 1700px; margin: 0 auto; }
+@media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.card h2 { font-size: 16px; margin: 0 0 4px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.preset { text-align: left; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 10px;
+  padding: 9px 11px; cursor: pointer; font: inherit; }
+.preset b { display: block; font-size: 13px; }
+.preset span { display: block; font-size: 11px; color: var(--muted); line-height: 1.3; margin-top: 2px; }
+.preset:hover { background: var(--hover); }
+.preset.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.preset.main { grid-column: 1 / -1; }
+.field { margin: 10px 0; }
+.field > label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 3px; }
+.field > label code { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 6px; }
+.field .help { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.field.check label { display: flex; gap: 8px; align-items: baseline; font-weight: 600; }
+input[type=text], select, textarea { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 9px; font: inherit; }
+textarea { min-height: 60px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+.row { display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; font: inherit; white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 8px 18px; }
+.btn.primary:disabled { opacity: .5; cursor: default; }
+.btn.danger { color: var(--heavy); }
+.btn.sm { padding: 2px 8px; font-size: 12px; }
+details.more { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 8px; }
+details.more summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.status { font-size: 12px; margin-top: 4px; }
+.status.ok { color: var(--cheap); } .status.bad { color: var(--heavy); } .status.wait { color: var(--muted); }
+.err { color: var(--heavy); margin-top: 8px; white-space: pre-wrap; }
+/* run panel */
+.jobhead { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.jobhead h2 { margin: 0; }
+.big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpis { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.kpi { background: var(--chip); border-radius: 8px; padding: 6px 12px; min-width: 120px; }
+.kpi .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpi .k { font-size: 11px; color: var(--muted); }
+.bar { height: 8px; background: var(--chip); border-radius: 4px; overflow: hidden; position: relative; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 4px; transition: width .4s; }
+.bar.indet i { width: 30% !important; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { left: -30%; } 100% { left: 100%; } }
+.bar.ok i { background: var(--cheap); } .bar.bad i { background: var(--heavy); }
+.step { margin-top: 14px; }
+.step > .t { font-weight: 700; display: flex; gap: 8px; align-items: baseline; }
+.step > .t .muted { font-weight: 400; font-size: 12px; }
+.phase { display: grid; grid-template-columns: 22px minmax(150px, 260px) 1fr; gap: 4px 10px; align-items: center;
+  padding: 5px 0; border-bottom: 1px dashed var(--line); }
+.phase:last-child { border-bottom: 0; }
+.phase .ic { text-align: center; font-weight: 700; }
+.phase .info { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.phase.pending, .phase.cancelled { opacity: .6; }
+.phase.skipped .nm { text-decoration: line-through; color: var(--muted); }
+.ic.done { color: var(--cheap); } .ic.failed, .ic.stopped { color: var(--heavy); } .ic.running { color: var(--accent); }
+.spin { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--accent); border-right-color: transparent;
+  border-radius: 50%; animation: rot .8s linear infinite; vertical-align: -1px; }
+@keyframes rot { to { transform: rotate(360deg); } }
+pre.log { background: var(--chip); border-radius: 8px; padding: 10px 12px; max-height: 360px; overflow: auto; margin: 8px 0 0;
+  font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+pre.log .cmd { color: var(--accent); } pre.log .fail { color: var(--heavy); } pre.log .arrow { color: var(--cheap); }
+.hist { width: 100%; border-collapse: collapse; }
+.hist td, .hist th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
+.hist tr.click { cursor: pointer; } .hist tr.click:hover td { background: var(--hover); }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.badge.ok { color: var(--cheap); background: color-mix(in srgb, var(--cheap) 14%, transparent); }
+.badge.failed, .badge.stopped { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 14%, transparent); }
+.badge.running { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.badge.none { color: var(--muted); background: var(--chip); }
+/* reports */
+table.rep { width: 100%; border-collapse: collapse; }
+table.rep th, table.rep td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.rep th { font-size: 12px; color: var(--muted); font-weight: 600; }
+table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.split { display: inline-flex; height: 8px; width: 120px; border-radius: 4px; overflow: hidden; background: var(--chip); vertical-align: middle; }
+.split i { display: block; height: 100%; }
+.viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.viewer .bar2 { display: flex; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">Shader Math Cost<span>локально</span></div>
+  <nav id="tabs">
+    <button data-tab="site">Цена функций</button>
+    <button data-tab="run">Тест проекта<span id="tabPill"></span></button>
+    <button data-tab="reports">Отчёты</button>
+  </nav>
+</div>
+
+<section id="tab-site"><iframe id="siteFrame" title="Цена функций"></iframe></section>
+
+<section id="tab-run"><div class="page"><div class="cols">
+  <div>
+    <div class="card">
+      <div class="presets" id="presets"></div>
+      <h2 id="formTitle"></h2>
+      <div class="muted small" id="formDesc"></div>
+      <form id="form" autocomplete="off"></form>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="runBtn">Запустить</button>
+        <span class="muted small" id="runHint"></span>
+      </div>
+      <div class="err" id="formErr"></div>
+    </div>
+  </div>
+  <div>
+    <div class="card" id="jobCard"><div class="empty">Выберите действие слева и нажмите «Запустить» — здесь будет прогресс каждого шага, сколько осталось и лог.</div></div>
+    <div class="card">
+      <h2>Прошлые запуски</h2>
+      <table class="hist" id="hist"></table>
+    </div>
+  </div>
+</div></div></section>
+
+<section id="tab-reports">
+  <div class="page" id="repList"></div>
+  <div class="viewer" id="repView" style="display:none">
+    <div class="bar2">
+      <button class="btn" id="repBack">← К списку</button>
+      <b id="repName"></b>
+      <span style="flex:1"></span>
+      <button class="btn" id="repRecalc">Пересчитать</button>
+      <button class="btn" id="repFolder">Открыть папку</button>
+      <a class="btn" id="repOpen" target="_blank">В браузере</a>
+    </div>
+    <iframe id="repFrame" title="Отчёт"></iframe>
+  </div>
+</section>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", body: JSON.stringify(body),
+    headers: {"Content-Type": "application/json", "X-Shaderopt": "1"}});
+  const d = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+  if (!r.ok && !d.error) d.error = `HTTP ${r.status}`;
+  return d;
+};
+const store = {get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+               set(k, v) { try { localStorage.setItem(k, v); } catch {} }};
+
+function dur(s) {
+  if (s == null) return "—";
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return `${s} с`;
+  if (s < 3600) return `${Math.floor(s / 60)} мин ${String(s % 60).padStart(2, "0")} с`;
+  return `${Math.floor(s / 3600)} ч ${String(Math.floor(s / 60) % 60).padStart(2, "0")} мин`;
+}
+const approx = s => s == null ? "?" : s < 5 ? "несколько секунд" : "≈ " + dur(s);
+const when = t => new Date(t * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+
+const PRESET_TEXT = {
+  frame_cost: ["Снять кадр и посчитать", "Снимок кадра из открытого Unity (Frame Debugger), затем цена каждого события на Mali и отчёт"],
+  frame: ["Только снимок кадра", "Frame Debugger → frame_events.json, посчитать можно позже"],
+  cost: ["Посчитать снимок", "Цена готового снимка: компиляция вариантов, malioc, отчёт"],
+  export: ["Экспорт шейдеров", "Шейдеры проекта → GLSL / SPIR-V по вариантам"],
+  measure: ["Замер папки", "malioc по всем шейдерам папки → report.csv"],
+  report: ["Пересобрать report.csv", "Из готовых measurements.jsonl"],
+  site: ["Обновить данные сайта", "Все функции на всех Mali (долго) и docs/data.js для вкладки «Цена функций»"],
+};
+const STEP_TEXT = {frame: "Снимок кадра", cost: "Цена кадра", export: "Экспорт шейдеров", measure: "Замер malioc",
+  report: "report.csv", bench_run: "Замер функций (bench/run.py)", bench_site: "Сборка сайта (build_site.py)"};
+const PHASE_TEXT = {
+  rd_capture: ["RenderDoc: захват кадра"], snapshot: ["Frame Debugger: события кадра", "событий"],
+  rd_counters: ["RenderDoc: счётчики пикселей"], materials: ["Материалы проекта"],
+  fingerprints: ["Проверка изменений шейдеров"], compile: ["Компиляция вариантов в Unity", "вариантов"],
+  measure: ["Замеры malioc", "замеров"], loops: ["Динамические циклы (malioc)", "замеров"],
+  report: ["Расчёт и отчёт"], unity_export: ["Компиляция шейдеров в Unity"],
+  bench_compile: ["Компиляция и замеры malioc", "шейдеров"], run: ["Выполнение"],
+};
+const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
+  "the editor does not answer": "редактор не отвечает"};
+const LABEL = {
+  project: "Unity-проект", renderdoc: "RenderDoc: точные пиксели", frame: "Снимок", variants: "Папка вариантов",
+  cores: "Ядра", core: "Одно ядро", main_core: "Основное ядро", api: "API цен", materials: "Все материалы проекта",
+  shaders: "Шейдеры (по одному в строке)", platforms: "Платформы", measure: "Сразу замерить malioc", folder: "Папка",
+  gpus: "GPU через запятую (пусто = все)", jobs: "Потоков malioc", timeout: "Таймаут, с", max_events: "Не больше событий",
+  out: "Папка результата", no_compile: "Не компилировать", recompile: "Скомпилировать всё заново",
+  retry_failed: "Повторить упавшие варианты", loop_iters: "Итераций динамических циклов",
+  loop_iters_shader: "Итерации по шейдерам (NAME=N в строке)", vulkan_only: "Только Vulkan", fp16_threshold: "Порог fp16, %",
+  no_report: "Без report.csv", mode: "Как запускать Unity",
+};
+const PRIMARY = {frame: ["project", "renderdoc"], cost: ["frame", "project", "variants", "cores", "main_core", "api", "materials"],
+  export: ["project", "shaders", "platforms", "measure", "cores"], measure: ["folder", "cores", "api"], report: ["folder"],
+  bench_run: ["gpus"], bench_site: []};
+
+let SCHEMA, PRESETS, OPT, preset = store.get("preset") || "frame_cost";
+
+/* ---------- tabs ---------- */
+function tab(name) {
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === "tab-" + name));
+  if (name === "site" && !$("#siteFrame").src) $("#siteFrame").src = "/site/index.html";
+  if (name === "reports") loadReports();
+  store.set("tab", name);
+}
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
+
+/* ---------- form ---------- */
+function fieldsOf(p) {
+  const seen = new Set(), out = [];
+  for (const st of p.steps) {
+    for (const a of SCHEMA[st.cmd].args) {
+      if ((st.hide || []).includes(a.dest) || seen.has(a.dest)) continue;
+      seen.add(a.dest);
+      out.push({...a, cmd: st.cmd, primary: PRIMARY[st.cmd].includes(a.dest)});
+    }
+  }
+  return out;
+}
+
+function listId(a) {
+  if (a.dest === "project") return "dl-projects";
+  if (a.dest === "variants") return "dl-variants";
+  if (a.dest === "cores" || a.dest === "core" || a.dest === "main_core") return "dl-cores";
+  if (a.dest === "folder") return a.cmd === "report" ? "dl-measured" : "dl-folders";
+  return null;
+}
+
+function widget(a, v) {
+  const id = "f-" + a.dest, ph = a.default != null && a.default !== "" && a.default !== false ? `по умолчанию: ${a.default}` : "";
+  if (a.kind === "flag")
+    return `<div class="field check"><label><input type="checkbox" id="${id}" ${v ? "checked" : ""}> ${esc(LABEL[a.dest] || a.flag)}<code>${esc(a.flag)}</code></label><div class="help">${esc(a.help)}</div></div>`;
+  let ctl;
+  if (a.dest === "frame" && a.cmd === "cost") {
+    ctl = `<select id="${id}"><option value="">— выберите снимок —</option>` + OPT.snapshots.map(s =>
+      `<option value="${esc(s.path)}" ${s.path === v ? "selected" : ""}>${esc(s.name)}${s.project ? " · " + esc(s.project) : ""}</option>`).join("") + `</select>`;
+  } else if (a.choices) {
+    ctl = `<select id="${id}"><option value="">по умолчанию${a.default != null ? " (" + esc(a.default) + ")" : ""}</option>` +
+      a.choices.map(c => `<option ${String(c) === String(v) ? "selected" : ""}>${esc(c)}</option>`).join("") + `</select>`;
+  } else if (a.multi || a.kind === "list") {
+    ctl = `<textarea id="${id}" placeholder="${esc(ph)}">${esc((v || []).join("\n"))}</textarea>`;
+  } else {
+    const l = listId(a);
+    ctl = `<input type="text" id="${id}" value="${esc(v ?? "")}" placeholder="${esc(ph)}" ${l ? `list="${l}"` : ""}>`;
+  }
+  const extra = a.dest === "project" ? `<div class="status wait" id="edStatus"></div>` : "";
+  return `<div class="field"><label for="${id}">${esc(LABEL[a.dest] || a.flag || a.dest)}${a.flag ? `<code>${esc(a.flag)}</code>` : ""}</label>${ctl}<div class="help">${esc(a.help)}</div>${extra}</div>`;
+}
+
+function renderPresets() {
+  $("#presets").innerHTML = PRESETS.map(p => `<button class="preset ${p.id === preset ? "on" : ""} ${p.id === "frame_cost" ? "main" : ""}" data-p="${p.id}">
+    <b>${esc(PRESET_TEXT[p.id][0])}</b><span>${esc(PRESET_TEXT[p.id][1])}</span></button>`).join("");
+  document.querySelectorAll(".preset").forEach(b => b.onclick = () => { preset = b.dataset.p; store.set("preset", preset); renderPresets(); renderForm(); });
+}
+
+function renderForm(prefill) {
+  const p = PRESETS.find(x => x.id === preset);
+  const last = {...(OPT.last[preset] || {}), ...(prefill || {})};
+  $("#formTitle").textContent = PRESET_TEXT[preset][0];
+  $("#formDesc").textContent = p.steps.map(s => STEP_TEXT[s.cmd]).join(" → ");
+  const fs = fieldsOf(p);
+  const main = fs.filter(a => a.primary), more = fs.filter(a => !a.primary);
+  $("#form").innerHTML = main.map(a => widget(a, last[a.dest])).join("") +
+    (more.length ? `<details class="more"><summary>Ещё параметры (${more.length})</summary>${more.map(a => widget(a, last[a.dest])).join("")}</details>` : "");
+  $("#formErr").textContent = "";
+  const proj = $("#f-project");
+  if (proj) {
+    proj.addEventListener("change", () => { autoVariants(); checkEditor(); });
+    if (proj.value) checkEditor();
+  }
+  const fr = $("#f-frame");
+  if (fr && fr.tagName === "SELECT") fr.addEventListener("change", () => {
+    const s = OPT.snapshots.find(x => x.path === fr.value);
+    if (s && s.project && proj && !proj.value) { proj.value = s.project; checkEditor(); }
+    autoVariants();
+  });
+  autoVariants();
+}
+
+function autoVariants() {
+  // a project's snapshots share one variants folder: compiled once, priced in every frame
+  const v = $("#f-variants");
+  if (!v || (v.value && !v.dataset.auto)) return;
+  const proj = ($("#f-project") || {}).value || (OPT.snapshots.find(s => s.path === ($("#f-frame") || {}).value) || {}).project;
+  if (!proj) return;
+  const name = proj.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  v.value = OPT.out + "\\variants_" + name;
+  v.dataset.auto = "1";
+  v.addEventListener("input", () => delete v.dataset.auto, {once: true});
+}
+
+let edSeq = 0;
+async function checkEditor() {
+  const el = $("#edStatus"), v = ($("#f-project") || {}).value;
+  if (!el) return;
+  if (!v) { el.textContent = ""; return; }
+  const seq = ++edSeq;
+  el.className = "status wait"; el.textContent = "проверяю редактор…";
+  const s = await api("/api/editor?project=" + encodeURIComponent(v));
+  if (seq !== edSeq) return;
+  if (!s.project) { el.className = "status bad"; el.textContent = "здесь нет Unity-проекта (ProjectSettings/ProjectVersion.txt)"; }
+  else if (s.ready) { el.className = "status ok"; el.textContent = `✓ Unity ${s.version || ""} открыт и отвечает`; }
+  else if (!s.open) { el.className = "status bad"; el.textContent = `проект не открыт в Unity ${s.version || ""}: снимок и компиляция вариантов требуют открытый редактор`; }
+  else if (!s.cli) { el.className = "status bad"; el.textContent = "нет Unity CLI (команда unity не найдена)"; }
+  else { el.className = "status bad"; el.textContent = "редактор открыт, но занят (компиляция, импорт) или не отвечает Unity CLI"; }
+}
+
+function values() {
+  const p = PRESETS.find(x => x.id === preset), out = {};
+  for (const a of fieldsOf(p)) {
+    const el = $("#f-" + a.dest);
+    if (!el) continue;
+    if (a.kind === "flag") { if (el.checked) out[a.dest] = true; continue; }
+    if (a.multi || a.kind === "list") {
+      const lines = el.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (lines.length) out[a.dest] = lines;
+      continue;
+    }
+    if (el.value.trim() !== "") out[a.dest] = el.value.trim();
+  }
+  return out;
+}
+
+$("#runBtn").onclick = async () => {
+  $("#formErr").textContent = "";
+  const r = await api("/api/run", {preset, values: values()});
+  if (r.error) { $("#formErr").textContent = r.error; return; }
+  OPT = await api("/api/options");
+  viewId = null; job = null; logNext = 0; logEl = null;
+  poll();
+};
+
+function datalists() {
+  const dl = (id, xs) => `<datalist id="${id}">${xs.map(x => `<option value="${esc(x)}">`).join("")}</datalist>`;
+  let d = document.getElementById("dls");
+  if (!d) { d = document.createElement("div"); d.id = "dls"; document.body.appendChild(d); }
+  d.innerHTML = dl("dl-projects", OPT.projects) + dl("dl-variants", OPT.variants) + dl("dl-cores", OPT.cores) +
+    dl("dl-folders", OPT.folders) + dl("dl-measured", OPT.measured);
+}
+
+/* ---------- run panel ---------- */
+let viewId = null, logNext = 0, logEl = null, job = null, timer = null;
+
+function phaseRow(s, p, now) {
+  const [name, unit] = PHASE_TEXT[p.id] || [p.id];
+  const ic = {done: "✓", running: '<span class="spin"></span>', pending: "○", skipped: "–", failed: "✕", stopped: "■", cancelled: "·"}[p.status] || "?";
+  let info = "", bar = "";
+  const note = p.note ? (NOTE_TEXT[p.note] || p.note) : "";
+  if (p.status === "running") {
+    const el = p.elapsed ?? (now - p.started);
+    if (p.total) {
+      const pct = 100 * (p.done || 0) / p.total;
+      const rate = p.done && el > 1 ? p.done / el : null;
+      bar = `<div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>`;
+      info = `${p.done || 0} / ${p.total} ${unit || ""} · ${pct.toFixed(0)}%` +
+        (rate ? ` · ${rate >= 1 ? rate.toFixed(rate >= 10 ? 0 : 1) + "/с" : (rate * 60).toFixed(1) + "/мин"}` : "") +
+        ` · идёт ${dur(el)}` + (p.eta != null ? ` · осталось ${approx(p.eta)}` : "");
+    } else {
+      bar = `<div class="bar indet"><i></i></div>`;
+      info = `идёт ${dur(el)}` + (p.typical ? (el > p.typical * 1.2 ? ` · дольше обычного (обычно ${approx(p.typical)})` : ` · обычно ${approx(p.typical)}, осталось ${approx(p.eta)}`) : " · без оценки: первый запуск");
+    }
+    if (note) info += ` · ${note}`;
+  } else if (p.status === "done") {
+    info = (p.total ? `${p.done ?? p.total} ${unit || ""} · ` : "") + dur(p.seconds);
+  } else if (p.status === "pending") {
+    info = p.typical != null ? `впереди · обычно ${approx(p.typical)}` : "впереди";
+  } else if (p.status === "skipped") {
+    info = "не понадобилось" + (note ? `: ${note}` : "");
+  } else if (p.status === "failed") info = "ошибка — см. лог";
+  else if (p.status === "stopped") info = "остановлено";
+  else if (p.status === "cancelled") info = "не выполнялось";
+  return `<div class="phase ${p.status}"><div class="ic ${p.status}">${ic}</div><div class="nm">${esc(name)}</div>
+    <div>${bar}<div class="info">${esc(info)}</div></div></div>`;
+}
+
+function overall(j, now) {
+  const el = (j.finished || now) - j.started;
+  if (j.status !== "running") return {el, pct: 100};
+  let pct = null;
+  if (j.eta != null && !j.eta_partial && el + j.eta > 0) pct = 100 * el / (el + j.eta);
+  else {  // by phases: done ones count fully, the running one by its count
+    let n = 0, d = 0;
+    for (const s of j.steps) for (const p of s.phases) {
+      n++;
+      if (["done", "skipped"].includes(p.status)) d++;
+      else if (p.status === "running" && p.total) d += (p.done || 0) / p.total;
+    }
+    pct = n ? 100 * d / n : 0;
+  }
+  return {el, pct};
+}
+
+function renderJob(j) {
+  const now = j.now || Date.now() / 1000;
+  const {el, pct} = overall(j, now);
+  const st = {running: "идёт", ok: "готово", failed: "ошибка", stopped: "остановлено"}[j.status];
+  const etaTxt = j.status === "running" ? (j.eta_partial ? (j.eta ? `не меньше ${dur(j.eta)}` : "оценка после первого запуска") : approx(j.eta)) : "—";
+  const head = `<div class="jobhead"><h2>${esc((PRESET_TEXT[j.preset] || [j.preset])[0])}</h2>
+      <span class="badge ${j.status}">${st}</span><span class="muted small">запущено ${when(j.started)}</span>
+      <span style="flex:1"></span>
+      ${j.status === "running" ? `<button class="btn danger" id="stopBtn">Остановить</button>` : ""}
+      ${j.report ? `<button class="btn primary" id="openRep">Открыть отчёт</button>` : ""}
+      ${(j.report_path || j.frame_dir) && j.status !== "running" ? `<button class="btn" id="jobFolder">Папка</button>` : ""}</div>
+    <div class="kpis">
+      <div class="kpi"><div class="v">${j.status === "running" ? pct.toFixed(0) + "%" : st}</div><div class="k">готовность</div></div>
+      <div class="kpi"><div class="v">${dur(el)}</div><div class="k">${j.status === "running" ? "прошло" : "заняло"}</div></div>
+      <div class="kpi"><div class="v">${esc(etaTxt)}</div><div class="k">осталось</div></div>
+    </div>
+    <div class="bar ${j.status === "ok" ? "ok" : j.status === "running" ? "" : "bad"}"><i style="width:${pct.toFixed(1)}%"></i></div>
+    ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}`;
+  const steps = j.steps.map((s, i) => {
+    const sst = {pending: "впереди", running: "идёт", ok: "готово", failed: "ошибка", stopped: "остановлено", cancelled: "не выполнялось"}[s.status];
+    const t = s.started ? dur((s.finished || now) - s.started) : (s.eta != null ? "обычно " + approx(s.eta) : "");
+    return `<div class="step"><div class="t">${j.steps.length > 1 ? `${i + 1}. ` : ""}${esc(STEP_TEXT[s.cmd] || s.cmd)}
+      <span class="muted">${sst}${t ? " · " + t : ""}</span></div>${s.phases.map(p => phaseRow(s, p, now)).join("")}</div>`;
+  }).join("");
+  const card = $("#jobCard");
+  const keepLog = logEl && card.contains(logEl) ? logEl : null;
+  const openLog = card.querySelector("details.logbox") ? card.querySelector("details.logbox").open : true;
+  card.innerHTML = head + steps + `<details class="logbox more" ${openLog ? "open" : ""}><summary>Лог</summary><pre class="log" id="log"></pre></details>`;
+  if (keepLog) { $("#log").replaceWith(keepLog); }
+  logEl = $("#log");
+  const stop = $("#stopBtn");
+  if (stop) stop.onclick = async () => { if (confirm("Остановить запуск? Текущий шаг прервётся (malioc, RenderDoc, клиент Unity CLI).")) await api("/api/stop", {}); };
+  const op = $("#openRep");
+  const dir = j.report_path ? j.report_path.replace(/[\\/][^\\/]+$/, "") : j.frame_dir;
+  if (op) op.onclick = () => openReport({name: dir.split(/[\\/]/).pop(), report: j.report, path: dir});
+  const jf = $("#jobFolder");
+  if (jf) jf.onclick = () => api("/api/reveal", {path: dir});
+}
+
+function appendLog(lines) {
+  if (!logEl || !lines.length) return;
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+  const html = lines.map(l => {
+    const c = l.startsWith("$ ") ? "cmd" : /^(FAIL|Traceback|.*Error\b|.*failed:)/.test(l) ? "fail" : l.startsWith("-> ") ? "arrow" : "";
+    return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
+  }).join("\n") + "\n";
+  logEl.insertAdjacentHTML("beforeend", html);
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function pill(j) {
+  const el = $("#tabPill");
+  if (!j) { el.innerHTML = ""; document.title = "Shaderopt"; return; }
+  if (j.status === "running") {
+    const {pct} = overall(j, j.now);
+    el.innerHTML = `<span class="pill run">${pct.toFixed(0)}%</span>`;
+    document.title = `${pct.toFixed(0)}% · Shaderopt`;
+  } else {
+    el.innerHTML = j.status === "ok" ? `<span class="pill ok">✓</span>` : j.status === "stopped" ? "" : `<span class="pill bad">✕</span>`;
+    document.title = "Shaderopt";
+  }
+}
+
+async function poll() {
+  clearTimeout(timer);
+  try {
+    const q = viewId ? `id=${encodeURIComponent(viewId)}&since=${logNext}` : `since=${logNext}`;
+    const r = await api("/api/job?" + q);
+    const j = r.job;
+    if (j) {
+      if (job && job.id !== j.id) { job = null; logNext = 0; logEl = null; return poll(); }
+      const finished = job && job.status === "running" && j.status !== "running";
+      job = j;
+      renderJob(j);
+      appendLog(j.log);
+      logNext = j.log_next;
+      if (!viewId) pill(j);
+      if (finished) { loadHistory(); OPT = await api("/api/options"); datalists(); }
+    }
+    $("#runBtn").disabled = !!(j && j.status === "running" && !viewId);
+    $("#runHint").textContent = $("#runBtn").disabled ? "идёт запуск — новый можно начать после него" : "";
+  } catch (e) { /* the server restarts: try again */ }
+  timer = setTimeout(poll, job && job.status === "running" ? 700 : 3000);
+}
+
+async function loadHistory() {
+  const r = await api("/api/jobs");
+  const rows = r.jobs.filter(x => !r.current || x.id !== r.current.id || x.status !== "running");
+  $("#hist").innerHTML = rows.length ? `<tr><th>Когда</th><th>Что</th><th>Итог</th><th>Длилось</th><th></th></tr>` + rows.map(x => `
+    <tr class="click" data-id="${esc(x.id)}"><td>${when(x.started)}</td><td>${esc((PRESET_TEXT[x.preset] || [x.preset])[0])}</td>
+    <td><span class="badge ${x.status}">${({ok: "готово", failed: "ошибка", stopped: "остановлено", running: "идёт"})[x.status] || x.status}</span></td>
+    <td>${x.finished ? dur(x.finished - x.started) : "—"}</td><td>${x.report ? "есть отчёт" : ""}</td></tr>`).join("")
+    : `<tr><td class="muted">Запусков ещё не было</td></tr>`;
+  document.querySelectorAll("#hist tr.click").forEach(tr => tr.onclick = () => {
+    viewId = tr.dataset.id; logNext = 0; logEl = null; job = null; $("#jobCard").innerHTML = ""; poll();
+    if (!$("#backCur")) $("#jobCard").insertAdjacentHTML("beforebegin", `<button class="btn" id="backCur" style="margin-bottom:8px">← Текущий запуск</button>`);
+    $("#backCur").onclick = () => { viewId = null; logNext = 0; logEl = null; job = null; $("#backCur").remove(); poll(); };
+  });
+}
+
+/* ---------- reports ---------- */
+let curRep = null;
+async function loadReports() {
+  const r = await api("/api/reports");
+  const reps = r.reports;
+  if (!reps.length) { $("#repList").innerHTML = `<div class="card empty">Снимков ещё нет: «Тест проекта» → «Снять кадр и посчитать».</div>`; return; }
+  const M = x => x == null ? "—" : (x / 1e6).toFixed(1);
+  $("#repList").innerHTML = `<div class="card" style="max-width:1700px;margin:0 auto"><h2>Снимки кадров</h2>
+    <p class="muted small">Папки в ${esc(OPT.out)} — только на этой машине, в git и на сайт не попадают.</p>
+    <table class="rep"><tr><th>Снимок</th><th>Проект</th><th>Кадр</th><th class="n">Событий / draw</th><th class="n">Кадр, M циклов</th><th>Пиксели · вершины · compute</th><th></th></tr>` +
+    reps.map((x, i) => {
+      const t = x.total || 0, f = t ? 100 * x.fragment / t : 0, v = t ? 100 * x.vertex / t : 0, c = t ? 100 * x.compute / t : 0;
+      return `<tr><td><b>${esc(x.name)}</b><div class="muted small">снят ${when(x.time)}${x.cost_time ? " · посчитан " + when(x.cost_time) : ""}</div></td>
+      <td>${esc(x.project || "—")}<div class="muted small">Unity ${esc(x.unity || "?")}</div></td>
+      <td class="small">${esc(x.api || "")} · ${x.play_mode ? "Play" : "Edit"}${x.renderdoc ? " · RenderDoc" : ""}</td>
+      <td class="n">${x.events} / ${x.draws}</td>
+      <td class="n">${x.total ? `<b>${M(x.total)}</b><div class="muted small">${esc(x.main_core)} · ${esc(x.api_cost || "")}</div>` : "не посчитан"}</td>
+      <td>${x.total ? `<span class="split" title="пиксели ${f.toFixed(0)}% · вершины ${v.toFixed(0)}% · compute ${c.toFixed(1)}%"><i style="width:${f}%;background:var(--accent)"></i><i style="width:${v}%;background:var(--medium)"></i><i style="width:${c}%;background:var(--heavy)"></i></span>
+        <span class="muted small">${f.toFixed(0)} · ${v.toFixed(0)} · ${c.toFixed(1)}%</span>` : ""}</td>
+      <td style="white-space:nowrap">${x.report ? `<button class="btn sm primary" data-a="open" data-i="${i}">Открыть</button> ` : ""}
+        <button class="btn sm" data-a="recalc" data-i="${i}">${x.report ? "Пересчитать" : "Посчитать"}</button>
+        <button class="btn sm" data-a="folder" data-i="${i}">Папка</button>
+        <button class="btn sm danger" data-a="del" data-i="${i}">Удалить</button></td></tr>`;
+    }).join("") + `</table></div>`;
+  document.querySelectorAll("#repList [data-a]").forEach(b => b.onclick = async () => {
+    const x = reps[+b.dataset.i];
+    if (b.dataset.a === "open") openReport(x);
+    if (b.dataset.a === "recalc") recalc(x);
+    if (b.dataset.a === "folder") api("/api/reveal", {name: x.name});
+    if (b.dataset.a === "del" && confirm(`Удалить папку снимка ${x.name} со всеми файлами (отчёт, RenderDoc-захват)?`)) {
+      const d = await api("/api/delete", {name: x.name});
+      if (d.error) alert(d.error);
+      OPT = await api("/api/options"); loadReports();
+    }
+  });
+}
+
+function openReport(x) {
+  curRep = x;
+  tab("reports");
+  $("#repList").style.display = "none";
+  $("#repView").style.display = "flex";
+  $("#repName").textContent = x.name;
+  $("#repFrame").src = x.report;
+  $("#repOpen").href = x.report;
+}
+$("#repBack").onclick = () => { $("#repView").style.display = "none"; $("#repList").style.display = ""; $("#repFrame").src = "about:blank"; loadReports(); };
+$("#repFolder").onclick = () => curRep && api("/api/reveal", curRep.path ? {path: curRep.path} : {name: curRep.name});
+$("#repRecalc").onclick = () => curRep && recalc(curRep);
+
+function recalc(x) {
+  preset = "cost"; store.set("preset", preset);
+  renderPresets();
+  renderForm({frame: x.path, project: x.project});
+  tab("run");
+}
+
+/* ---------- start ---------- */
+(async () => {
+  const s = await api("/api/schema");
+  SCHEMA = s.commands; PRESETS = s.presets;
+  OPT = await api("/api/options");
+  if (!PRESETS.find(p => p.id === preset)) preset = "frame_cost";
+  datalists(); renderPresets(); renderForm(); loadHistory(); poll();
+  tab(store.get("tab") || "run");
+})();
+</script>
+</body>
+</html>

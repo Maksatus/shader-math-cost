@@ -25,7 +25,9 @@ import hashlib
 import json
 import os
 import re
+import threading
 
+from shaderopt import progress as progress_ui
 from shaderopt.corpus import split_unity
 from shaderopt.profile import measure
 from shaderopt.unity import export as unity
@@ -139,13 +141,20 @@ def compile_variants(project, keys, root, platforms, timeout=1800):
     for fn in os.listdir(raw):
         os.remove(os.path.join(raw, fn))
     config = os.path.join(raw, "config.json")
+    progress_ui.phase("compile", len(keys))
     with open(config, "w", encoding="utf-8") as f:
         json.dump({"shaders": [k[0] for k in keys], "subshaders": [k[1] for k in keys],
                    "pass_indices": [k[2] for k in keys], "passes": [k[3] for k in keys],
                    "keywords": [" ".join(k[4]) for k in keys], "platforms": list(platforms), "out": raw}, f, indent=1)
-    d = unity._cli_json(["command", "run_script", "--project-path", project, "--timeout", str(timeout),
-                         "--timeout_ms", str(timeout * 1000), "--file", os.path.abspath(SCRIPT),
-                         "--entry", "ShaderoptVariants.Run", "--args", json.dumps([config])], timeout + 60)
+    stop = threading.Event()
+    watch = threading.Thread(target=_watch_compiled, args=(raw, len(keys), stop), daemon=True)
+    watch.start()
+    try:
+        d = unity._cli_json(["command", "run_script", "--project-path", project, "--timeout", str(timeout),
+                             "--timeout_ms", str(timeout * 1000), "--file", os.path.abspath(SCRIPT),
+                             "--entry", "ShaderoptVariants.Run", "--args", json.dumps([config])], timeout + 60)
+    finally:
+        stop.set()
     res = (d.get("data") or {}).get("result") or {}
     if not d.get("success") or not res.get("success") or not str(res.get("result", "")).startswith("ok"):
         diag = "; ".join(x.get("message", "") for x in res.get("diagnostics") or [] if x.get("severity") == "error")
@@ -155,6 +164,20 @@ def compile_variants(project, keys, root, platforms, timeout=1800):
     if len(result["variants"]) != len(keys):
         raise VariantsError(f"Unity compiled {len(result['variants'])} of {len(keys)} variants")
     return place(root, raw, keys, result)
+
+
+def _watch_compiled(raw, total, stop):
+    """Progress of a Unity run: variants with a file written so far (ShaderoptVariants.cs writes <id>_*.bin as it
+    goes; a variant that fails writes nothing, so the count may lag behind)."""
+    last = -1
+    while not stop.wait(0.5):
+        try:
+            done = len({fn.split("_", 1)[0] for fn in os.listdir(raw) if fn.endswith(".bin")})
+        except OSError:
+            continue
+        if done != last:
+            progress_ui.step(done, total)
+            last = done
 
 
 def recover(root):
@@ -259,8 +282,10 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
     current = None
     if compile_missing and draw_keys:
         if project and unity.editor_ready(project, allow_play=True):
+            progress_ui.phase("fingerprints")
             current = current_fingerprints(project, [k[0] for k in draw_keys], root)
         else:
+            progress_ui.skip("fingerprints", "the editor does not answer")
             progress("the editor does not answer Unity CLI: compiled variants are used without checking "
                      "their shaders for changes")
 
@@ -286,6 +311,8 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
         errors.update(compile_variants(project, missing, root, platforms))
         stored = {}
         have = load_manifests(root, stored, platforms)
+    else:
+        progress_ui.skip("compile", "nothing to compile" if compile_missing else "--no-compile")
     pending = set() if compile_missing else {k for k in missing if not complete(k)}
     if any(have.get(k) for k in keys):
         progress(f"measuring {root} on {', '.join(cores)} ...")

@@ -10,9 +10,11 @@ The frame is whatever the Game view shows: its resolution and the current qualit
 """
 import json
 import os
+import re
 import shutil
 import time
 
+from shaderopt import progress as progress_ui
 from shaderopt.frame import renderdoc as rdoc
 from shaderopt.unity import export as unity
 
@@ -27,6 +29,7 @@ class SnapshotError(RuntimeError):
 def capture(project, out, timeout=1800, max_events=0, progress=print):
     """Snapshot the frame of the open editor into <out>/frame.json; returns the parsed raw data."""
     project, out = os.path.abspath(project), os.path.abspath(out)
+    progress_ui.phase("snapshot")
     if not unity.editor_ready(project, allow_play=True):
         raise SnapshotError(f"the editor of {project} does not answer Unity CLI or is busy (compiling, importing): "
                             "the snapshot needs the open editor with the frame in the Game view")
@@ -54,8 +57,14 @@ def capture(project, out, timeout=1800, max_events=0, progress=print):
         if os.path.exists(paths["progress"]):
             with open(paths["progress"], encoding="utf-8", errors="replace") as f:
                 p = f.read().strip()
-            if p != last and progress:
-                progress(f"  {p}")
+            if p != last:
+                if progress:
+                    progress(f"  {p}")
+                m = re.fullmatch(r"events (\d+)/(\d+)", p)
+                if m:
+                    progress_ui.step(int(m.group(1)), int(m.group(2)))
+                else:
+                    progress_ui.step(None, note=p)
             last = p
         time.sleep(0.5)
     raise SnapshotError(f"no result after {timeout} s (progress: {last})")
@@ -168,6 +177,7 @@ def run(project, out, timeout=1800, max_events=0, progress=print, renderdoc=Fals
     out = os.path.abspath(out)
     rd = None
     if renderdoc:
+        progress_ui.phase("rd_capture")
         progress("  renderdoc capture")
         rd = rdoc.capture(project, out)
     try:
@@ -178,6 +188,7 @@ def run(project, out, timeout=1800, max_events=0, progress=print, renderdoc=Fals
     events = normalize(raw)
     meta = {k: v for k, v in raw.items() if k != "events"}
     if rd:
+        progress_ui.phase("rd_counters")
         progress("  renderdoc counters")
         rdc = os.path.join(out, "frame.rdc")
         try:
