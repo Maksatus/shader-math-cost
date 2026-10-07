@@ -44,8 +44,24 @@ def editor_version(project):
     return m.group(1)
 
 
+def hub_editor_dirs():
+    """Folders Unity Hub installs editors into: its "install location" setting (secondaryInstallPath.json), the default."""
+    dirs = []
+    try:
+        with open(os.path.join(os.environ.get("APPDATA", ""), "UnityHub", "secondaryInstallPath.json"),
+                  encoding="utf-8") as f:
+            p = json.load(f)
+        if isinstance(p, str) and p:
+            dirs.append(p)
+    except (OSError, ValueError):
+        pass
+    return dirs + [HUB_EDITORS]
+
+
 def unity_exe(project):
-    exe = os.environ.get("UNITY_EDITOR") or os.path.join(HUB_EDITORS, editor_version(project), "Editor", "Unity.exe")
+    ver = editor_version(project)
+    cands = [os.path.join(d, ver, "Editor", "Unity.exe") for d in hub_editor_dirs()]
+    exe = os.environ.get("UNITY_EDITOR") or next((c for c in cands if os.path.exists(c)), cands[-1])
     if not os.path.exists(exe):
         raise ExportError(f"Unity {editor_version(project)} not found at {exe} (set UNITY_EDITOR)")
     return exe
