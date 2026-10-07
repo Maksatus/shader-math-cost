@@ -111,9 +111,12 @@ def run_batch(project, config, out, timeout):
     log = os.path.join(out, "unity_batch.log")
     try:
         shutil.copy(SCRIPT, tmp)
-        r = subprocess.run([exe, "-batchmode", "-quit", "-projectPath", project,
-                            "-executeMethod", "ShaderoptExport.Batch", "-shaderoptConfig", config,
-                            "-logFile", log], timeout=timeout)
+        try:
+            r = subprocess.run([exe, "-batchmode", "-quit", "-projectPath", project,
+                                "-executeMethod", "ShaderoptExport.Batch", "-shaderoptConfig", config,
+                                "-logFile", log], timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise ExportError(f"Unity did not finish in {timeout} s, see {log}") from None
     finally:
         # remove the script and the .meta files Unity created for it
         shutil.rmtree(tmp, ignore_errors=True)
@@ -137,6 +140,10 @@ def export(project, shaders, out, platforms=("gles3", "vulkan"), mode="auto", ti
     out = os.path.abspath(out)
     raw = os.path.join(out, "_compiled")
     os.makedirs(raw, exist_ok=True)
+    # results of an earlier run must not pass for this one's (Unity may fail before writing anything)
+    for fn in os.listdir(raw):
+        if os.path.isfile(os.path.join(raw, fn)):
+            os.remove(os.path.join(raw, fn))
     config = os.path.join(raw, "config.json")
     with open(config, "w", encoding="utf-8") as f:
         json.dump({"shaders": list(shaders), "platforms": list(platforms), "out": raw}, f, indent=1)
@@ -150,7 +157,12 @@ def export(project, shaders, out, platforms=("gles3", "vulkan"), mode="auto", ti
         else:
             mode = "batch"
     t = time.time()
-    res = run_in_editor(project, config, timeout) if mode == "editor" else run_batch(project, config, raw, timeout)
+    try:
+        res = run_in_editor(project, config, timeout) if mode == "editor" else run_batch(project, config, raw, timeout)
+    except json.JSONDecodeError as e:
+        raise ExportError(f"Unity returned a broken result: {e}") from None
+    except subprocess.TimeoutExpired:
+        raise ExportError(f"Unity did not answer in {timeout} s") from None
     res["mode"], res["seconds"] = mode, round(time.time() - t, 1)
 
     for item in res.get("items", []):

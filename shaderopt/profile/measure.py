@@ -50,7 +50,11 @@ def api_of(path, api):
 
 
 def measure_one(path, core, api):
-    return mali.measure(mali.read_source(path), core, api_of(path, api), mali.stage_of(path))
+    """mali.measure() of one file; an error (unreadable file, malioc not found) fails this file, not the run."""
+    try:
+        return mali.measure(mali.read_source(path), core, api_of(path, api), mali.stage_of(path))
+    except (OSError, mali.MaliocError) as e:
+        return {"ok": False, "error": str(e)}
 
 
 def _row(rel, info, rec, vname, v):
@@ -103,7 +107,8 @@ def run(folder, cores=("Mali-G78",), api="gles", out=None, jobs=None):
                 fj.write(json.dumps({"file": rel, "ok": False, "core": core, "api": api_of(path, api),
                                      "error": r["error"]}, ensure_ascii=False) + "\n")
                 continue
-            rec = {"file": rel, **{k: info[k] for k in ("shader", "pass", "keywords") if k in info},
+            rec = {"file": rel, "root": os.path.abspath(folder),
+                   **{k: info[k] for k in ("shader", "pass", "keywords") if k in info},
                    **{k: v for k, v in r.items() if k != "cached"}}
             records.append((rec, r.get("cached", False)))
             fj.write(json.dumps(rec, ensure_ascii=False) + "\n")

@@ -3,7 +3,10 @@
 GLES3x export -> .vert / .frag (GLSL); Vulkan export -> .vert.spv / .frag.spv
 (the SPIR-V disassembly is assembled back into a binary, see shaderopt/spirv.py).
 One file per pass x keyword set x stage, plus manifest.json with the shader,
-pass, keywords, stage and platform of each file. Output goes to
+pass, keywords, stage and platform of each file. A variant Unity could not compile
+("// Compile errors generating this shader.") is reported as an error. Files of an
+earlier split of the same shader and platform (listed in its manifest.json) are
+removed first, so a smaller export leaves no stale variants behind. Output goes to
 real/<shader file name>/ (real/<name>_vulkan/ for Vulkan; an export with both
 platforms gives both folders) by default
 (not in git: project shaders must not reach the public repository).
@@ -80,13 +83,27 @@ def slug(s):
     return re.sub(r"[^A-Za-z0-9_]+", "_", s).strip("_") or "none"
 
 
+def clear(out_dir):
+    """Remove the files an earlier split wrote into out_dir (its manifest.json and the files listed there)."""
+    man = os.path.join(out_dir, "manifest.json")
+    if not os.path.exists(man):
+        return
+    with open(man, encoding="utf-8") as f:
+        old = json.load(f)
+    for m in old:
+        p = os.path.join(out_dir, m["file"])
+        if os.path.isfile(p):
+            os.remove(p)
+    os.remove(man)
+
+
 def split(path, out_root):
     with open(path, encoding="utf-8", errors="replace") as f:
         lines = f.read().splitlines()
     shader = next((m.group(1) for l in lines if (m := re.match(r'Shader "(.+)" \{', l))), "?")
     name = os.path.splitext(os.path.basename(path))[0]
     files, manifest, errors, used = [], [], [], set()
-    pass_name, pass_idx, keywords, platform, tier = None, -1, [], None, None
+    pass_name, pass_idx, keywords, platform, tier, stage_name = None, -1, [], None, None, None
     i = 0
     while i < len(lines):
         l = lines[i].strip()
@@ -101,8 +118,11 @@ def split(path, out_root):
             tier = None
         elif m := re.match(r"-- Hardware tier variant: Tier (\d+)", l):
             tier = int(m.group(1))  # built-in pipeline GLES exports: one variant per tier
-        elif m := re.match(r'-- \w+ shader for "(\w+)"', l):
-            platform = m.group(1)
+        elif m := re.match(r'-- (\w+) shader for "(\w+)"', l):
+            stage_name, platform = m.group(1).lower(), m.group(2)
+        elif l.startswith("// Compile errors generating this shader"):
+            errors.append(f"pass {pass_idx} {pass_name} [{' '.join(keywords) or 'no keywords'}] {stage_name} "
+                          f"{platform}: Unity could not compile this variant")
         elif l == "Shader Disassembly:":
             vk = platform == "vulkan"
             found, i = vk_blocks(lines, i + 1) if vk else blocks(lines, i + 1)
@@ -136,6 +156,8 @@ def split(path, out_root):
             continue
         i += 1
     # one folder per platform: <name>/ for gles3, <name>_<platform>/ for the others
+    for plat in dict.fromkeys(p for p, _, _ in files):
+        clear(os.path.join(out_root, slug(name) + ("" if plat == "gles3" else f"_{plat}")))
     outputs = {}
     for (plat, fn, data), m in zip(files, manifest):
         out_dir = os.path.join(out_root, slug(name) + ("" if plat == "gles3" else f"_{plat}"))

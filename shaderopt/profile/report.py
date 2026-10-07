@@ -1,8 +1,10 @@
 """Report v1 (plan item A1.6, decision D-09): report.csv + report.html from measurements.jsonl.
 
 One row per shader variant file (pass x keywords x stage x API) with the heaviness
-(A1.5) on every measured core, the worst over cores and the maximum per
-architecture. Fragment and vertex shaders are ranked separately. The HTML is one
+(A1.5) on every measured core and the maximum per architecture. Rows are ranked by the main
+core (Mali-G78 if measured, else the first core, decision D-17): cycles of different cores are
+not one scale (pipe widths differ between core classes), so a maximum over cores would just pick
+the narrowest core. Fragment, vertex and compute shaders, and each API, are ranked separately. The HTML is one
 self-contained file (no network), sortable and filterable; it stays local.
 """
 import csv
@@ -12,6 +14,8 @@ import os
 from collections import OrderedDict
 
 from shaderopt.profile import score as heavy
+
+MAIN_CORE = "Mali-G78"
 
 ARCHS = ("Bifrost", "Valhall", "Arm 5th Generation")
 ARCH_SHORT = {"Bifrost": "Bifrost", "Valhall": "Valhall", "Arm 5th Generation": "5th Gen"}
@@ -36,10 +40,11 @@ def build_rows(records, fp16_threshold=heavy.FP16_THRESHOLD):
             "pass": rec.get("pass", ""), "keywords": rec.get("keywords", []), "stage": rec["stage"],
             "api": rec["api"], "scores": {}})
         row["scores"][rec["core"]] = heavy.score(rec, fp16_threshold)
+    main = MAIN_CORE if MAIN_CORE in cores else next(iter(cores), None)
     for row in rows.values():
         sc = row["scores"]
-        worst = max(sc, key=lambda c: sc[c]["cycles"])
-        row["worst"] = {"core": worst, "cycles": sc[worst]["cycles"]}
+        core = main if main in sc else next(iter(sc))
+        row["main"] = {"core": core, "cycles": sc[core]["cycles"]}
         row["arch"] = {}
         for a in ARCHS:
             vals = [s["cycles"] for c, s in sc.items() if cores[c] == a]
@@ -48,15 +53,17 @@ def build_rows(records, fp16_threshold=heavy.FP16_THRESHOLD):
         row["work_regs"] = max(s["work_regs"] for s in row["scores"].values())
         fp = [s["fp16_pct"] for s in row["scores"].values() if s["fp16_pct"] is not None]
         row["fp16_pct"] = min(fp) if fp else None
-    ordered = sorted(rows.values(), key=lambda r: (r["stage"], -r["worst"]["cycles"]))
+    ordered = sorted(rows.values(), key=lambda r: (r["stage"], r["api"], -r["main"]["cycles"]))
     for stage in ("fragment", "vertex", "compute"):
-        for i, r in enumerate((r for r in ordered if r["stage"] == stage), 1):
-            r["rank"] = i
+        for api in sorted({r["api"] for r in ordered}):
+            for i, r in enumerate((r for r in ordered if r["stage"] == stage and r["api"] == api), 1):
+                r["rank"] = i
+    ordered.sort(key=lambda r: (r["stage"], -r["main"]["cycles"]))
     return ordered, list(cores.items()), failures
 
 
 def write_csv(rows, cores, path):
-    cols = (["stage", "rank", "shader", "pass", "keywords", "api", "file", "worst_cycles", "worst_core"]
+    cols = (["stage", "rank", "shader", "pass", "keywords", "api", "file", "main_cycles", "main_core"]
             + [f"{ARCH_SHORT[a]}_cycles" for a in ARCHS]
             + [f"{c}_{k}" for c, _ in cores for k in ("cycles", "bound", "path")]
             + ["work_regs", "fp16_pct", "flags"])
@@ -65,12 +72,20 @@ def write_csv(rows, cores, path):
         w.writerow(cols)
         for r in rows:
             line = [r["stage"], r["rank"], r["shader"], r["pass"], " ".join(r["keywords"]), r["api"], r["file"],
-                    r["worst"]["cycles"], r["worst"]["core"]] + [r["arch"][ARCH_SHORT[a]] for a in ARCHS]
+                    r["main"]["cycles"], r["main"]["core"]] + [r["arch"][ARCH_SHORT[a]] for a in ARCHS]
             for c, _ in cores:
                 s = r["scores"].get(c)
                 line += [s["cycles"], "+".join(s["bound"]), s["path"]] if s else ["", "", ""]
             line += [r["work_regs"], r["fp16_pct"], " ".join(r["flags"])]
             w.writerow(["" if v is None else v for v in line])
+
+
+def href(path, out_dir):
+    """Link from the report folder to a shader file: relative, or a file:// URI on another drive."""
+    try:
+        return os.path.relpath(path, out_dir).replace("\\", "/")
+    except ValueError:
+        return "file:///" + os.path.abspath(path).replace("\\", "/")
 
 
 def write_html(rows, cores, failures, path, title, meta, top=20):
@@ -80,11 +95,11 @@ def write_html(rows, cores, failures, path, title, meta, top=20):
         "cores": [{"name": c, "arch": ARCH_SHORT.get(a, a)} for c, a in cores],
         "archs": [ARCH_SHORT[a] for a in ARCHS if any(x == a for _, x in cores)],
         "flags": list(heavy.FLAGS),
-        "rows": [{**r, "href": os.path.relpath(os.path.join(meta["folder"], r["file"]), out_dir).replace("\\", "/")}
-                 for r in rows],
+        "rows": [{**r, "href": href(os.path.join(meta["root"], r["file"]), out_dir)} for r in rows],
         "failures": [{"file": f["file"], "core": f["core"], "error": f["error"]} for f in failures],
     }
-    blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    # < > & as JSON escapes: no name can close the <script> or open a comment in it
+    blob = json.dumps(data, ensure_ascii=False).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     page = TEMPLATE.replace("__TITLE__", html.escape(title)).replace("__DATA__", blob)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(page)
@@ -97,7 +112,9 @@ def run(folder, out=None, top=20, fp16_threshold=heavy.FP16_THRESHOLD, title=Non
     rows, cores, failures = build_rows(records, fp16_threshold)
     malioc = sorted({r.get("malioc", "") for r in records if r.get("ok", True)})
     drivers = sorted({f"{r['core']} {r['driver']}" for r in records if r.get("ok", True)})
-    meta = {"folder": os.path.abspath(folder), "malioc": ", ".join(malioc), "drivers": drivers,
+    # the measured shaders: measure --out writes measurements.jsonl elsewhere and records their folder in "root"
+    root = next((r["root"] for r in records if r.get("root")), None) or os.path.abspath(folder)
+    meta = {"folder": root, "root": root, "malioc": ", ".join(malioc), "drivers": drivers,
             "fp16_threshold": fp16_threshold}
     os.makedirs(out, exist_ok=True)
     write_csv(rows, cores, os.path.join(out, "report.csv"))
@@ -194,9 +211,10 @@ a:hover { text-decoration: underline; }
   <details class="help"><summary>Как читать</summary>
     <p><b>Цена</b> — циклы самого загруженного конвейера (узкое место) на longest path, по оценке malioc для этого ядра;
     под числом — какой это конвейер (fma, cvt, sfu — арифметика; ls — load/store; v — varying; t — текстуры).
-    Для вертексных шейдеров — Position + Varying. <b>Худшее</b> — максимум по ядрам; колонки архитектур — максимум по ядрам архитектуры.
-    Циклы ядер одного поколения сравнимы; между поколениями ширина конвейеров разная (у 5th Gen FMA вчетверо шире, чем у Valhall,
-    а load/store — нет), сравнивать их стоит по рангу шейдера, а не по числу.</p>
+    Для вертексных шейдеров — Position + Varying (у 5th Gen — один вариант Main). <b>Основное</b> — цена на основном ядре
+    (Mali-G78, если оно замерено), по ней ранг; колонки архитектур — максимум по ядрам архитектуры.
+    Циклы разных ядер — разные шкалы (ширина конвейеров у классов ядер разная, а у G715 она как у 5th Gen),
+    сравнивать ядра стоит по рангу шейдера, а не по числу. Ранг — отдельно для каждого API.</p>
     <p>Флаги: <span class="flag regs_gt32">regs_gt32</span> больше 32 рабочих регистров — половинная занятость потоков;
     <span class="flag spilling">spilling</span> регистры ушли в память;
     <span class="flag low_fp16">low_fp16</span> доля 16-битной арифметики ниже порога;
@@ -217,13 +235,14 @@ a:hover { text-decoration: underline; }
   </div>
   <section id="fragment"></section>
   <section id="vertex"></section>
+  <section id="compute"></section>
   <section id="failures"></section>
 </main>
 <script type="application/json" id="data">__DATA__</script>
 <script>
 const D = JSON.parse(document.getElementById("data").textContent);
 const st = { q: "", api: "all", pass: "", flags: new Set(), all: false,
-             sort: { fragment: ["worst", -1], vertex: ["worst", -1] } };
+             sort: { fragment: ["main", -1], vertex: ["main", -1], compute: ["main", -1] } };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = v => v == null ? "—" : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2);
 
@@ -247,7 +266,7 @@ document.getElementById("q").oninput = e => { st.q = e.target.value.toLowerCase(
 document.getElementById("all").onclick = () => { st.all = !st.all; render(); };
 
 function key(r, k) {
-  if (k === "worst") return r.worst.cycles ?? -1;
+  if (k === "main") return r.main.cycles ?? -1;
   if (k.startsWith("arch:")) return r.arch[k.slice(5)] ?? -1;
   if (k.startsWith("core:")) { const s = r.scores[k.slice(5)]; return s ? s.cycles : -1; }
   if (k === "name") return (r.shader + " " + r.pass + " " + r.keywords.join(" ")).toLowerCase();
@@ -274,13 +293,14 @@ function table(stage) {
   const total = rows.length;
   rows.sort((a, b) => { const x = key(a, sk), y = key(b, sk); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
   if (!st.all) rows = rows.slice(0, D.top);
-  const max = Math.max(0, ...D.rows.filter(r => r.stage === stage).map(r => r.worst.cycles || 0));
+  const max = Math.max(0, ...D.rows.filter(r => r.stage === stage).map(r => r.main.cycles || 0));
   const th = (k, label, cls = "", small = "") =>
     `<th class="${cls} ${sk === k ? "sorted" : ""}" data-k="${k}" data-stage="${stage}">${label}${sk === k ? (sd < 0 ? " ↓" : " ↑") : ""}${small ? `<small>${small}</small>` : ""}</th>`;
-  let h = `<h2>${stage === "fragment" ? "Пиксельные" : "Вертексные"} шейдеры <small>${st.all ? total : Math.min(total, D.top)} из ${total}${stage === "vertex" ? " · Position + Varying" : ""}</small></h2>`;
+  if (!D.rows.some(r => r.stage === stage)) return "";
+  let h = `<h2>${{fragment: "Пиксельные", vertex: "Вертексные", compute: "Compute"}[stage]} шейдеры <small>${st.all ? total : Math.min(total, D.top)} из ${total}${stage === "vertex" ? " · Position + Varying" : ""}</small></h2>`;
   if (!total) return h + '<div class="wrap"><div class="empty">Нет шейдеров под фильтр.</div></div>';
   h += `<div class="wrap"><table><thead><tr>${th("rank", "#")}${th("name", "Шейдер · пасс · keywords", "l name")}${th("api", "API", "l")}`
-     + th("worst", "Худшее", "gl", "циклы")
+     + th("main", "Основное", "gl", "циклы")
      + D.archs.map(a => th("arch:" + a, a, "", "циклы")).join("")
      + D.cores.map((c, i) => th("core:" + c.name, c.name.replace("Mali-", "").replace("Immortalis-", ""), i ? "" : "gl", c.arch)).join("")
      + `${th("regs", "Регистры", "gl")}${th("fp16", "fp16 %")}<th class="l">Флаги</th><th class="l">Файл</th></tr></thead><tbody>`;
@@ -288,7 +308,7 @@ function table(stage) {
     h += `<tr><td class="num">${r.rank}</td><td class="l name"><span class="sh">${esc(r.shader)}</span> <span class="pass">· ${esc(r.pass)}</span><br>`
        + (r.keywords.length ? r.keywords.map(k => `<span class="kw">${esc(k)}</span>`).join("") : '<span class="kw">без keywords</span>') + `</td>`
        + `<td class="l">${esc(r.api)}</td>`
-       + `<td class="num big gl" style="${heat(r.worst.cycles, max)}">${fmt(r.worst.cycles)}<span class="bd">${esc((r.worst.core || "").replace("Mali-", ""))}</span></td>`
+       + `<td class="num big gl" style="${heat(r.main.cycles, max)}">${fmt(r.main.cycles)}<span class="bd">${esc((r.main.core || "").replace("Mali-", ""))}</span></td>`
        + D.archs.map(a => `<td class="num">${fmt(r.arch[a])}</td>`).join("")
        + D.cores.map((c, i) => { const s = r.scores[c.name];
            if (!s) return `<td class="num ${i ? "" : "gl"}">—</td>`;
@@ -303,7 +323,7 @@ function render() {
   apiSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.api));
   flagBox.querySelectorAll("button").forEach(b => b.classList.toggle("on", st.flags.has(b.dataset.v)));
   document.getElementById("all").textContent = st.all ? `Только топ-${D.top}` : "Показать все";
-  for (const s of ["fragment", "vertex"]) document.getElementById(s).innerHTML = table(s);
+  for (const s of ["fragment", "vertex", "compute"]) document.getElementById(s).innerHTML = table(s);
   document.querySelectorAll("thead th[data-k]").forEach(th => th.onclick = () => {
     const s = th.dataset.stage, k = th.dataset.k, cur = st.sort[s];
     st.sort[s] = [k, cur[0] === k ? -cur[1] : (k === "name" || k === "api" || k === "rank" ? 1 : -1)]; render(); });

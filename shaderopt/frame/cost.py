@@ -231,7 +231,7 @@ def groups(rows, core):
     return out
 
 
-CSV_COLS = ["rank", "index", "stage", "object", "shader", "pass", "keywords", "pixels", "pixel_method",
+CSV_COLS = ["rank", "event", "stage", "object", "shader", "pass", "keywords", "pixels", "pixel_method",
             "pixels_low", "pixels_high", "vertices", "vertex_method", "threads", "px_price", "vtx_price", "cs_price",
             "fragment", "vertex", "compute", "total", "share_pct", "px_bound", "vtx_bound", "px_path", "loop_n",
             "flags", "rt", "variant", "reason"]
@@ -249,7 +249,7 @@ def write(cost, out_dir):
             for i, r in enumerate(ranked, 1):
                 c = r["cost"].get(core) or {}
                 w.writerow(["" if v is None else v for v in [
-                    core, i if c else "", r["index"], r["stage"], r["object"], r["shader"], r["pass"],
+                    core, i if c else "", r["index"] + 1, r["stage"], r["object"], r["shader"], r["pass"],
                     " ".join(r["keywords"]), r["pixels"], r["pixel_method"], r["pixels_low"], r["pixels_high"],
                     r["vertices"], r["vertex_method"], r["threads"], c.get("px_price"), c.get("vtx_price"),
                     c.get("cs_price"), round(c["fragment"]) if c else None, round(c["vertex"]) if c else None,

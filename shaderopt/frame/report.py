@@ -14,7 +14,8 @@ STYLE = variant_report.TEMPLATE[variant_report.TEMPLATE.index("<style>"):variant
 
 
 def write(cost, path, title):
-    blob = json.dumps(cost, ensure_ascii=False).replace("</", "<\\/")
+    # < > & as JSON escapes: no name can close the <script> or open a comment in it
+    blob = json.dumps(cost, ensure_ascii=False).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     page = (TEMPLATE.replace("__STYLE__", STYLE).replace("__TITLE__", html.escape(title))
             .replace("__DATA__", blob))
     with open(path, "w", encoding="utf-8", newline="\n") as f:

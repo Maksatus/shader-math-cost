@@ -108,14 +108,22 @@ def _norm(path):
     return _RP.sub("", path or "").strip("/")
 
 
-def match(events, actions):
+def match(events, actions, counters=None):
     """Attach to every draw / compute event its RenderDoc calls:
     ev["rd"] = {calls, events, ps / ps_invocations, vs / vs_invocations, cs_invocations, samples, gpu_ms}.
     The calls of an event are the next calls (draws for draws, dispatches for compute) whose marker path ends with
     the event's path; a Frame Debugger event holds m_DrawCallCount calls (several for an SRP batch).
-    Returns (matched events, events without calls)."""
+    counters: the counters the capture has (rd_actions.json "counters"); a counter it does not have is None, not 0
+    (Mali has no pipeline statistics). A draw whose calls do not add up to the Frame Debugger index count
+    (sum of indices x instances) gets "count_mismatch": [Frame Debugger, RenderDoc] — the order went astray.
+    Returns (matched events, events without calls, matched draws with a count mismatch)."""
     calls = [a for a in actions if "draw" in a["kinds"] or "dispatch" in a["kinds"]]
-    pos, matched, missing = 0, 0, 0
+    pos, matched, missing, mismatched = 0, 0, 0, 0
+
+    def total(sel, name):
+        if counters is not None and name not in counters:
+            return None
+        return sum(a.get(name) or 0 for a in sel)
     for ev in events:
         if ev["kind"] not in ("draw", "compute"):
             continue
@@ -135,12 +143,16 @@ def match(events, actions):
             continue
         pos = got[-1] + 1
         sel = [calls[k] for k in got]
-        ps = sum(a.get("ps_invocations") or 0 for a in sel)
-        vs = sum(a.get("vs_invocations") or 0 for a in sel)
-        cs = sum(a.get("cs_invocations") or 0 for a in sel)
+        ps, vs, cs = total(sel, "ps_invocations"), total(sel, "vs_invocations"), total(sel, "cs_invocations")
+        gpu = total(sel, "gpu_duration")
         ev["rd"] = {"calls": n, "events": [a["event"] for a in sel], "ps": ps, "vs": vs,
                     "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
-                    "samples": sum(a.get("samples_passed") or 0 for a in sel),
-                    "gpu_ms": round(sum(a.get("gpu_duration") or 0 for a in sel) * 1000, 4)}
+                    "samples": total(sel, "samples_passed"),
+                    "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
+        if ev["kind"] == "draw" and ev.get("indices"):
+            got_indices = sum((a.get("indices") or 0) * max(1, a.get("instances") or 0) for a in sel)
+            if got_indices != ev["indices"]:
+                ev["rd"]["count_mismatch"] = [ev["indices"], got_indices]
+                mismatched += 1
         matched += 1
-    return matched, missing
+    return matched, missing, mismatched

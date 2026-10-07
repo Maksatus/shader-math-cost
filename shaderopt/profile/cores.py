@@ -18,7 +18,11 @@ def parse(spec):
             names += PRESETS[key]
         else:
             names.append(part)
+    if not names:
+        raise ValueError(f"no cores in '{spec}'")
     known = {c for c, _, _ in mali.list_cores()}
+    if not known:
+        raise ValueError(f"malioc ({mali.MALIOC}) listed no cores: is it Mali Offline Compiler?")
     bad = [n for n in names if n not in known]
     if bad:
         raise ValueError(f"unknown core {', '.join(bad)}; malioc knows: {', '.join(sorted(known))}")

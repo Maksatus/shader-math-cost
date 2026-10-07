@@ -114,7 +114,8 @@ ENDCG
     static Type util, dataType;
     static string outDir;
     static int maxEvents, state, index, count, waited, waitedPixels, stable, lastCount;
-    static bool wasEnabled, openedWindow;
+    static bool wasEnabled, openedWindow, wasPaused;
+    static int wasLimit;
     static Type winType;
     static UnityEngine.Object window;
     static string token;
@@ -154,6 +155,9 @@ ENDCG
         if (window == null)
             return Fail("cannot open the Frame Debugger window");
         wasEnabled = (int)Prop("count") > 0;  // a disabled Frame Debugger has no events
+        // enabling the Frame Debugger pauses Play Mode and the replay moves the limit: both are set back in Stop()
+        wasPaused = EditorApplication.isPaused;
+        wasLimit = wasEnabled && Safe(() => Prop("limit")) is int lim ? lim : 0;
         if (!wasEnabled)
             winType.GetMethod("EnableFrameDebugger", I).Invoke(window, null);
         token = Guid.NewGuid().ToString();
@@ -169,7 +173,10 @@ ENDCG
         {
             var sh = ShaderUtil.CreateShaderAsset(DiffShader, false);  // in memory, nothing is written to the project
             if (sh == null || !sh.isSupported)
+            {
+                Stop();
                 return Fail("pixel diff shader does not compile");
+            }
             diffMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
         }
         data = Activator.CreateInstance(dataType);
@@ -363,11 +370,13 @@ ENDCG
             SessionState.EraseString(TokenKey);
         try
         {
-            if (wasEnabled) SetLimit((int)Prop("count"));
+            if (wasEnabled) SetLimit(wasLimit > 0 ? wasLimit : (int)Prop("count"));
             else winType.GetMethod("DisableFrameDebugger", I).Invoke(window, null);
             if (openedWindow) ((EditorWindow)window).Close();
         }
         catch { }
+        if (EditorApplication.isPlaying && EditorApplication.isPaused != wasPaused)
+            EditorApplication.isPaused = wasPaused;
     }
 
     static string EventJson(int i, string pixelsJson)

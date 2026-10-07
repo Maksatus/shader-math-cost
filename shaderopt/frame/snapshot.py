@@ -96,7 +96,7 @@ def pixel_count(ev):
     value did not change, so it gets the target area; other draws get the measured changed pixels."""
     if ev["kind"] != "draw":
         return 0, None
-    if ev.get("rd"):  # RenderDoc: how many times the pixel shader really ran
+    if ev.get("rd") and ev["rd"].get("ps") is not None:  # RenderDoc: how many times the pixel shader really ran
         return ev["rd"]["ps"], "renderdoc"
     px = ev.get("pixels") or {}
     w, h = ev["rt"]["width"] or 0, ev["rt"]["height"] or 0
@@ -185,10 +185,11 @@ def run(project, out, timeout=1800, max_events=0, progress=print, renderdoc=Fals
         except OSError:
             rdc = rd["capture"]
         acts = rdoc.counters(rdc, os.path.join(out, "rd_actions.json"))
-        matched, missing = rdoc.match(events, acts["actions"])
+        matched, missing, mismatched = rdoc.match(events, acts["actions"], acts.get("counters"))
         for ev in events:
             ev["pixel_count"], ev["pixel_method"] = pixel_count(ev)
-        meta["renderdoc"] = {"capture": rdc, "matched": matched, "missing": missing, "counters": acts["counters"]}
+        meta["renderdoc"] = {"capture": rdc, "matched": matched, "missing": missing, "mismatched": mismatched,
+                             "counters": acts["counters"]}
     with open(os.path.join(out, "frame_events.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump({**meta, "events": events}, f, indent=1, ensure_ascii=False)
     return meta, events

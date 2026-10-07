@@ -13,9 +13,11 @@ import argparse
 import os
 import sys
 
+from shaderopt import mali
 from shaderopt.profile import cores as core_presets
 from shaderopt.profile import measure, report
 
+MAIN_CORE = "Mali-G78"  # decision D-17
 REAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus", "real")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 
@@ -23,8 +25,15 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 def parse_cores(args):
     try:
         return core_presets.parse(args.core or args.cores)
-    except ValueError as e:
+    except (ValueError, mali.MaliocError) as e:
         sys.exit(str(e))
+
+
+def positive_int(v):
+    n = int(v)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, got {v}")
+    return n
 
 
 def make_report(folder, out, args):
@@ -34,7 +43,7 @@ def make_report(folder, out, args):
         top = [r for r in rows if r["stage"] == stage][:3]
         if top:
             print(f"top {stage}: " + "; ".join(f"{r['shader']} {r['pass']} {' '.join(r['keywords']) or '-'} "
-                                               f"[{r['api']}] {r['worst']['cycles']} cycles on {r['worst']['core']}" for r in top))
+                                               f"[{r['api']}] {r['main']['cycles']} cycles on {r['main']['core']}" for r in top))
     print(f"-> {os.path.abspath(os.path.join(out, 'report.html'))}")
     print(f"-> {os.path.abspath(os.path.join(out, 'report.csv'))}")
 
@@ -102,6 +111,12 @@ def cmd_frame(args):
     if meta.get("renderdoc"):
         r = meta["renderdoc"]
         print(f"renderdoc: {r['matched']} events matched, {r['missing']} without calls -> {r['capture']}")
+        if r.get("mismatched"):
+            print(f"  WARNING: {r['mismatched']} draws whose RenderDoc calls do not add up to the Frame Debugger index "
+                  "count (ev['rd']['count_mismatch']): the call order went astray, their counters may be another draw's")
+        lost = {"ps_invocations", "vs_invocations", "cs_invocations"} - set(r.get("counters") or [])
+        if lost:
+            print(f"  WARNING: the capture has no {', '.join(sorted(lost))}: those counts fall back to other sources")
     print(f"-> {os.path.join(out, 'frame_events.json')}")
     return 0
 
@@ -119,6 +134,15 @@ def cmd_cost(args):
         frame = json.load(f)
     events = frame["events"]
     cores = parse_cores(args)
+    if args.main_core and args.main_core not in cores:
+        sys.exit(f"--main-core {args.main_core} is not one of the cores: {', '.join(cores)}")
+    main_core = args.main_core or (MAIN_CORE if MAIN_CORE in cores else cores[0])
+    overrides = {}
+    for spec in args.loop_iters_shader or []:
+        name, _, n = spec.rpartition("=")
+        if not name or not n.isdigit():
+            sys.exit(f"--loop-iters-shader wants NAME=N, got {spec!r}")
+        overrides[name] = int(n)
     project = args.project or frame.get("project")
     root = args.variants or os.path.join(args.frame, "variants")
     platforms = ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"]
@@ -127,13 +151,6 @@ def cmd_cost(args):
                              recompile=args.recompile, retry_failed=args.retry_failed)
     except variants.VariantsError as e:
         sys.exit(f"variants failed: {e}")
-    main_core = args.main_core if args.main_core in cores else cores[0]
-    overrides = {}
-    for spec in args.loop_iters_shader or []:
-        name, _, n = spec.rpartition("=")
-        if not name or not n.isdigit():
-            sys.exit(f"--loop-iters-shader wants NAME=N, got {spec!r}")
-        overrides[name] = int(n)
     state["loops"] = loops.for_frame(state, root, cores, args.jobs)
     c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
                            loop_iters=args.loop_iters, loop_overrides=overrides)
@@ -224,13 +241,19 @@ def add_report_args(p):
 
 
 def add_core_args(p):
-    p.add_argument("--cores", default="Mali-G78",
-                   help="comma separated cores and/or presets; preset:mobile = " + ",".join(core_presets.PRESETS["mobile"]))
-    p.add_argument("--core", help="one core (same as --cores <core>)")
-    p.add_argument("--jobs", type=int, help="parallel malioc runs (default: CPU count)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--cores", default="Mali-G78",
+                   help="comma separated cores and/or presets; preset:mobile = " + ",".join(core_presets.PRESETS["mobile"])
+                        + " (default Mali-G78)")
+    g.add_argument("--core", help="one core (same as --cores <core>)")
+    p.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
 
 
 def main(argv=None):
+    # names of shaders and objects may have characters the console code page cannot print (cp1251 into a pipe)
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(prog="shaderopt")
     sub = ap.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("measure", help="measure every .vert / .frag (GLSL) and .vert.spv / .frag.spv "
@@ -282,11 +305,12 @@ def main(argv=None):
                                      "its editor must be open)")
     c.add_argument("--variants", help="folder of the compiled and measured variants (default: <frame>/variants; "
                                       "share one between frames of a project to compile less)")
-    c.add_argument("--cores", default="preset:mobile",
+    cg = c.add_mutually_exclusive_group()
+    cg.add_argument("--cores", default="preset:mobile",
                    help="comma separated cores and/or presets (default preset:mobile)")
-    c.add_argument("--core", help="one core (same as --cores <core>)")
-    c.add_argument("--main-core", default="Mali-G78",
-                   help="core shown first and printed (decision D-17, default Mali-G78)")
+    cg.add_argument("--core", help="one core (same as --cores <core>)")
+    c.add_argument("--main-core",
+                   help="core shown first and printed (decision D-17; default Mali-G78 if it is among the cores, else the first)")
     c.add_argument("--api", default="vulkan", choices=["vulkan", "gles"],
                    help="prices of this API (default vulkan: the Android API of the target project)")
     c.add_argument("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)")
@@ -300,7 +324,7 @@ def main(argv=None):
                         + ", ".join(map(str, frame_cost_defaults()[1])) + " (default %(default)s)")
     c.add_argument("--loop-iters-shader", action="append", metavar="NAME=N",
                    help="iterations for the shaders whose name contains NAME, e.g. Hidden/SSR=12 (repeatable)")
-    c.add_argument("--jobs", type=int, help="parallel malioc runs (default: CPU count)")
+    c.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
     c.add_argument("--out", help="output folder (default: the snapshot folder)")
     c.set_defaults(func=cmd_cost)
     args = ap.parse_args(argv)

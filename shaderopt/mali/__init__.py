@@ -14,6 +14,7 @@ Cache entries written by the old bench/run.py (v2) hold only the parsed main
 variant; they are still served to callers that need just that (run.py), and
 recompiled when the raw JSON is needed.
 """
+import atexit
 import glob
 import hashlib
 import json
@@ -21,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -59,9 +61,41 @@ class MaliocError(RuntimeError):
     pass
 
 
+def _run(cmd, env=None):
+    """Run malioc; output decoded as UTF-8 whatever the console code page. A missing malioc is a MaliocError."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    except OSError as e:
+        why = "not found" if isinstance(e, FileNotFoundError) else e
+        raise MaliocError(f"cannot run malioc ({cmd[0]}): {why}. Install Arm Performance Studio or set MALIOC") from None
+
+
+_tmp_dirs = []
+
+
+@atexit.register
+def _remove_tmp_dirs():
+    for d in _tmp_dirs:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _thread_tmp(tmp_root):
+    """(TEMP folder of this thread, environment for malioc). malioc writes intermediate files with fixed names to
+    %TEMP%/moc-temp, so every worker thread needs its own TEMP to run in parallel; the folders are made in the
+    system temp folder (or tmp_root) and removed at exit."""
+    dirs = _tls.__dict__.setdefault("dirs", {})
+    if tmp_root not in dirs:
+        if tmp_root:
+            os.makedirs(tmp_root, exist_ok=True)
+        d = tempfile.mkdtemp(prefix="shaderopt_malioc_", dir=tmp_root)
+        _tmp_dirs.append(d)
+        dirs[tmp_root] = (d, dict(os.environ, TEMP=d, TMP=d, TMPDIR=d))
+    return dirs[tmp_root]
+
+
 def list_cores(malioc=MALIOC):
     """[(core, architecture, [apis])] as reported by `malioc --list`."""
-    out = subprocess.run([malioc, "--list"], capture_output=True, text=True).stdout
+    out = _run([malioc, "--list"]).stdout
     cores, arch = [], None
     for line in out.splitlines():
         line = line.strip()
@@ -74,7 +108,7 @@ def list_cores(malioc=MALIOC):
 
 
 def version(malioc=MALIOC):
-    out = subprocess.run([malioc, "--version"], capture_output=True, text=True).stdout
+    out = _run([malioc, "--version"]).stdout
     for tok in out.split():
         if tok.startswith("v") and tok[1:2].isdigit():
             return tok[1:]
@@ -114,23 +148,16 @@ def _strip(o):
     return o
 
 
-def run_malioc(src, core, api, stage="fragment", malioc=MALIOC, tmp_root=CACHE):
+def run_malioc(src, core, api, stage="fragment", malioc=MALIOC, tmp_root=None):
     """Compile once, no cache. src: GLSL text or SPIR-V bytes. Returns malioc JSON; raises MaliocError."""
     spv = isinstance(src, bytes)
     if spv and api != "vulkan":
         raise MaliocError("SPIR-V input needs the Vulkan API (--api vulkan)")
-    if not hasattr(_tls, "tmp"):
-        # malioc writes intermediate SPIR-V to %TEMP%\moc-temp, so every
-        # worker thread needs its own TEMP dir to run in parallel.
-        _tls.tmp = os.path.join(tmp_root, f"tmp_{threading.get_ident()}")
-        os.makedirs(_tls.tmp, exist_ok=True)
-        _tls.env = dict(os.environ, TEMP=_tls.tmp, TMP=_tls.tmp)
-    fn = os.path.join(_tls.tmp, "shader" + EXT[stage] + (SPIRV_EXT if spv else ""))
-    with open(fn, "wb" if spv else "w") as f:
-        f.write(src)
-    r = subprocess.run([malioc, "--opengles" if api == "gles" else "--vulkan",
-                        "-c", core, "--format", "json", fn],
-                       capture_output=True, text=True, env=_tls.env)
+    tmp, env = _thread_tmp(tmp_root)
+    fn = os.path.join(tmp, "shader" + EXT[stage] + (SPIRV_EXT if spv else ""))
+    with open(fn, "wb") as f:
+        f.write(src if spv else src.encode("utf-8"))
+    r = _run([malioc, "--opengles" if api == "gles" else "--vulkan", "-c", core, "--format", "json", fn], env)
     try:
         j = json.loads(r.stdout)
     except Exception:
@@ -198,7 +225,7 @@ def _compile_locked(src, core, api, stage, malioc, cache, need_raw, cpath):
         res["cached"] = True
         return res
     try:
-        j = _strip(run_malioc(src, core, api, stage, malioc, cache))
+        j = _strip(run_malioc(src, core, api, stage, malioc))
     except MaliocError as e:
         return {"ok": False, "error": str(e)}
     res = {"v": CACHE_VERSION, "ok": True, **_legacy(j), "raw": j}
