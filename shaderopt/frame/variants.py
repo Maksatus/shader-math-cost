@@ -80,9 +80,10 @@ def folder_of(k, platform):
             + ("" if platform == "gles3" else f"_{platform}"))
 
 
-def load_manifests(root, fingerprints=None):
+def load_manifests(root, fingerprints=None, platforms=None):
     """{key: {(platform, stage): relative file}} of the variants already in the folder (entries whose file is gone
-    are skipped). fingerprints: a dict filled with {key: fingerprint the files were compiled with (None if unknown)}."""
+    are skipped). fingerprints: a dict filled with {key: fingerprint the files were compiled with (None if unknown)},
+    from the files of `platforms` only (files of a platform not compiled now keep an older fingerprint)."""
     have = {}
     if not os.path.isdir(root):
         return have
@@ -96,30 +97,36 @@ def load_manifests(root, fingerprints=None):
                     continue
                 k = (m["shader"], m["subshader"], m["pass_index"], m["pass"], tuple(m["keywords"]))
                 have.setdefault(k, {})[(m["platform"], SHORT[m["stage"]])] = f"{d}/{m['file']}"
-                if fingerprints is not None:
+                if fingerprints is not None and (platforms is None or m["platform"] in platforms):
                     fp = m.get("fingerprint")
                     fingerprints[k] = fp if fingerprints.get(k, fp) == fp else None
     return have
 
 
-def current_fingerprints(project, shaders, root, timeout=600):
-    """{shader name: fingerprint (None: not found)} from the open editor (ShaderoptVariants.Fingerprints)."""
-    raw = os.path.join(root, "_compiled")
+def shader_query(project, entry, shaders, root, timeout=600):
+    """{shader name: answer} of a ShaderoptVariants entry that takes {"shaders", "out"} (Fingerprints, Passes) in the
+    open editor."""
+    raw = os.path.join(os.path.abspath(root), "_compiled")  # Unity resolves relative paths from its project
     os.makedirs(raw, exist_ok=True)
-    config, out = os.path.join(raw, "fingerprints_config.json"), os.path.join(raw, "fingerprints.json")
+    config, out = os.path.join(raw, f"{entry.lower()}_config.json"), os.path.join(raw, f"{entry.lower()}.json")
     if os.path.exists(out):
         os.remove(out)
     with open(config, "w", encoding="utf-8") as f:
         json.dump({"shaders": sorted(set(shaders)), "out": out}, f, indent=1)
     d = unity._cli_json(["command", "run_script", "--project-path", project, "--timeout", str(timeout),
                          "--timeout_ms", str(timeout * 1000), "--file", os.path.abspath(SCRIPT),
-                         "--entry", "ShaderoptVariants.Fingerprints", "--args", json.dumps([config])], timeout + 60)
+                         "--entry", f"ShaderoptVariants.{entry}", "--args", json.dumps([config])], timeout + 60)
     res = (d.get("data") or {}).get("result") or {}
     if not d.get("success") or not res.get("success") or not str(res.get("result", "")).startswith("ok"):
         diag = "; ".join(x.get("message", "") for x in res.get("diagnostics") or [] if x.get("severity") == "error")
-        raise VariantsError(f"fingerprints: {res.get('result') or diag or res.get('errorDetails') or unity._errors(d)}"[:3000])
+        raise VariantsError(f"{entry}: {res.get('result') or diag or res.get('errorDetails') or unity._errors(d)}"[:3000])
     with open(out, encoding="utf-8") as f:
         return json.load(f)["shaders"]
+
+
+def current_fingerprints(project, shaders, root, timeout=600):
+    """{shader name: fingerprint (None: not found)} from the open editor (ShaderoptVariants.Fingerprints)."""
+    return shader_query(project, "Fingerprints", shaders, root, timeout)
 
 
 def compile_variants(project, keys, root, platforms, timeout=1800):
@@ -237,7 +244,7 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
     if recovered:
         progress(f"recovered {sum(1 for e in recovered.values() if not e)} variants of an unfinished Unity run")
     stored = {}
-    have = load_manifests(root, stored)
+    have = load_manifests(root, stored, platforms)
     index_path = os.path.join(root, "variants.json")
     index = {}  # every variant this folder has seen, of any frame: {key: entry}
     if os.path.exists(index_path):
@@ -278,7 +285,7 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
         progress(f"compiling {len(missing)} of {len(keys)} variants in Unity ...")
         errors.update(compile_variants(project, missing, root, platforms))
         stored = {}
-        have = load_manifests(root, stored)
+        have = load_manifests(root, stored, platforms)
     pending = set() if compile_missing else {k for k in missing if not complete(k)}
     if any(have.get(k) for k in keys):
         progress(f"measuring {root} on {', '.join(cores)} ...")

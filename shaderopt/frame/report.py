@@ -8,9 +8,80 @@ Registers, spilling and fp16 are hints under the name, not columns. One self-con
 import html
 import json
 
-from shaderopt.profile import report as variant_report
-
-STYLE = variant_report.TEMPLATE[variant_report.TEMPLATE.index("<style>"):variant_report.TEMPLATE.index("</style>")]
+STYLE = r"""<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #667080; --line: #e3e6ea;
+  --accent: #2f6fde; --chip: #eef1f5; --hover: #f0f4fb;
+  --cheap: #1f9d55; --medium: #c98a00; --heavy: #d0402b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
+    --accent: #6a9cff; --chip: #232932; --hover: #20262f;
+    --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
+  --accent: #6a9cff; --chip: #232932; --hover: #20262f;
+  --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header, main { max-width: 1800px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 18px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 22px 0 6px; }
+h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+.sub { color: var(--muted); margin: 0 0 4px; }
+details.help { color: var(--muted); font-size: 13px; margin: 6px 0; }
+details.help summary { cursor: pointer; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 12px 0 8px; }
+.group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.group > label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--text); padding: 5px 11px; cursor: pointer; font: inherit; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent); color: #fff; }
+input[type=search], select { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 9px; font: inherit; }
+input[type=search] { width: 220px; max-width: 100%; }
+.chipbtn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px;
+  padding: 3px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+.chipbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px;
+  padding: 5px 10px; cursor: pointer; font: inherit; }
+.wrap { overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; max-height: 75vh; }
+table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+thead th { position: sticky; top: 0; background: var(--panel); z-index: 2; font-weight: 600; font-size: 12px;
+  vertical-align: bottom; cursor: pointer; user-select: none; }
+thead th small { display: block; font-weight: 400; color: var(--muted); font-size: 10px; }
+thead th.sorted { color: var(--accent); }
+th.l, td.l { text-align: left; }
+td.name { position: sticky; left: 0; background: var(--panel); z-index: 1; max-width: 420px; white-space: normal; }
+thead th.name { left: 0; z-index: 3; }
+tbody tr:hover td { background: var(--hover); }
+.sh { font-weight: 600; }
+.pass { color: var(--muted); }
+.kw { display: inline-block; font-family: ui-monospace, Consolas, monospace; font-size: 11px; background: var(--chip);
+  border-radius: 4px; padding: 0 4px; margin: 1px 2px 1px 0; color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+td.big { font-weight: 700; }
+.bd { display: block; font-size: 10px; color: var(--muted); }
+.flag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin: 1px 2px; }
+.flag.regs_gt32, .flag.spilling { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 14%, transparent); }
+.flag.sfu_bound, .flag.low_fp16 { color: var(--medium); background: color-mix(in srgb, var(--medium) 14%, transparent); }
+.flag.dynamic_loop { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.file { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+.empty { color: var(--muted); padding: 14px; }
+.fail { color: var(--heavy); white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.gl { border-left: 2px solid var(--line); }
+"""
 
 
 def write(cost, path, title):
@@ -47,6 +118,13 @@ td.bar { min-width: 120px; }
 .hint .flag { font-size: 10px; padding: 0 5px; }
 .note { font-size: 11px; color: var(--medium); display: block; }
 .st { font-size: 11px; color: var(--muted); }
+.tabs { display: flex; gap: 4px; margin: 0 0 10px; border-bottom: 1px solid var(--line); }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer;
+               color: var(--muted); font: inherit; font-weight: 600; }
+.tabs button.on { color: var(--fg, inherit); border-bottom-color: var(--accent); }
+.mats summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+.mats div { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.hide { display: none !important; }
 </style>
 </head>
 <body>
@@ -77,10 +155,12 @@ td.bar { min-width: 120px; }
   </details>
 </header>
 <main>
+  <div class="tabs" id="tabs"></div>
   <div class="controls">
     <div class="group"><label>Ядро</label><div class="seg" id="core"></div></div>
     <div class="group"><label>Группировать</label><div class="seg" id="by"></div></div>
     <div class="group"><label>Поиск</label><input type="search" id="q" placeholder="объект, шейдер, keyword, RT"></div>
+    <div class="group project-only"><label>Показать</label><div class="seg" id="pfilter"></div></div>
     <div class="group"><button class="btn" id="all"></button></div>
   </div>
   <div class="stagebar" id="stagebar"></div>
@@ -88,6 +168,7 @@ td.bar { min-width: 120px; }
   <section id="loops"></section>
   <section id="main"></section>
   <section id="missing"></section>
+  <section id="project"></section>
 </main>
 <script type="application/json" id="data">__DATA__</script>
 <script>
@@ -99,7 +180,9 @@ const STAGE_NAMES = {post: "пост", opaque: "opaque", transparent: "transpare
 const STAGE_COLORS = {post: "#7a5cff", opaque: "#2f6fde", transparent: "#16a3a3", shadow: "#8a8f98", prepass: "#c98a00",
                       ui: "#d0402b", compute: "#1f9d55", other: "#999"};
 const BY = [["event", "события"], ["shader", "шейдер"], ["variant", "вариант"], ["object", "объект"], ["rt", "RT"]];
-const st = { core: D.main_core, by: "event", q: "", stage: "", all: false, sort: ["total", -1] };
+const st = { core: D.main_core, by: "event", q: "", stage: "", all: false, sort: ["total", -1],
+             tab: "frame", pf: "all", psort: ["px", -1] };
+const P = D.project_shaders;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const int = v => v == null ? "—" : Math.round(v).toLocaleString("ru-RU");
 const cyc = v => v == null ? "—" : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2);
@@ -269,7 +352,82 @@ function groupTable() {
   }
   return h + "</tbody></table></div>";
 }
+const tabs = document.getElementById("tabs");
+[["frame", "Кадр"], ["project", P ? `Шейдеры проекта · ${P.rows.length}` : ""]].forEach(([k, l]) => { if (!l) return;
+  const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
+  b.onclick = () => { st.tab = k; render(); }; tabs.appendChild(b); });
+if (!P) tabs.classList.add("hide");
+const pfSeg = document.getElementById("pfilter");
+[["all", "все"], ["frame", "в кадре"], ["notframe", "не в кадре"]].forEach(([k, l]) => {
+  const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
+  b.onclick = () => { st.pf = k; render(); }; pfSeg.appendChild(b); });
+
+function projectTable() {
+  const main = st.core;
+  let rows = P.rows.filter(r => {
+    const f = (r.in_frame || {})[main] || 0;
+    if (st.pf === "frame" && !r.frame_events) return false;
+    if (st.pf === "notframe" && r.frame_events) return false;
+    if (!st.q) return true;
+    return [r.shader, r.pass, r.keyword_sets.flat().join(" "), r.materials.join(" ")].join(" ").toLowerCase().includes(st.q);
+  });
+  const n = rows.length;
+  const get = (r, k) => { const p = r.prices[main] || {};
+    return k === "name" ? (r.shader + r.pass).toLowerCase() : k === "mats" ? r.materials.length
+      : k === "frame" ? ((r.in_frame || {})[main] || 0) : k === "px" ? (p.px_price ?? -1) : k === "vtx" ? (p.vtx_price ?? -1)
+      : k === "regs" ? (p.regs ?? -1) : k.startsWith("core:") ? ((r.prices[k.slice(5)] || {}).px_price ?? -1) : 0; };
+  const [sk, sd] = st.psort;
+  rows.sort((a, b) => { const x = get(a, sk), y = get(b, sk); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
+  const shown = st.all ? rows : rows.slice(0, TOP);
+  const pth = (k, label, cls = "", small = "") => `<th class="${cls} ${sk === k ? "sorted" : ""}" data-pk="${k}">${label}`
+    + `${sk === k ? (sd < 0 ? " ↓" : " ↑") : ""}${small ? `<small>${small}</small>` : ""}</th>`;
+  let h = `<h2>Шейдеры проекта <small>${shown.length} из ${n} · ${P.materials} материалов → ${P.variants} вариантов · ${short(main)} · `
+    + `один ряд — один скомпилированный шейдер (материалы с одинаковым кодом вместе)</small></h2>`;
+  h += `<div class="wrap"><table><thead><tr><th class="num">#</th>${pth("name", "Шейдер · пасс · keywords", "l")}`
+     + pth("mats", "Материалы") + pth("px", "Цена пикселя", "gl", short(main)) + pth("vtx", "Цена вершины")
+     + D.cores.filter(c => c.name !== main).map(c => pth("core:" + c.name, short(c.name), "", "пиксель")).join("")
+     + pth("regs", "Регистры", "gl") + pth("frame", "В кадре", "gl", "% кадра") + `</tr></thead><tbody>`;
+  shown.forEach((r, i) => {
+    const p = r.prices[main] || {}, f = (r.in_frame || {})[main];
+    const kw = r.keyword_sets[0] || [];
+    h += `<tr><td class="num">${i + 1}</td><td class="l" style="white-space:normal;max-width:380px"><span class="sh">${esc(r.shader)}</span> <span class="pass">· ${esc(r.pass)}</span><br>`
+       + (kw.length ? kw.map(k => `<span class="kw">${esc(k)}</span>`).join("") : '<span class="kw">без keywords</span>')
+       + (r.keyword_sets.length > 1 ? `<span class="hint">ещё ${r.keyword_sets.length - 1} наборов keywords с тем же кодом</span>` : "")
+       + `<span class="hint">${(p.flags || []).map(x => `<span class="flag ${x}">${x}</span>`).join(" ")}</span></td>`
+       + `<td class="l mats"><details><summary>${r.materials.length}</summary>${r.materials.map(m => `<div>${esc(m)}</div>`).join("")}</details></td>`
+       + `<td class="num gl">${cyc(p.px_price)}<span class="bd">${esc((p.px_bound || []).join("+"))}${pathNote(p.px_path)}</span></td>`
+       + `<td class="num">${cyc(p.vtx_price)}<span class="bd">${esc((p.vtx_bound || []).join("+"))}</span></td>`
+       + D.cores.filter(c => c.name !== main).map(c => `<td class="num">${cyc((r.prices[c.name] || {}).px_price)}</td>`).join("")
+       + `<td class="num gl">${p.regs ?? "—"}${p.fp16 != null ? `<span class="bd">fp16 ${p.fp16}%</span>` : ""}</td>`
+       + `<td class="num gl">${r.frame_events ? pc(f || 0) + `<span class="bd">${plural(r.frame_events, "событие", "события", "событий")}</span>` : "—"}</td></tr>`;
+  });
+  h += "</tbody></table></div>";
+  const list = (title, items, line) => items.length ? `<details style="margin-top:12px"><summary class="st">${title} · ${items.length}</summary>`
+    + `<div class="wrap"><table><tbody>${items.map(line).join("")}</tbody></table></div></details>` : "";
+  h += list("Варианты без цены (не скомпилированы: нужен открытый редактор)", P.unpriced, u =>
+    `<tr><td class="l">${esc(u.shader)} · ${esc(u.pass)}</td><td class="l">${u.keywords.map(esc).join(" ")}</td>`
+    + `<td class="num">${u.materials.length}</td><td class="l fail">${esc(u.reason)}</td></tr>`);
+  h += list("Материалы, которые не попали в таблицу", P.skipped, x =>
+    `<tr><td class="l">${esc(x.material)}</td><td class="l">${esc(x.shader || "")}</td><td class="l fail">${esc(x.reason)}</td></tr>`);
+  return h;
+}
+
 function render() {
+  tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.tab));
+  pfSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.pf));
+  const proj = st.tab === "project";
+  document.querySelectorAll(".project-only").forEach(el => el.classList.toggle("hide", !proj));
+  for (const id of ["stagebar", "stages", "loops", "main", "missing"]) document.getElementById(id).classList.toggle("hide", proj);
+  bySeg.closest(".group").classList.toggle("hide", proj);
+  document.getElementById("project").classList.toggle("hide", !proj);
+  if (proj) {
+    coreSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.core));
+    document.getElementById("all").textContent = st.all ? `Только топ-${TOP}` : "Показать все";
+    document.getElementById("project").innerHTML = projectTable();
+    document.querySelectorAll("thead th[data-pk]").forEach(el => el.onclick = () => {
+      const k = el.dataset.pk; st.psort = [k, st.psort[0] === k ? -st.psort[1] : (k === "name" ? 1 : -1)]; render(); });
+    return;
+  }
   coreSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.core));
   bySeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.by));
   document.getElementById("all").textContent = st.all ? `Только топ-${TOP}` : "Показать все";

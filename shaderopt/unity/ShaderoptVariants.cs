@@ -139,6 +139,58 @@ public static class ShaderoptVariants
         public string @out = "";
     }
 
+    // Passes entry: config {"shaders": [...], "out": "<file.json>"} -> {"shaders": {name: [{"subshader", "pass_index",
+    // "pass", "light_mode"}] or null}}: the passes of shaders no frame snapshot has drawn (the project shaders tab
+    // of the frame report picks their color passes by LightMode). Nothing is compiled.
+    public static string Passes(string configPath)
+    {
+        var cfg = JsonUtility.FromJson<FingerprintConfig>(File.ReadAllText(configPath));
+        var byName = new Dictionary<string, Shader>();
+        var items = new List<string>();
+        foreach (var name in cfg.shaders.Distinct())
+        {
+            var shader = Find(name, byName);
+            if (shader == null)
+            {
+                items.Add($"{Str(name)}: null");
+                continue;
+            }
+            var passes = new List<string>();
+            var data = ShaderUtil.GetShaderData(shader);
+            for (var s = 0; s < data.SubshaderCount; s++)
+            {
+                var sub = data.GetSubshader(s);
+                for (var p = 0; p < sub.PassCount; p++)
+                    passes.Add($"{{\"subshader\": {s}, \"pass_index\": {p}, \"pass\": {Str(sub.GetPass(p).Name)}, " +
+                               $"\"light_mode\": {Str(LightMode(shader, s, p))}}}");
+            }
+            items.Add($"{Str(name)}: [{string.Join(", ", passes)}]");
+        }
+        File.WriteAllText(cfg.@out, "{\"unity\": " + Str(Application.unityVersion) + ", \"shaders\": {\n " +
+                                    string.Join(",\n ", items) + "}}\n");
+        return "ok " + items.Count;
+    }
+
+    // Shader.FindPassTagValue(subshader, pass, "LightMode") through reflection (the 3-argument overload is not in
+    // every Unity version); null if there is none
+    static string LightMode(Shader shader, int subshader, int pass)
+    {
+        try
+        {
+            var m = typeof(Shader).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(x => x.Name == "FindPassTagValue" && x.GetParameters().Length == 3);
+            if (m == null)
+                return null;
+            var v = m.Invoke(shader, new object[] { subshader, pass, new UnityEngine.Rendering.ShaderTagId("LightMode") });
+            var name = v?.GetType().GetProperty("name")?.GetValue(v) as string;
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     public static string Fingerprints(string configPath)
     {
         var cfg = JsonUtility.FromJson<FingerprintConfig>(File.ReadAllText(configPath));

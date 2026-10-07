@@ -1,13 +1,13 @@
 """shaderopt command line.
 
   python -m shaderopt measure <folder> [--cores preset:mobile|Mali-G78,...] [--api gles] [--out DIR]
-                              [--top 20] [--fp16-threshold 25] [--no-report] [--jobs N]
-  python -m shaderopt report <folder with measurements.jsonl> [--out DIR] [--top 20]
+                              [--fp16-threshold 25] [--no-report] [--jobs N]
+  python -m shaderopt report <folder with measurements.jsonl> [--out DIR]
   python -m shaderopt export --project <Unity project> <shader> [...] [--out DIR] [--platforms gles3,vulkan]
                              [--mode auto|editor|batch] [--measure] [--cores ...]
   python -m shaderopt cost <frame folder> [--project <Unity>] [--cores preset:mobile]
                            [--main-core Mali-G78] [--api vulkan|gles] [--variants DIR] [--no-compile]
-                           [--recompile] [--retry-failed] [--loop-iters 2] [--loop-iters-shader NAME=N ...]
+                           [--recompile] [--retry-failed] [--loop-iters 2] [--loop-iters-shader NAME=N ...] [--materials]
 """
 import argparse
 import os
@@ -37,14 +37,13 @@ def positive_int(v):
 
 
 def make_report(folder, out, args):
-    rows, cores, _ = report.run(folder, out, args.top, args.fp16_threshold)
+    rows, cores, _ = report.run(folder, out, args.fp16_threshold)
     out = out or folder
     for stage in ("fragment", "vertex"):
         top = [r for r in rows if r["stage"] == stage][:3]
         if top:
             print(f"top {stage}: " + "; ".join(f"{r['shader']} {r['pass']} {' '.join(r['keywords']) or '-'} "
                                                f"[{r['api']}] {r['main']['cycles']} cycles on {r['main']['core']}" for r in top))
-    print(f"-> {os.path.abspath(os.path.join(out, 'report.html'))}")
     print(f"-> {os.path.abspath(os.path.join(out, 'report.csv'))}")
 
 
@@ -127,6 +126,7 @@ def cmd_cost(args):
     from shaderopt.frame import loops
     from shaderopt.frame import report as frame_report
     from shaderopt.frame import variants
+    from shaderopt.project import shaders
     path = os.path.join(args.frame, "frame_events.json")
     if not os.path.exists(path):
         sys.exit(f"no frame_events.json in {args.frame}: run `frame` first")
@@ -146,8 +146,14 @@ def cmd_cost(args):
     project = args.project or frame.get("project")
     root = args.variants or os.path.join(args.frame, "variants")
     platforms = ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"]
+    mat_keys = None
+    if args.materials:
+        if not project or not os.path.isdir(project):
+            sys.exit(f"--materials needs the Unity project (--project), got {project}")
+        mat_keys, mat_skipped = project_variants(project, events, args, root)
     try:
-        state = variants.run(events, project, root, cores, platforms, args.jobs, compile_missing=not args.no_compile,
+        state = variants.run(events + (shaders.pseudo_events(mat_keys) if mat_keys else []), project, root, cores,
+                             platforms, args.jobs, compile_missing=not args.no_compile,
                              recompile=args.recompile, retry_failed=args.retry_failed)
     except variants.VariantsError as e:
         sys.exit(f"variants failed: {e}")
@@ -155,6 +161,8 @@ def cmd_cost(args):
     c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
                            loop_iters=args.loop_iters, loop_overrides=overrides)
     c["variants_checked"] = state["checked"]
+    if mat_keys is not None:
+        c["project_shaders"] = shaders.rows(mat_keys, mat_skipped, state, c, args.api, args.loop_iters, overrides)
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
     c["malioc"] = ", ".join(sorted({r["malioc"] for r in recs}))
     c["frame_dir"] = os.path.abspath(args.frame)
@@ -196,9 +204,44 @@ def cmd_cost(args):
               "after a shader change run with the editor open")
     for m in c["missing"]:
         print(f"  no price: #{m['index'] + 1} {m['stage']} {m['shader'] or ''} {m['pass'] or ''}: {m['reason']}")
+    ps = c.get("project_shaders")
+    if ps:
+        print(f"project shaders: {ps['materials']} materials -> {ps['variants']} variants -> {len(ps['rows'])} distinct "
+              f"compiled shaders; {len(ps['unpriced'])} variants without a price, {len(ps['skipped'])} materials skipped")
+        why = {}
+        for x in ps["skipped"]:
+            why[x["reason"].split(" (")[0]] = why.get(x["reason"].split(" (")[0], 0) + 1
+        for r, n in sorted(why.items(), key=lambda kv: -kv[1]):
+            print(f"  skipped {n}: {r}")
     for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json"):
         print(f"-> {os.path.abspath(os.path.join(out, name))}")
     return 0
+
+
+def project_variants(project, events, args, root):
+    """Variants of the project's materials (project/shaders.py): passes and global keywords from every snapshot of
+    the project (this one, its sibling folders and shaderopt/out), the shaders' passes from the open editor."""
+    from shaderopt.frame import variants
+    from shaderopt.project import materials, shaders
+    mats = materials.scan(project)
+    folders = [os.path.dirname(os.path.abspath(args.frame)), OUT]
+    snaps = [events] + shaders.snapshots_of(project, folders)
+    info = shaders.snapshot_info(snaps)
+    names = shaders.material_shaders(mats)
+    editor = None
+    if names and not args.no_compile:
+        from shaderopt.unity import export as unity
+        if unity.editor_ready(project, allow_play=True):
+            try:
+                editor = variants.shader_query(project, "Passes", names, root)
+            except variants.VariantsError as e:
+                print(f"passes of the materials' shaders: {e}")
+    if editor is None:
+        print("passes of the materials' shaders are taken from the snapshots only "
+              + ("(--no-compile)" if args.no_compile else "(the editor does not answer Unity CLI)"))
+    keys, skipped = shaders.plan(mats, info, editor)
+    print(f"materials: {len(mats)} in {project}, {len(snaps)} snapshots -> {len(keys)} variants")
+    return keys, skipped
 
 
 def cmd_export(args):
@@ -236,7 +279,6 @@ def frame_cost_defaults():
 
 
 def add_report_args(p):
-    p.add_argument("--top", type=int, default=20, help="rows per table in report.html (default 20)")
     p.add_argument("--fp16-threshold", type=float, default=25, help="low_fp16 flag below this percent (default 25)")
 
 
@@ -263,11 +305,11 @@ def main(argv=None):
     m.add_argument("--api", default="gles", choices=["gles", "vulkan"],
                    help="API for GLSL files (SPIR-V is always vulkan)")
     m.add_argument("--out", help="output folder (default: the measured folder)")
-    m.add_argument("--no-report", action="store_true", help="skip report.html / report.csv")
+    m.add_argument("--no-report", action="store_true", help="skip report.csv")
     add_report_args(m)
     m.set_defaults(func=cmd_measure)
 
-    r = sub.add_parser("report", help="report.html + report.csv from measurements.jsonl")
+    r = sub.add_parser("report", help="report.csv (variants ranked on the main core) from measurements.jsonl")
     r.add_argument("folder")
     r.add_argument("--out", help="output folder (default: the folder)")
     add_report_args(r)
@@ -316,6 +358,10 @@ def main(argv=None):
     c.add_argument("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)")
     c.add_argument("--no-compile", action="store_true",
                    help="use only the variants already in the folder (not checked against the shaders)")
+    c.add_argument("--materials", action="store_true",
+                   help="also price the shader variants of every material of the project (the \"project shaders\" "
+                        "tab): passes and global keywords from the project's snapshots, other shaders' passes from "
+                        "the open editor")
     c.add_argument("--recompile", action="store_true", help="compile every variant of the frame again")
     c.add_argument("--retry-failed", action="store_true", help="compile again the variants that failed before")
     c.add_argument("--loop-iters", type=int, default=frame_cost_defaults()[0],

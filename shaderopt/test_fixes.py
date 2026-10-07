@@ -159,11 +159,6 @@ class ReportTest(unittest.TestCase):
         self.assertEqual([(r["file"], r["main"]["core"], r["rank"]) for r in rows],
                          [("b.frag", "Mali-G78", 1), ("c.frag.spv", "Mali-G78", 1), ("a.frag", "Mali-G78", 2)])
 
-    def test_href_on_another_drive(self):
-        if os.name != "nt":
-            self.skipTest("drive letters are Windows only")
-        self.assertEqual(report.href("D:/shaders/a.frag", "C:/out"), "file:///D:/shaders/a.frag")
-        self.assertEqual(report.href("D:/shaders/a.frag", "D:/out"), "../shaders/a.frag")
 
 
 if __name__ == "__main__":
