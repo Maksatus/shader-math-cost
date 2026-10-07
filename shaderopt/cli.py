@@ -5,8 +5,9 @@
   python -m shaderopt report <folder with measurements.jsonl> [--out DIR] [--top 20]
   python -m shaderopt export --project <Unity project> <shader> [...] [--out DIR] [--platforms gles3,vulkan]
                              [--mode auto|editor|batch] [--measure] [--cores ...]
-  python -m shaderopt cost <frame folder> [--project <Unity>] [--frustum <folder>] [--cores preset:mobile]
+  python -m shaderopt cost <frame folder> [--project <Unity>] [--cores preset:mobile]
                            [--main-core Mali-G78] [--api vulkan|gles] [--variants DIR] [--no-compile]
+                           [--recompile] [--retry-failed] [--loop-iters 2] [--loop-iters-shader NAME=N ...]
 """
 import argparse
 import os
@@ -105,30 +106,10 @@ def cmd_frame(args):
     return 0
 
 
-def cmd_frustum(args):
-    import time
-    from shaderopt.frame import frustum
-    name = os.path.basename(os.path.abspath(args.project))
-    out = args.out or os.path.join(OUT, f"frustum_{name}_{time.strftime('%Y%m%d_%H%M%S')}")
-    try:
-        d = frustum.run(args.project, out, args.camera)
-    except frustum.FrustumError as e:
-        sys.exit(f"frustum failed: {e}")
-    items, screen = d["items"], d["width"] * d["height"]
-    print(f"camera {d['camera']} {d['width']}x{d['height']} ({'play' if d['play_mode'] else 'edit'} mode): "
-          f"{len(items)} renderer x material in the frustum, {sum(i['rendered'] for i in items)} drawn by Unity")
-    for label, sel in (("opaque", [i for i in items if i["opaque"]]), ("transparent", [i for i in items if not i["opaque"]])):
-        print(f"{label:12s} {len(sel):4d}  raster {sum(i['raster_px'] for i in sel) / screen:5.2f} screens, "
-              f"visible {sum(i['visible_px'] for i in sel) / screen:5.2f} screens")
-    print("top raster: " + "; ".join(f"{i['mesh'] or i['renderer'].split('/')[-1]} ({i['shader']}) {i['raster_px']:,}"
-                                      for i in sorted(items, key=lambda x: -x["raster_px"])[:5]))
-    print(f"-> {os.path.join(out, 'frustum.json')}")
-    return 0
-
-
 def cmd_cost(args):
     import json
     from shaderopt.frame import cost as frame_cost
+    from shaderopt.frame import loops
     from shaderopt.frame import report as frame_report
     from shaderopt.frame import variants
     path = os.path.join(args.frame, "frame_events.json")
@@ -137,29 +118,29 @@ def cmd_cost(args):
     with open(path, encoding="utf-8") as f:
         frame = json.load(f)
     events = frame["events"]
-    fr_path = args.frustum or os.path.join(args.frame, "frustum.json")
-    if os.path.isdir(fr_path):
-        fr_path = os.path.join(fr_path, "frustum.json")
-    frustum = None
-    if os.path.exists(fr_path):
-        with open(fr_path, encoding="utf-8") as f:
-            frustum = json.load(f)
-    elif args.frustum:
-        sys.exit(f"no frustum.json at {args.frustum}")
     cores = parse_cores(args)
     project = args.project or frame.get("project")
     root = args.variants or os.path.join(args.frame, "variants")
     platforms = ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"]
     try:
-        state = variants.run(events, project, root, cores, platforms, args.jobs, compile_missing=not args.no_compile)
+        state = variants.run(events, project, root, cores, platforms, args.jobs, compile_missing=not args.no_compile,
+                             recompile=args.recompile, retry_failed=args.retry_failed)
     except variants.VariantsError as e:
         sys.exit(f"variants failed: {e}")
     main_core = args.main_core if args.main_core in cores else cores[0]
-    c = frame_cost.compute(frame, events, state, frustum, args.api, cores, main_core)
+    overrides = {}
+    for spec in args.loop_iters_shader or []:
+        name, _, n = spec.rpartition("=")
+        if not name or not n.isdigit():
+            sys.exit(f"--loop-iters-shader wants NAME=N, got {spec!r}")
+        overrides[name] = int(n)
+    state["loops"] = loops.for_frame(state, root, cores, args.jobs)
+    c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
+                           loop_iters=args.loop_iters, loop_overrides=overrides)
+    c["variants_checked"] = state["checked"]
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
     c["malioc"] = ", ".join(sorted({r["malioc"] for r in recs}))
     c["frame_dir"] = os.path.abspath(args.frame)
-    c["frustum"] = os.path.abspath(fr_path) if frustum else None
     c["variants_dir"] = os.path.abspath(root)
     out = args.out or args.frame
     os.makedirs(out, exist_ok=True)
@@ -171,8 +152,7 @@ def cmd_cost(args):
     print(f"{cov['draws_priced']} of {cov['draws']} draws and {cov['events_priced'] - cov['draws_priced']} of "
           f"{cov['events'] - cov['draws']} dispatches priced, {len(state['keys'])} variants, {args.api}; pixels: "
           + ", ".join(f"{k} {v}" for k, v in c["pixel_methods"].items())
-          + "; vertices: " + ", ".join(f"{k} {v}" for k, v in c["vertex_methods"].items())
-          + (f"; frustum {fr_path}" if frustum else ""))
+          + "; vertices: " + ", ".join(f"{k} {v}" for k, v in c["vertex_methods"].items()))
     if t:
         mc = c["main_core"]
         print(f"{mc}: {t['total'] / 1e6:.1f} M cycles (pixels {100 * t['fragment'] / t['total']:.0f}%, "
@@ -184,6 +164,19 @@ def cmd_cost(args):
                     f"px {r['pixels']:>10,} x {x['px_price']:6.2f}  vtx {r['vertices']:>8,} x {x['vtx_price']:5.2f}")
             print(f"  {100 * x['share']:5.1f}%  #{r['index'] + 1:<4} {r['stage']:11s} {r['object'][:38]:38s} "
                   f"{(r['shader'] or '')[:34]:34s} {work}")
+        lp = c["loops"]
+        if lp["events"]:
+            by_n = lp["by_n"][mc]
+            print(f"dynamic loops (lights, probes, ray steps) in {lp['events']} events, priced at n = {lp['n']} "
+                  f"iterations" + (f", {', '.join(f'{k}={v}' for k, v in lp['overrides'].items())}" if lp["overrides"] else "")
+                  + "; frame at n = " + ", ".join(
+                      f"{n}: {v['total'] / 1e6:.0f} M ({100 * v['loop_share']:.0f}% in loops)" for n, v in by_n.items()))
+            top = sorted({k for v in by_n.values() for k in list(v["stages"])[:3]})
+            print("  stages by n: " + "; ".join(
+                f"{s} " + "/".join(f"{100 * v['stages'].get(s, 0):.0f}" for v in by_n.values()) + "%" for s in top))
+    if not state["checked"]:
+        print("  compiled variants were NOT checked against the shaders (no editor or --no-compile): "
+              "after a shader change run with the editor open")
     for m in c["missing"]:
         print(f"  no price: #{m['index'] + 1} {m['stage']} {m['shader'] or ''} {m['pass'] or ''}: {m['reason']}")
     for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json"):
@@ -218,6 +211,11 @@ def cmd_export(args):
         bad += measure_folder(out, cores, "gles", jobs=args.jobs) or 0
         make_report(out, None, args)
     return 1 if bad else 0
+
+
+def frame_cost_defaults():
+    from shaderopt.frame import cost as frame_cost
+    return frame_cost.LOOP_ITERS, frame_cost.LOOP_NS
 
 
 def add_report_args(p):
@@ -277,20 +275,11 @@ def main(argv=None):
                         "and take the pixels of every event from its PSInvocations")
     f.set_defaults(func=cmd_frame)
 
-    fr = sub.add_parser("frustum", help="screen coverage of every renderer the game camera draws "
-                                        "(raster with overdraw, and visible), in the open editor")
-    fr.add_argument("--project", required=True, help="Unity project folder (its editor must be open)")
-    fr.add_argument("--out", help="output folder (default: shaderopt/out/frustum_<project>_<time>, not in git)")
-    fr.add_argument("--camera", default="", help="camera name (default: Camera.main)")
-    fr.set_defaults(func=cmd_frustum)
-
     c = sub.add_parser("cost", help="cost of a frame snapshot: every event's shader variant measured with malioc, "
                                     "pixels x pixel price + vertices x vertex price, frame_report.html")
     c.add_argument("frame", help="snapshot folder with frame_events.json (from `frame`)")
     c.add_argument("--project", help="Unity project to compile missing variants in (default: the snapshot's; "
                                      "its editor must be open)")
-    c.add_argument("--frustum", help="frustum.json or its folder (from `frustum`), refines pixels without RenderDoc "
-                                     "(default: <frame>/frustum.json if present)")
     c.add_argument("--variants", help="folder of the compiled and measured variants (default: <frame>/variants; "
                                       "share one between frames of a project to compile less)")
     c.add_argument("--cores", default="preset:mobile",
@@ -301,7 +290,16 @@ def main(argv=None):
     c.add_argument("--api", default="vulkan", choices=["vulkan", "gles"],
                    help="prices of this API (default vulkan: the Android API of the target project)")
     c.add_argument("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)")
-    c.add_argument("--no-compile", action="store_true", help="use only the variants already in the folder")
+    c.add_argument("--no-compile", action="store_true",
+                   help="use only the variants already in the folder (not checked against the shaders)")
+    c.add_argument("--recompile", action="store_true", help="compile every variant of the frame again")
+    c.add_argument("--retry-failed", action="store_true", help="compile again the variants that failed before")
+    c.add_argument("--loop-iters", type=int, default=frame_cost_defaults()[0],
+                   help="iterations of every dynamic loop (lights and probes per pixel, ray steps) of the shaders "
+                        "whose longest path is N/A; the report also shows the frame at n = "
+                        + ", ".join(map(str, frame_cost_defaults()[1])) + " (default %(default)s)")
+    c.add_argument("--loop-iters-shader", action="append", metavar="NAME=N",
+                   help="iterations for the shaders whose name contains NAME, e.g. Hidden/SSR=12 (repeatable)")
     c.add_argument("--jobs", type=int, help="parallel malioc runs (default: CPU count)")
     c.add_argument("--out", help="output folder (default: the snapshot folder)")
     c.set_defaults(func=cmd_cost)

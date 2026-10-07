@@ -1,19 +1,26 @@
 """Heaviness of a shader on one core (plan item A1.5, decision D-05).
 
 score = cycles of the bottleneck pipe on the longest path (malioc cycles of that core:
-compare cores of one generation; across generations the pipes differ in width); when malioc reports the
-longest path as N/A (dynamic loops, e.g. the URP additional lights loop) the total
-cycles are used instead (about one loop iteration) and the shader gets the
-"dynamic_loop" flag. Vertex shaders (IDVS) count Position + Varying.
+compare cores of one class; across classes the pipes differ in width). The arithmetic pipe is malioc's
+arith_total ("A"), not the busiest of FMA / CVT / SFU: on Mali-G57..G78 A = max(FMA, CVT, SFU), but on G610 / G710
+the three share issue (A ≈ FMA + CVT + SFU/4) and on G715 / G720 A lies between the maximum and the sum.
+The bound is named by the sub-pipe(s) equal to A when there are any, else "arith".
+
+When malioc reports the longest path as N/A (dynamic loops, e.g. the URP / Forward+ light loops), the price of a
+frame comes from frame/loops.py (the loops forced to n iterations); without it the fallback is the total cycles
+(every instruction once: both sides of every branch, every loop body once — neither a lower nor an upper bound),
+raised per pipe to the shortest path where that is larger (total counts spill traffic once), and the shader gets
+the "dynamic_loop" flag. Vertex shaders (IDVS) count Position + Varying.
 
 Flags:
   regs_gt32    more than 32 work registers in some variant: half thread occupancy
   spilling     registers spilled to the stack
   low_fp16     16-bit arithmetic below the threshold (default 25 %)
   sfu_bound    the bottleneck is the SFU pipe (transcendentals, divisions, integer ops)
-  dynamic_loop longest path is N/A, the score is the total cycles
+  dynamic_loop longest path is N/A, the score is the total cycles (or the forced-loop price, see frame/loops.py)
 """
 PIPES = ("fma", "cvt", "sfu", "ls", "v", "t", "arith")
+ARITH_SUB = ("fma", "cvt", "sfu")
 FP16_THRESHOLD = 25
 FLAGS = ("regs_gt32", "spilling", "low_fp16", "sfu_bound", "dynamic_loop")
 
@@ -39,21 +46,40 @@ def combined(rec):
 
 
 def bottleneck(c):
-    """(cycles, [bound pipes]) of a cycles dict; Bifrost reports only 'arith'."""
+    """(cycles, [bound pipes]) of a cycles dict. Bifrost reports only 'arith'; on Valhall and later 'arith' is
+    malioc's arithmetic total and fma / cvt / sfu are its breakdown."""
     vals = {p: c[p] for p in PIPES if c.get(p) is not None}
-    # 'arith' is the busiest of fma/cvt/sfu on Valhall and later: name the real pipe
-    # (and ignore it, a Position + Varying sum of maxima can exceed every pipe sum)
-    if "fma" in vals:
-        vals.pop("arith", None)
+    sub = {p: vals.pop(p) for p in ARITH_SUB if p in vals}
+    if "arith" not in vals and sub:
+        vals["arith"] = max(sub.values())
+    if not vals:
+        return 0.0, []
     top = max(vals.values())
-    return top, [p for p, v in vals.items() if v >= top - 1e-9]
+    bound = [p for p, v in vals.items() if v >= top - 1e-9]
+    if "arith" in bound and sub:
+        named = [p for p, v in sub.items() if v >= vals["arith"] - 1e-9]
+        if named:
+            i = bound.index("arith")
+            bound[i:i + 1] = named
+    return top, bound
 
 
-def score(rec, fp16_threshold=FP16_THRESHOLD):
-    """Heaviness of one measured record (one file on one core)."""
-    c = combined(rec)
-    path = "longest" if c["longest"] is not None else "total"
-    cyc, bound = bottleneck(c[path])
+def fallback(c):
+    """Cycles used when the longest path is N/A: total, raised per pipe to the shortest path."""
+    t, s = c["total"] or {}, c["shortest"] or {}
+    return {p: max(t.get(p) or 0, s.get(p) or 0) for p in set(t) | set(s)}
+
+
+def score(rec, fp16_threshold=FP16_THRESHOLD, cycles=None, path=None):
+    """Heaviness of one measured record (one file on one core). cycles / path: a price computed elsewhere
+    (frame/loops.py: dynamic loops forced to n iterations), used instead of the record's own path."""
+    if cycles is None:
+        c = combined(rec)
+        if c["longest"] is not None:
+            cycles, path = c["longest"], "longest"
+        else:
+            cycles, path = fallback(c), "total"
+    cyc, bound = bottleneck(cycles)
     vs = rec["variants"].values()
     fp16 = [v["fp16_pct"] for v in vs if v["fp16_pct"] is not None]
     flags = {
@@ -61,7 +87,7 @@ def score(rec, fp16_threshold=FP16_THRESHOLD):
         "spilling": any(v["spilling"] for v in vs),
         "low_fp16": bool(fp16) and min(fp16) < fp16_threshold,
         "sfu_bound": "sfu" in bound,
-        "dynamic_loop": path == "total",
+        "dynamic_loop": combined(rec)["longest"] is None,
     }
     return {
         "cycles": round(cyc, 4), "path": path, "bound": bound,

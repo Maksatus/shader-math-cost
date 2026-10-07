@@ -28,6 +28,7 @@ from functions import FUNCS, HLSL_EXPR, glsl_type, glsl_expr, hlsl_type, prelude
 from shaderopt import mali
 
 MALIOC_NEW = mali.MALIOC
+MALIOC_VERSION = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"
 
 PAIRS = [(8, 24), (8, 16), (4, 8)]  # chain lengths (N1, N2), tried in order
 VARIANTS = [  # name, precision, vector size
@@ -192,7 +193,7 @@ def main():
         rows.append({
             "api": "GLES" if p["api"] == "gles" else "Vulkan",
             "gpu": p["core"], "arch": p["arch"],
-            "malioc": "2026.5",
+            "malioc": MALIOC_VERSION,
             "variant": p["variant"], "type": hlsl_type(p["prec"], p["t"]),
             "category": p["category"], "func": p["fid"], "hlsl": p["hlsl"],
             "hlsl_expr": HLSL_EXPR[p["fid"]] or "— (нет в HLSL)",

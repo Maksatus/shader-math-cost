@@ -77,6 +77,10 @@ def main():
     ap.add_argument("--api", default=exp["api"])
     args = ap.parse_args()
 
+    installed = mali.version()
+    if installed != exp["malioc"]:
+        sys.exit(f"expected.json was made with malioc {exp['malioc']}, installed is {installed} ({mali.MALIOC}): "
+                 "check the new numbers and regenerate it with python -m shaderopt.corpus.gen_synthetic")
     fails = 0
     recs = {}
     for name in exp["shaders"]:

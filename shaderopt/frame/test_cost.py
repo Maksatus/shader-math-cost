@@ -87,17 +87,14 @@ class CostTest(unittest.TestCase):
 
 class PixelsTest(unittest.TestCase):
     def test_source_priority(self):
-        item = {"shader": "S", "mesh": "m", "keywords": [], "rendered": True, "alpha_clip": False,
-                "raster_px": 900, "visible_px": 300}
         evs = [event(0, "opaque", "S", 500, "diff", meshes=["m"], rd={"ps_invocations": 777}),
                event(1, "opaque", "S", 500, "diff", meshes=["m"]),
                event(2, "transparent", "T", 50, "diff", meshes=["t"]),
                event(3, "post", "F", 10, "fullscreen")]
-        items = [dict(item), dict(item), dict(item, shader="T", mesh="t", raster_px=400, visible_px=380)]
-        p = pixels.resolve(evs, {"items": items})
+        p = pixels.resolve(evs)
         self.assertEqual((p[0]["pixels"], p[0]["method"]), (777, "renderdoc"))
-        self.assertEqual((p[1]["pixels"], p[1]["method"], p[1]["low"]), (900, "frustum", 500))
-        self.assertEqual((p[2]["pixels"], p[2]["method"], p[2]["high"]), (50, "diff", 400))
+        self.assertEqual((p[1]["pixels"], p[1]["method"]), (500, "diff"))
+        self.assertEqual((p[2]["pixels"], p[2]["method"]), (50, "diff"))
         self.assertEqual((p[3]["pixels"], p[3]["method"]), (100 * 100, "fullscreen"))
 
 

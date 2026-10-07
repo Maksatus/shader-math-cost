@@ -201,7 +201,9 @@ a:hover { text-decoration: underline; }
     <span class="flag spilling">spilling</span> регистры ушли в память;
     <span class="flag low_fp16">low_fp16</span> доля 16-битной арифметики ниже порога;
     <span class="flag sfu_bound">sfu_bound</span> упирается в SFU (трансцендентные функции, деления);
-    <span class="flag dynamic_loop">dynamic_loop</span> longest path = N/A (цикл с длиной из uniform), взята цена total ≈ одна итерация цикла.</p>
+    <span class="flag dynamic_loop">dynamic_loop</span> longest path = N/A (цикл с длиной из uniform): взята цена total (каждая инструкция один раз — обе ветки
+    каждого if, тело каждого цикла один раз; не верхняя и не нижняя граница), по конвейеру не ниже shortest. В отчёте кадра
+    (<code>cost</code>) такие шейдеры считаются с циклами, принудительно выполненными n раз.</p>
     <p>Это статическая оценка malioc для одного драйвера, без состояния пайплайна и значений uniform.</p>
   </details>
 </header>

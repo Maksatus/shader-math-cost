@@ -41,7 +41,7 @@ td.bar { min-width: 120px; }
 .pct { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .pct i { display: inline-block; height: 8px; background: var(--heavy); border-radius: 2px; opacity: .75; }
 .m { display: inline-block; font-size: 10px; border-radius: 4px; padding: 0 4px; margin-left: 4px; background: var(--chip); color: var(--muted); }
-.m.renderdoc { color: var(--cheap); } .m.frustum, .m.diff { color: var(--medium); } .m.none { color: var(--heavy); }
+.m.renderdoc { color: var(--cheap); } .m.diff { color: var(--medium); } .m.none { color: var(--heavy); }
 .hint { display: block; font-size: 11px; color: var(--muted); }
 .hint .flag { font-size: 10px; padding: 0 5px; }
 .note { font-size: 11px; color: var(--medium); display: block; }
@@ -55,12 +55,16 @@ td.bar { min-width: 120px; }
   <details class="help"><summary>Как читать</summary>
     <p><b>Итог</b> события = пиксели × цена пикселя + вершины × цена вершины, в циклах malioc выбранного ядра (млн).
     <b>Цена</b> — циклы самого загруженного конвейера варианта шейдера (тот же вариант, что рисовал в кадре: шейдер, пасс, keywords),
-    на longest path; если longest = N/A (цикл по источникам света) — total ≈ одна итерация. Под ценой — узкий конвейер
-    (fma, cvt, sfu — арифметика; ls — load/store; v — varying; t — текстуры). Цена вершины — Position + Varying для каждой вершины
+    на longest path. Под ценой — узкий конвейер (arith — арифметика целиком, или fma / cvt / sfu, если упирается в один из них;
+    ls — load/store; v — varying; t — текстуры).</p>
+    <p><b>Циклы</b> (свет и пробы на пиксель, шаги луча): у шейдера с динамическим циклом malioc не знает число итераций.
+    Такой шейдер меряется с циклами, принудительно выполненными n раз (вложенные — по одному разу), и цена помечена
+    «· цикл n=…». n задаётся при расчёте (<code>--loop-iters</code>, для отдельных шейдеров <code>--loop-iters-shader</code>);
+    таблица «Кадр при n итераций» показывает, как от n зависят итог и доли этапов — выводы, которые меняются с n, без замера n
+    не делать. Цена вершины — Position + Varying для каждой вершины
     (Varying на Mali считается только для видимых, так что вершинная часть — верхняя граница).</p>
     <p><b>Пиксели</b> — сколько раз выполнился пиксельный шейдер. Источник: <span class="m renderdoc">renderdoc</span> PSInvocations (эталон);
-    <span class="m fullscreen">fullscreen</span> площадь RT для полноэкранного прохода; <span class="m frustum">frustum</span> оценка
-    по растру объектов (без RenderDoc; альфа-тест занижен); <span class="m diff">diff</span> изменившиеся пиксели RT (запасной вариант).
+    <span class="m fullscreen">fullscreen</span> площадь RT для полноэкранного прохода (без RenderDoc); <span class="m diff">diff</span> изменившиеся пиксели RT (запасной вариант).
     Кадр отрисован на GPU ПК: отбраковка закрытых фрагментов на Mali (early-ZS, FPK) сильнее, овердро opaque на устройстве меньше.</p>
     <p><b>Вершины</b> — <span class="m renderdoc">renderdoc</span> VSInvocations (реальные запуски вертексного шейдера, с кэшем вершин)
     или <span class="m mesh">mesh</span> число вершин из Frame Debugger. <b>Compute</b> — потоки × цена потока ядра:
@@ -80,6 +84,7 @@ td.bar { min-width: 120px; }
   </div>
   <div class="stagebar" id="stagebar"></div>
   <div class="stages" id="stages"></div>
+  <section id="loops"></section>
   <section id="main"></section>
   <section id="missing"></section>
 </main>
@@ -109,7 +114,7 @@ document.title = document.getElementById("title").textContent =
   `Стоимость кадра: ${f.project ? f.project.split(/[\\/]/).pop() : ""} ${D.frame_size || ""}`.trim();
 document.getElementById("meta").textContent =
   `Unity ${f.unity} · ${f.graphics_api} в редакторе, quality ${f.quality}, ${f.play_mode ? "Play Mode" : "Edit Mode"} · ` +
-  `цены: malioc ${D.malioc || ""}, ${D.api} · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
+  `цены: malioc ${D.malioc || ""}, ${D.api}` + (D.variants_checked === false ? " (варианты не сверены с шейдерами)" : "") + ` · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
   Object.entries(D.pixel_methods).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${D.frame_dir || ""}`;
 
 const coreSeg = document.getElementById("core");
@@ -127,6 +132,23 @@ function match(r) {
   if (st.stage && r.stage !== st.stage) return false;
   if (!st.q) return true;
   return [r.object, r.shader, r.pass, (r.keywords || []).join(" "), r.rt, r.variant, r.path].join(" ").toLowerCase().includes(st.q);
+}
+const pathNote = p => p === "total" ? " · total" : String(p || "").startsWith("loop") ? " · цикл " + esc(p.slice(5)) : "";
+const byN = c => c.px_price_by_n ? "цена при n = " + Object.entries(c.px_price_by_n).map(([n, v]) => `${n}: ${cyc(v)}`).join(", ") : "";
+function loopsTable() {
+  const L = D.loops, el = document.getElementById("loops");
+  if (!L || !L.events) { el.innerHTML = ""; return; }
+  const by = L.by_n[st.core] || {}, ns = Object.keys(by);
+  const names = [...new Set(ns.flatMap(n => Object.keys(by[n].stages)))];
+  const cell = (n, k) => `<td class="num ${String(n) === String(L.n) ? "gl" : ""}">${k}</td>`;
+  el.innerHTML = `<h2>Кадр при n итераций циклов <small>${L.events} событий с динамическими циклами · сейчас n = ${L.n}`
+    + (Object.keys(L.overrides).length ? " · " + Object.entries(L.overrides).map(([k, v]) => esc(k) + " = " + v).join(", ") : "")
+    + (L.unforced.length ? ` · ${L.unforced.length} файлов не удалось — цена по total` : "") + `</small></h2>`
+    + `<div class="wrap"><table><thead><tr><th class="l">n</th>${ns.map(n => `<th class="num">${n}</th>`).join("")}</tr></thead><tbody>`
+    + `<tr><td class="l">итог, млн циклов</td>${ns.map(n => cell(n, mc(by[n].total))).join("")}</tr>`
+    + `<tr><td class="l">в событиях с циклами</td>${ns.map(n => cell(n, pc(by[n].loop_share))).join("")}</tr>`
+    + names.map(k => `<tr><td class="l">${esc(STAGE_NAMES[k] || k)}</td>${ns.map(n => cell(n, pc(by[n].stages[k] || 0))).join("")}</tr>`).join("")
+    + `</tbody></table></div>`;
 }
 function stages() {
   const g = (D.groups[st.core] || {}).stage || [];
@@ -210,7 +232,7 @@ function eventsTable() {
            + `<td class="num gl" title="${esc(range)}">${int(r.pixels)}<span class="m ${esc(r.pixel_method)}">${esc(r.pixel_method)}</span>`
            + (r.pixel_note ? `<span class="note">${esc(r.pixel_note)}</span>` : "") + `</td>`
            + `<td class="num">${int(r.vertices)}<span class="m ${esc(r.vertex_method)}">${esc(r.vertex_method)}</span></td>`
-           + `<td class="num gl" title="${esc(c.px_path)}">${cyc(c.px_price)}<span class="bd">${esc(c.px_bound.join("+"))}${c.px_path === "total" ? " · total" : ""}</span></td>`
+           + `<td class="num gl" title="${esc(byN(c) || c.px_path)}">${cyc(c.px_price)}<span class="bd">${esc(c.px_bound.join("+"))}${pathNote(c.px_path)}</span></td>`
            + `<td class="num">${cyc(c.vtx_price)}<span class="bd">${esc(c.vtx_bound.join("+"))}</span></td>`
            + `<td class="num big gl">${mc(c.total)}<span class="bd">пикс ${mc(c.fragment)} · верш ${mc(c.vertex)}</span></td>`)
        + pctCell(c.share, max) + `<td class="num st">${st.sort[0] === "total" && st.sort[1] < 0 ? pc(cum) : ""}</td></tr>`;
@@ -251,6 +273,7 @@ function render() {
   bySeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.by));
   document.getElementById("all").textContent = st.all ? `Только топ-${TOP}` : "Показать все";
   stages();
+  loopsTable();
   document.getElementById("main").innerHTML = st.by === "event" ? eventsTable() : groupTable();
   document.querySelectorAll("thead th[data-k]").forEach(el => el.onclick = () => {
     const k = el.dataset.k; st.sort = [k, st.sort[0] === k ? -st.sort[1] : (k === "name" || k === "shader" || k === "index" ? 1 : -1)]; render(); });

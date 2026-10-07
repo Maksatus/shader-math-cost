@@ -2,7 +2,9 @@
 
 On every core: draw = pixels x fragment price + vertices x vertex price, dispatch = threads x compute price,
 where a price is the bottleneck cycles of the variant on that core (profile/score.py, decision D-05: the busiest
-pipe on the longest path, total when the longest path is N/A; vertex = Position + Varying, both for every
+pipe on the longest path; a shader whose longest path is N/A on some core (dynamic loops: lights, probes, ray
+marching) is priced with its loops forced to n iterations (frame/loops.py; n = --loop-iters, default 2, and the
+frame is also summed at n = 0, 1, 2, 4, 8 for the range in the report); vertex = Position + Varying, both for every
 vertex — IDVS shades Varying only for visible vertices, so the vertex part is an upper bound). Pixels come from
 frame/pixels.py. Vertices: RenderDoc VSInvocations when the snapshot has them (real vertex shader runs,
 after the post-transform cache), else the Frame Debugger
@@ -18,11 +20,14 @@ import os
 import re
 from collections import OrderedDict, defaultdict
 
+from shaderopt.frame import loops
 from shaderopt.frame import pixels as px
 from shaderopt.frame import variants
 from shaderopt.profile import score as heavy
 
 GROUPS = ("stage", "shader", "variant", "object", "rt")
+LOOP_ITERS = 2            # default trip count of dynamic loops (lights per pixel, probes, ray steps)
+LOOP_NS = (0, 1, 2, 4, 8)  # trip counts of the range shown in the report
 
 
 def label(ev):
@@ -55,14 +60,31 @@ def threads(ev):
     return (n, "dispatch") if c.get("groups") else (0, "none")
 
 
-def price(recs, fp16_threshold=heavy.FP16_THRESHOLD):
-    """{core: score} of one stage's records."""
-    return {c: heavy.score(r, fp16_threshold) for c, r in recs.items()}
+def loop_n(shader, loop_iters, overrides):
+    """(trip count of the shader's dynamic loops, fixed): the first override whose text is in the shader name,
+    else loop_iters."""
+    for name, n in (overrides or {}).items():
+        if name and name in (shader or ""):
+            return n, True
+    return loop_iters, False
 
 
-def compute(meta, events, state, frustum=None, api="vulkan", cores=None, main_core="Mali-G78"):
-    """Cost of every event on every core. Returns the frame_cost.json structure."""
-    pix = px.resolve(events, frustum)
+def price(recs, file, core, n, loop_data, fp16_threshold=heavy.FP16_THRESHOLD):
+    """Score of one stage's record on one core; dynamic loops priced at n iterations when loop_data has them."""
+    p = (loop_data.get(file) or {}).get(core)
+    if p:
+        return heavy.score(recs[core], fp16_threshold, loops.cycles_at(p, n), f"loop n={n}")
+    return heavy.score(recs[core], fp16_threshold)
+
+
+def compute(meta, events, state, api="vulkan", cores=None, main_core="Mali-G78",
+            loop_iters=LOOP_ITERS, loop_overrides=None, loop_ns=LOOP_NS):
+    """Cost of every event on every core. Returns the frame_cost.json structure.
+    loop_iters: trip count of every outer dynamic loop (lights, probes, ray steps) of a shader whose longest path
+    is N/A on some core (state["loops"], frame/loops.py); loop_overrides: {part of a shader name: n};
+    loop_ns: the trip counts of the range shown in the report."""
+    pix = px.resolve(events)
+    loop_data = state.get("loops") or {}
     rows, missing = [], []
     found_cores = OrderedDict()
     for ev in events:
@@ -84,27 +106,34 @@ def compute(meta, events, state, frustum=None, api="vulkan", cores=None, main_co
             "pixel_note": p["note"], "vertices": nv, "vertex_method": vmethod, "threads": nt, "thread_method": tmethod,
             "kernel": (ev.get("compute") or {}).get("kernel"),
             "variant": variants.key_str(variants.key_of(ev)),
-            "files": {}, "cost": {}, "reason": why,
+            "files": {}, "cost": {}, "reason": why, "loop": None,
         }
+        n_ev, fixed = loop_n(row["shader"], loop_iters, loop_overrides)
         if recs and "compute" in recs:
-            for c, sc in price(recs["compute"]).items():
+            fn = next(iter(recs["compute"].values()))["file"]
+            row["files"] = {"compute": fn}
+            for c in recs["compute"]:
+                sc = price(recs["compute"], fn, c, n_ev, loop_data)
                 found_cores[c] = recs["compute"][c]["arch"]
                 cc = nt * sc["cycles"]
-                row["files"] = {"compute": next(iter(recs["compute"].values()))["file"]}
                 row["cost"][c] = {
                     "px_price": None, "vtx_price": None, "cs_price": sc["cycles"], "cs_bound": sc["bound"],
                     "cs_path": sc["path"], "px_bound": [], "vtx_bound": [], "px_path": None, "vtx_path": None,
                     "fragment": 0.0, "vertex": 0.0, "compute": cc, "total": cc, "flags": sc["flags"],
                     "px_regs": sc["work_regs"], "vtx_regs": None, "px_fp16": sc["fp16_pct"],
                 }
+                if (loop_data.get(fn) or {}).get(c) and not fixed:
+                    row["cost"][c]["total_by_n"] = {
+                        str(n): nt * price(recs["compute"], fn, c, n, loop_data)["cycles"] for n in loop_ns}
         elif recs and len(recs) == 2:
-            frag, vert = price(recs["fragment"]), price(recs["vertex"])
             row["files"] = {s: next(iter(r.values()))["file"] for s, r in recs.items()}
-            for c in frag:
-                if c not in vert:
+            ff, fv = row["files"]["fragment"], row["files"]["vertex"]
+            for c in recs["fragment"]:
+                if c not in recs["vertex"]:
                     continue
-                found_cores[c] = next(r["arch"] for r in recs["fragment"].values() if r["core"] == c)
-                f, v = frag[c], vert[c]
+                f = price(recs["fragment"], ff, c, n_ev, loop_data)
+                v = price(recs["vertex"], fv, c, n_ev, loop_data)
+                found_cores[c] = recs["fragment"][c]["arch"]
                 cf, cv = row["pixels"] * f["cycles"], row["vertices"] * v["cycles"]
                 row["cost"][c] = {
                     "px_price": f["cycles"], "vtx_price": v["cycles"],
@@ -113,15 +142,26 @@ def compute(meta, events, state, frustum=None, api="vulkan", cores=None, main_co
                     "flags": sorted(set(f["flags"]) | {x for x in v["flags"] if x != "low_fp16"}),
                     "px_regs": f["work_regs"], "vtx_regs": v["work_regs"], "px_fp16": f["fp16_pct"],
                 }
+                looped = (loop_data.get(ff) or {}).get(c) or (loop_data.get(fv) or {}).get(c)
+                if looped and not fixed:
+                    by_n, px_by_n = {}, {}
+                    for n in loop_ns:
+                        fp, vp = price(recs["fragment"], ff, c, n, loop_data), price(recs["vertex"], fv, c, n, loop_data)
+                        by_n[str(n)] = row["pixels"] * fp["cycles"] + row["vertices"] * vp["cycles"]
+                        px_by_n[str(n)] = fp["cycles"]
+                    row["cost"][c]["total_by_n"], row["cost"][c]["px_price_by_n"] = by_n, px_by_n
         else:
             missing.append({"index": ev["index"], "kind": ev["kind"], "stage": ev["stage"], "object": row["object"],
                             "shader": row["shader"], "pass": row["pass"], "reason": why or "not measured"})
+        if any(str(x.get(k) or "").startswith("loop") for x in row["cost"].values()
+               for k in ("px_path", "vtx_path", "cs_path")):
+            row["loop"] = {"n": n_ev, "fixed": fixed}
         rows.append(row)
 
     cores = [c for c in (cores or found_cores) if c in found_cores]
     if main_core not in cores and cores:
         main_core = cores[0]
-    totals = {}
+    totals, by_n = {}, {}
     for c in cores:
         t = sum(r["cost"][c]["total"] for r in rows if c in r["cost"])
         totals[c] = {"total": t, **{k: sum(r["cost"][c][k] for r in rows if c in r["cost"])
@@ -129,12 +169,30 @@ def compute(meta, events, state, frustum=None, api="vulkan", cores=None, main_co
         for r in rows:
             if c in r["cost"]:
                 r["cost"][c]["share"] = r["cost"][c]["total"] / t if t else 0.0
+        # the frame and its stages at every trip count of the range (events with fixed or no loops stay)
+        by_n[c] = {}
+        for n in loop_ns:
+            stage, looped = defaultdict(float), 0.0
+            for r in rows:
+                x = r["cost"].get(c)
+                if not x:
+                    continue
+                v = (x.get("total_by_n") or {}).get(str(n), x["total"])
+                stage[r["stage"]] += v
+                looped += v if r["loop"] else 0.0
+            tot = sum(stage.values())
+            by_n[c][str(n)] = {"total": tot, "loop_share": looped / tot if tot else 0.0,
+                               "stages": {k: v / tot if tot else 0.0
+                                          for k, v in sorted(stage.items(), key=lambda kv: -kv[1])}}
     rows.sort(key=lambda r: -(r["cost"].get(main_core, {}).get("total", -1)))
     draws = [r for r in rows if r["kind"] == "draw"]
     return {
         "frame": {k: v for k, v in meta.items() if k != "events"},
         "api": api, "cores": [{"name": c, "arch": found_cores[c]} for c in cores], "main_core": main_core,
         "totals": totals,
+        "loops": {"n": loop_iters, "overrides": dict(loop_overrides or {}), "range": list(loop_ns),
+                  "events": sum(1 for r in rows if r["loop"]), "files": len(loop_data),
+                  "unforced": sorted(f for f, d in loop_data.items() if len(d) < len(cores)), "by_n": by_n},
         "coverage": {"draws": len(draws), "draws_priced": sum(1 for r in draws if r["cost"]),
                      "events": len(rows), "events_priced": sum(1 for r in rows if r["cost"])},
         "pixel_methods": dict(sorted(_count(r["pixel_method"] for r in draws).items())),
@@ -175,8 +233,8 @@ def groups(rows, core):
 
 CSV_COLS = ["rank", "index", "stage", "object", "shader", "pass", "keywords", "pixels", "pixel_method",
             "pixels_low", "pixels_high", "vertices", "vertex_method", "threads", "px_price", "vtx_price", "cs_price",
-            "fragment", "vertex", "compute", "total", "share_pct", "px_bound", "vtx_bound", "flags", "rt", "variant",
-            "reason"]
+            "fragment", "vertex", "compute", "total", "share_pct", "px_bound", "vtx_bound", "px_path", "loop_n",
+            "flags", "rt", "variant", "reason"]
 
 
 def write(cost, out_dir):
@@ -198,4 +256,5 @@ def write(cost, out_dir):
                     round(c["compute"]) if c else None,
                     round(c["total"]) if c else None, round(100 * c["share"], 3) if c else None,
                     "+".join(c.get("px_bound") or c.get("cs_bound") or []), "+".join(c.get("vtx_bound") or []),
+                    c.get("px_path") or c.get("cs_path"), (r.get("loop") or {}).get("n"),
                     " ".join(c.get("flags") or []), r["rt"], r["variant"], r["reason"]]])

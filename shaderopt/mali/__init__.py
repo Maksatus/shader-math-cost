@@ -7,19 +7,40 @@ longest / shortest path and in total, bound pipes, registers, spilling, fp16 %
 and uniform computation. Longest path cycles are None when malioc reports N/A
 (dynamic loops, e.g. the URP additional lights loop).
 
+malioc: the newest installed Arm Performance Studio (find_malioc(); MALIOC overrides it). The cache key holds the
+malioc path, which holds the Studio version, so a new version never reads results of an old one.
+
 Cache entries written by the old bench/run.py (v2) hold only the parsed main
 variant; they are still served to callers that need just that (run.py), and
 recompiled when the raw JSON is needed.
 """
+import glob
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
 
-MALIOC = os.environ.get(
-    "MALIOC", r"C:\Program Files\Arm\Arm Performance Studio 2026.5\mali_offline_compiler\malioc.exe")
+
+def find_malioc():
+    """$MALIOC, else malioc.exe of the newest "Arm Performance Studio <version>" in Program Files, else malioc on PATH."""
+    if os.environ.get("MALIOC"):
+        return os.environ["MALIOC"]
+    found = []
+    for d in glob.glob(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Arm", "Arm Performance Studio *")):
+        exe = os.path.join(d, "mali_offline_compiler", "malioc.exe")
+        m = re.search(r"(\d+(?:\.\d+)*)$", d)
+        if m and os.path.exists(exe):
+            found.append((tuple(int(x) for x in m.group(1).split(".")), exe))
+    if found:
+        return max(found)[1]
+    return shutil.which("malioc") or "malioc"
+
+
+MALIOC = find_malioc()
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "bench", ".cache")
 CACHE_VERSION = 3        # v3 = v2 fields + "raw" (malioc JSON without descriptions)
 LEGACY_VERSIONS = (2, 3)  # versions that carry the v2 fields
