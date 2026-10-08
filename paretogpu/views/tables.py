@@ -5,9 +5,9 @@ import os
 
 from paretogpu.core.pricing import add_cycles
 from paretogpu.model.cores import ARCH_SHORT, ARCHS
+from paretogpu.model.measurement import PIPES
 
 # --- measurements.csv (app/measure.py) ---------------------------------------------------------------------------
-PIPES = ("arith", "fma", "cvt", "sfu", "ls", "v", "t")
 PATHS = ("longest", "shortest", "total")
 COLUMNS = (["file", "shader", "pass", "keywords", "stage", "variant",
             "core", "arch", "api", "driver", "malioc", "bound"]

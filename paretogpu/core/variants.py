@@ -1,18 +1,19 @@
 """The measured variant of a frame event (the state of app/variants.run())."""
-from paretogpu.model.variant import API, STAGE, key_of, stages_of
+from paretogpu.model.frame import Event
+from paretogpu.model.variant import PLATFORM, STAGE, VariantKey, VariantState
 
 
-def match(ev, state, api="vulkan"):
+def match(ev: Event, state: VariantState, api="vulkan"):
     """(records, reason) for one event: records = {"fragment": {core: rec}, "vertex": {core: rec}}
     ({"compute": {core: rec}} for a dispatch) with the measurement records of the variant in `api`;
     reason (None if every stage is measured) says what is missing."""
     if ev["kind"] not in ("draw", "compute"):
         return None, None
-    k = key_of(ev)
-    plat = {v: p for p, v in API.items()}[api]
+    k = VariantKey.of(ev)
+    plat = PLATFORM[api]
     files, errs = state["files"].get(k, {}), state["errors"].get(k, [])
     out, why = {}, []
-    for s in stages_of(k):
+    for s in k.stages:
         stage = STAGE[s]
         fn = files.get((plat, s))
         if not fn:

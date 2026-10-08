@@ -9,7 +9,7 @@
 import json
 import os
 
-from paretogpu.model.variant import EXT, SHORT, STAGE, base_name, folder_of
+from paretogpu.model.variant import EXT, SHORT, STAGE, VariantKey
 
 RAW = "_compiled"
 INDEX = "variants.json"
@@ -34,7 +34,7 @@ def load_manifests(root, fingerprints=None, platforms=None):
             for m in json.load(f):
                 if "subshader" not in m or not os.path.exists(os.path.join(root, d, m["file"])):
                     continue
-                k = (m["shader"], m["subshader"], m["pass_index"], m["pass"], tuple(m["keywords"]))
+                k = VariantKey(m["shader"], m["subshader"], m["pass_index"], m["pass"], tuple(m["keywords"]))
                 have.setdefault(k, {})[(m["platform"], SHORT[m["stage"]])] = f"{d}/{m['file']}"
                 if fingerprints is not None and (platforms is None or m["platform"] in platforms):
                     fp = m.get("fingerprint")
@@ -56,14 +56,14 @@ def place(root, raw, keys, result, patch=None):
             patched = None
             if patch:
                 data, patched = patch(plat, data)
-            sub = folder_of(k, plat)
-            fn = base_name(k) + EXT[(plat, stage)]
+            sub = k.folder(plat)
+            fn = k.base_name + EXT[(plat, stage)]
             os.makedirs(os.path.join(root, sub), exist_ok=True)
             with open(os.path.join(root, sub, fn), "wb") as f:
                 f.write(data)
             manifests.setdefault(sub, []).append({
-                "file": fn, "shader": k[0], "pass": k[3], "subshader": k[1], "pass_index": k[2],
-                "keywords": list(k[4]), "stage": STAGE[stage], "platform": plat, "source": "CompileVariant",
+                "file": fn, "shader": k.shader, "pass": k.pass_name, "subshader": k.subshader,
+                "pass_index": k.pass_index, "keywords": list(k.keywords), "stage": STAGE[stage], "platform": plat, "source": "CompileVariant",
                 "fingerprint": v.get("fingerprint"), **({"patched": patched} if patched else {})})
     for sub, entries in manifests.items():
         path = os.path.join(root, sub, "manifest.json")
@@ -84,7 +84,7 @@ def load_index(root):
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             for x in json.load(f)["variants"]:
-                index[tuple(x["key"][:4]) + (tuple(x["key"][4]),)] = x
+                index[VariantKey.from_list(x["key"])] = x
     return index
 
 

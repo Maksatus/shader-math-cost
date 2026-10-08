@@ -28,6 +28,7 @@ import time
 
 from paretogpu.model import cores as core_names
 from paretogpu.model.errors import ParetoError
+from paretogpu.model.measurement import Measurement
 
 
 def find_malioc():
@@ -295,7 +296,7 @@ def parse(j):
     }
 
 
-def measure(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE):
+def measure(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE) -> Measurement:
     """compile() + parse(): the full record, or {"ok": False, "error": ...}."""
     r = compile(src, core, api, stage, malioc, cache, need_raw=True)
     if not r["ok"]:

@@ -25,7 +25,6 @@ statement's inclusive and self cost.
 """
 import re
 
-PIPES = ("arith", "fma", "cvt", "sfu", "ls", "v", "t")
 TYPES = {"float": ("f", 1), "int": ("i", 1), "uint": ("u", 1), "bool": ("b", 1)}
 for _n in (2, 3, 4):
     TYPES.update({f"vec{_n}": ("f", _n), f"ivec{_n}": ("i", _n), f"uvec{_n}": ("u", _n), f"bvec{_n}": ("b", _n)})

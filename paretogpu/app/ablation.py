@@ -10,7 +10,8 @@ from paretogpu.adapters import malioc as mali
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.core import vertexmove
-from paretogpu.core.ablation import PIPES, ablated, explain, parse, tree
+from paretogpu.core.ablation import ablated, explain, parse, tree
+from paretogpu.model.measurement import PIPES
 
 
 def measure(src, core, stage, n, forced_loops):

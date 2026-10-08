@@ -11,11 +11,12 @@ import unittest
 from unittest import mock
 
 from paretogpu.app import variants
+from paretogpu.model.variant import VariantKey
 from paretogpu.store import variant_store
 
 EV = {"index": 0, "kind": "draw", "shader": "Test/Lit", "subshader": 0, "pass_index": 0, "pass": "Forward",
       "keywords": ["_A"]}
-KEY = variants.key_of(EV)
+KEY = VariantKey.of(EV)
 
 
 class RunTest(unittest.TestCase):
@@ -42,7 +43,7 @@ class RunTest(unittest.TestCase):
                     with open(os.path.join(raw, fn), "wb") as f:
                         f.write(b"spv")
                     files.append({"platform": "vulkan", "stage": s, "file": fn})
-            result["variants"].append({"id": i, "files": files, "errors": errs, "fingerprint": self.fp.get(k[0])})
+            result["variants"].append({"id": i, "files": files, "errors": errs, "fingerprint": self.fp.get(k.shader)})
         return variant_store.place(root, raw, keys, result)
 
     def run_once(self, editor=True, **kw):

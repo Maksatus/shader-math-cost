@@ -15,6 +15,7 @@ from paretogpu.app import variants
 from paretogpu.core import materials as plan_
 from paretogpu.core.materials import NS
 from paretogpu.core.pricing import LOOP_ITERS
+from paretogpu.model.cores import main_core
 from paretogpu.store import workspace
 
 
@@ -68,9 +69,9 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
         if not keys:
             raise ValueError(f"{m['path']}: " + (skipped[0]["reason"] if skipped else "ни одного прохода"))
         all_keys.update(keys)
-        sides.append(sorted(keys, key=lambda k: (k[1], k[2])))
+        sides.append(sorted(keys, key=lambda k: (k.subshader, k.pass_index)))
     progress(f"materials: {len(all_keys)} variants, {len(snaps)} snapshots of the project for global keywords")
-    state = variants.run(plan_.pseudo_events(list(all_keys)), project, root, cores, platforms, jobs,
+    state = variants.run([k.as_event() for k in all_keys], project, root, cores, platforms, jobs,
                          compile_missing=compile_missing, recompile=recompile, progress=progress)
     state["loops"] = variants.loops_of(state, root, cores, jobs, progress)
     return {"project": project, "mats": mats, "keys": sides, "state": state, "snaps": snaps}
@@ -92,6 +93,6 @@ def common(prep, sides, cores, api, apis, ns=NS):
         warn.append("В проекте нет снимков кадра: глобальные keywords пайплайна (свет, тени, Forward+) не добавлены, "
                     "а проходы взяты все, кроме служебных.")
     return {"project": prep["project"], "api": api, "apis": apis, "cores": found,
-            "main_core": "Mali-G78" if "Mali-G78" in found else (found[0] if found else None), "ns": list(ns),
+            "main_core": main_core(found), "ns": list(ns),
             "default_n": LOOP_ITERS, "malioc": ", ".join(sorted({r["malioc"] for r in recs})),
             "checked": state["checked"], "snapshots": len(snaps), "warnings": warn, "computed_at": time.time()}

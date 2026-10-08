@@ -7,9 +7,10 @@ Source of the fragment count, best first (decision in K1.3):
   diff        changed pixels of the render target (Frame Debugger replay, K1.2) — the fallback.
 Vertices: Frame Debugger m_VertexCount (all instances included).
 """
+from paretogpu.model.frame import Event
 
 
-def resolve(events):
+def resolve(events: list[Event]) -> dict:
     """{event index: {"pixels", "method", "low", "high", "note"}} for every draw event.
     low / high bound the fragment count where the method is an estimate (None when unknown)."""
     out = {}

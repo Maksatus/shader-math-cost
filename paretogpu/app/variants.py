@@ -29,7 +29,9 @@ from paretogpu.adapters.unity import variants as unity_variants
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.app import measure
-from paretogpu.model.variant import COMPUTE, COMPUTE_NOT_COMPILED, NOT_FINISHED, key_of, stages_of
+from paretogpu.model.frame import Event
+from paretogpu.model.measurement import LoopProfile
+from paretogpu.model.variant import COMPUTE_NOT_COMPILED, NOT_FINISHED, VariantKey, VariantState
 from paretogpu.store import variant_store as store
 
 
@@ -70,31 +72,31 @@ def shader_query(project, entry, shaders, root):
     return unity_variants.shader_query(project, entry, shaders, store.raw_dir(root))
 
 
-def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True, progress=print,
-        recompile=False, retry_failed=False):
+def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
+        progress=print, recompile=False, retry_failed=False) -> VariantState:
     """Compile and measure the variants of the frame's draws. Returns the state for core/variants.match():
     {"keys", "files": {key: {(platform, stage): file}}, "errors": {key: [..]}, "measurements",
      "checked": True if the compiled files were checked against the shaders in the open editor}.
     recompile: compile every variant of the frame again; retry_failed: also the ones that failed before."""
     root = os.path.abspath(root)
     project = project and os.path.abspath(project)
-    keys = list(dict.fromkeys(key_of(e) for e in events if e["kind"] in ("draw", "compute")))
+    keys = list(dict.fromkeys(VariantKey.of(e) for e in events if e["kind"] in ("draw", "compute")))
     recovered = recover(root) or {}
     if recovered:
         progress(f"recovered {sum(1 for e in recovered.values() if not e)} variants of an unfinished Unity run")
     stored = {}
     have = store.load_manifests(root, stored, platforms)
     index = store.load_index(root)  # every variant this folder has seen, of any frame: {key: entry}
-    draw_keys = [k for k in keys if k[1] != COMPUTE]  # compute kernels are not compiled: see COMPUTE_NOT_COMPILED
+    draw_keys = [k for k in keys if not k.is_compute]  # compute kernels are not compiled: see COMPUTE_NOT_COMPILED
 
     def complete(k):
-        return all((p, s) in have.get(k, {}) for p in platforms for s in stages_of(k))
+        return all((p, s) in have.get(k, {}) for p in platforms for s in k.stages)
 
     current = None
     if compile_missing and draw_keys:
         if project and unity.editor_ready(project, allow_play=True):
             progress_ui.phase("fingerprints")
-            current = current_fingerprints(project, [k[0] for k in draw_keys], root)
+            current = current_fingerprints(project, [k.shader for k in draw_keys], root)
         else:
             progress_ui.skip("fingerprints", "the editor does not answer")
             progress("the editor does not answer Unity CLI: compiled variants are used without checking "
@@ -105,14 +107,14 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
         errs = [e for e in (index.get(k) or {}).get("errors", []) if e != NOT_FINISHED]
         if not errs or retry_failed or recompile:
             return False
-        return current is None or (index.get(k) or {}).get("fingerprint") == current.get(k[0])
+        return current is None or (index.get(k) or {}).get("fingerprint") == current.get(k.shader)
 
     stale = [k for k in draw_keys if complete(k) and current is not None
-             and (recompile or stored.get(k) is None or stored.get(k) != current.get(k[0]))]
+             and (recompile or stored.get(k) is None or stored.get(k) != current.get(k.shader))]
     missing = [k for k in draw_keys if (not complete(k) or k in stale) and not failed_before(k)]
     errors = {k: [e for e in (index.get(k) or {}).get("errors", []) if e != NOT_FINISHED] for k in keys}
     for k in keys:
-        if k[1] == COMPUTE and not have.get(k):
+        if k.is_compute and not have.get(k):
             errors[k] = [COMPUTE_NOT_COMPILED]
     if missing and compile_missing:
         if stale:
@@ -131,10 +133,10 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
         if failures:
             progress(f"  malioc failed on {len(failures)} files")
     for k in keys:
-        index[k] = {"key": [k[0], k[1], k[2], k[3], list(k[4])],
+        index[k] = {"key": k.to_list(),
                     "files": {f"{p}/{s}": fn for (p, s), fn in sorted(have.get(k, {}).items())},
                     "errors": [e for e in errors.get(k, []) if e != NOT_FINISHED],
-                    "fingerprint": stored.get(k) or (current or {}).get(k[0])}
+                    "fingerprint": stored.get(k) or (current or {}).get(k.shader)}
     store.save_index(root, index)
     # not compiled in this run: the reason is shown, not stored (the next run compiles them)
     for k in pending:
@@ -143,7 +145,7 @@ def run(events, project, root, cores, platforms=("gles3", "vulkan"), jobs=None, 
             "measurements": store.load_measurements(root), "checked": current is not None}
 
 
-def parametric(forced, api, stage, core, cache=mali.CACHE):
+def parametric(forced, api, stage, core, cache=mali.CACHE) -> LoopProfile | None:
     """{"c": [cycles at n = 0, 1, 2] (combined variants, longest path), "work_regs", "spilling"} of the forced
     sources ([loops.force(src, n) for n in loops.NS]) on one core, or None (cannot be forced, malioc failed, still
     N/A)."""
@@ -163,7 +165,7 @@ def parametric(forced, api, stage, core, cache=mali.CACHE):
     return {"c": cs, "work_regs": regs, "spilling": spill}
 
 
-def loops_of(state, root, cores, jobs=None, progress=print):
+def loops_of(state: VariantState, root, cores, jobs=None, progress=print) -> dict:
     """Loop prices of every measured file of the variants whose longest path is N/A on some core:
     {relative file: {core: parametric()}}; files whose loops cannot be forced map to {}."""
     files = sorted({fn for k in state["keys"] for fn in state["files"].get(k, {}).values()})

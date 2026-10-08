@@ -21,6 +21,7 @@ Flags:
   dynamic_loop longest path is N/A, the score is the total cycles (or the forced-loop price, see core/loops.py)
 """
 from paretogpu.core import loops
+from paretogpu.model.measurement import Measurement, Score
 
 PIPES = ("fma", "cvt", "sfu", "ls", "v", "t", "arith")
 ARITH_SUB = ("fma", "cvt", "sfu")
@@ -36,7 +37,7 @@ def add_cycles(a, b):
     return {p: (a.get(p) or 0) + (b.get(p) or 0) for p in set(a) | set(b)}
 
 
-def combined(rec):
+def combined(rec: Measurement):
     """{"longest", "shortest", "total"} cycles of the record: the main variant, or
     Position + Varying of a vertex shader (A1.4)."""
     vs = rec["variants"]
@@ -75,7 +76,7 @@ def fallback(c):
     return {p: max(t.get(p) or 0, s.get(p) or 0) for p in set(t) | set(s)}
 
 
-def score(rec, fp16_threshold=FP16_THRESHOLD, cycles=None, path=None):
+def score(rec: Measurement, fp16_threshold=FP16_THRESHOLD, cycles=None, path=None) -> Score:
     """Heaviness of one measured record (one file on one core). cycles / path: a price computed elsewhere
     (core/loops.py: dynamic loops forced to n iterations), used instead of the record's own path."""
     if cycles is None:
@@ -111,7 +112,7 @@ def loop_n(shader, loop_iters, overrides):
     return loop_iters, False
 
 
-def price(recs, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD):
+def price(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> Score:
     """Score of one stage's record on one core; dynamic loops priced at n iterations when loop_data has them."""
     p = (loop_data.get(file) or {}).get(core)
     if p:

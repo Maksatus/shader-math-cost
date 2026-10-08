@@ -21,6 +21,7 @@ from paretogpu import progress
 from paretogpu.adapters import malioc as mali
 from paretogpu.core import pricing as heavy
 from paretogpu.core import ranking
+from paretogpu.model.cores import MAIN_CORE
 from paretogpu.views import tables
 
 
@@ -51,7 +52,7 @@ def measure_one(path, core, api):
         return {"ok": False, "error": str(e)}
 
 
-def run(folder, cores=("Mali-G78",), api="gles", out=None, jobs=None):
+def run(folder, cores=(MAIN_CORE,), api="gles", out=None, jobs=None):
     """Measure the folder on every core; returns (records, failures). Writes the CSV and JSONL into out."""
     if isinstance(cores, str):
         cores = [cores]

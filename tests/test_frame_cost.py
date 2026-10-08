@@ -31,7 +31,7 @@ def state(events, prices):
     """variants.run() state with fragment / vertex prices per shader."""
     st = {"keys": [], "files": {}, "errors": {}, "measurements": {}}
     for ev in events:
-        k = variants.key_of(ev)
+        k = variants.VariantKey.of(ev)
         fp, vp = prices[ev["shader"]]
         st["keys"].append(k)
         st["files"][k] = {("vulkan", "frag"): f"{ev['shader']}.frag.spv", ("vulkan", "vert"): f"{ev['shader']}.vert.spv"}
@@ -64,7 +64,7 @@ class CostTest(unittest.TestCase):
                 "rt": {"name": "Color", "width": 100, "height": 100}, "pixel_count": 0, "pixel_method": None,
                 "compute": {"shader": "CS", "kernel": "K", "groups": [10, 2, 1], "group_size": [8, 8, 1]}}
         st = state([draw], {"A": (10, 2)})
-        k = variants.key_of(disp)
+        k = variants.VariantKey.of(disp)
         st["files"][k] = {("vulkan", "comp"): "CS.comp.spv"}
         st["measurements"]["CS.comp.spv"] = {"Mali-G78": record("CS.comp.spv", "compute", 3)}
         c = cost.compute({}, [draw, disp], st)

@@ -6,6 +6,8 @@ match(events, actions)  the RenderDoc calls of every event (ev["rd"]): the next 
 """
 import re
 
+from paretogpu.model.frame import Event
+
 
 def _blend(b):
     if not b:
@@ -47,7 +49,7 @@ def pixel_count(ev):
     return None, "none"
 
 
-def normalize(raw):
+def normalize(raw) -> list[Event]:
     """frame.json (raw Frame Debugger data) -> list of event records."""
     out = []
     for e in raw["events"]:
@@ -109,7 +111,7 @@ def _norm(path):
     return _RP.sub("", path or "").strip("/")
 
 
-def match(events, actions, counters=None):
+def match(events: list[Event], actions, counters=None):
     """Attach to every draw / compute event its RenderDoc calls:
     ev["rd"] = {calls, events, ps / ps_invocations, vs / vs_invocations, cs_invocations, samples, gpu_ms}.
     The calls of an event are the next calls (draws for draws, dispatches for compute) whose marker path ends with

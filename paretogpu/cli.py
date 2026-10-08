@@ -27,8 +27,9 @@ from paretogpu import progress
 from paretogpu.adapters import malioc as mali
 from paretogpu.app import measure
 from paretogpu.model import cores as core_presets
-from paretogpu.model.cores import MAIN_CORE
-from paretogpu.store.workspace import OUT, REAL, frame_dir_name, time_id
+from paretogpu.model.cores import MAIN_CORE, main_core as main_core_of
+from paretogpu.store import workspace
+from paretogpu.store.workspace import OUT
 
 
 def parse_cores(args):
@@ -93,11 +94,10 @@ def cmd_report(args):
 
 
 def cmd_frame(args):
-    import time
     from collections import Counter
     from paretogpu.adapters.renderdoc import RenderDocError
     from paretogpu.features import frame as snapshot
-    out = args.out or os.path.join(OUT, frame_dir_name(args.project, time.strftime('%Y%m%d_%H%M%S'), args.suffix))
+    out = args.out or workspace.new_snapshot_dir(args.project, args.suffix)
     try:
         meta, events = snapshot.run(args.project, out, args.timeout, args.max_events)
     except (snapshot.SnapshotError, RenderDocError) as e:
@@ -148,7 +148,7 @@ def cmd_cost(args):
     cores = parse_cores(args)
     if args.main_core and args.main_core not in cores:
         sys.exit(f"--main-core {args.main_core} is not one of the cores: {', '.join(cores)}")
-    main_core = args.main_core or (MAIN_CORE if MAIN_CORE in cores else cores[0])
+    main_core = args.main_core or main_core_of(cores)
     overrides = {}
     for spec in args.loop_iters_shader or []:
         name, _, n = spec.rpartition("=")
@@ -165,7 +165,7 @@ def cmd_cost(args):
         progress.phase("materials")
         mat_keys, mat_skipped = project_variants(project, events, args, root)
     try:
-        state = variants.run(events + (shaders.pseudo_events(mat_keys) if mat_keys else []), project, root, cores,
+        state = variants.run(events + ([k.as_event() for k in mat_keys] if mat_keys else []), project, root, cores,
                              platforms, args.jobs, compile_missing=not args.no_compile,
                              recompile=args.recompile, retry_failed=args.retry_failed)
     except VariantsError as e:
@@ -266,9 +266,8 @@ def cmd_matcompare(args):
     from paretogpu.features import matcompare
     cores = parse_cores(args)
     project = os.path.abspath(args.project)
-    name = os.path.basename(project)
-    root = args.variants or os.path.join(OUT, f"variants_{name}")
-    out = args.out or os.path.join(OUT, "_matcompare", time_id())
+    root = args.variants or workspace.variants_dir(project)
+    out = args.out or workspace.new_result_dir("matcompare")
     try:
         res = matcompare.run(project, args.a, args.b, root, cores,
                              ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"], args.api, args.jobs,
@@ -292,14 +291,13 @@ def cmd_matshader(args):
     from paretogpu.adapters.unity.variants import VariantsError
     from paretogpu.features import matshader
     cores = parse_cores(args)
-    ablate = [c.strip() for c in args.ablate_cores.split(",")] if args.ablate_cores else [
-        MAIN_CORE if MAIN_CORE in cores else cores[0]]
+    ablate = [c.strip() for c in args.ablate_cores.split(",")] if args.ablate_cores else [main_core_of(cores)]
     bad = [c for c in ablate if c not in cores]
     if bad:
         sys.exit(f"--ablate-cores {', '.join(bad)}: not among the cores ({', '.join(cores)})")
     project = os.path.abspath(args.project)
-    root = args.variants or os.path.join(OUT, f"variants_{os.path.basename(project)}")
-    out = args.out or os.path.join(OUT, "_matshader", time_id())
+    root = args.variants or workspace.variants_dir(project)
+    out = args.out or workspace.new_result_dir("matshader")
     try:
         res = matshader.run(project, args.material, root, cores, ["gles3", "vulkan"], args.api, args.jobs,
                             compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[OUT],
@@ -390,7 +388,7 @@ def cmd_export(args):
     from paretogpu.adapters.unity import export
     from paretogpu.adapters.unity.cli import UnityError
     cores = parse_cores(args) if args.measure else None
-    out = args.out or os.path.join(REAL, os.path.basename(os.path.abspath(args.project)))
+    out = args.out or workspace.export_dir(args.project)
     try:
         progress.phase("unity_export")
         res = export.export(args.project, args.shaders, out, args.platforms.split(","), args.mode, args.timeout)
@@ -428,7 +426,7 @@ def add_report_args(p):
 
 def add_core_args(p):
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--cores", default="Mali-G78",
+    g.add_argument("--cores", default=MAIN_CORE,
                    help="comma separated cores and/or presets; preset:mobile = " + ",".join(core_presets.PRESETS["mobile"])
                         + " (default Mali-G78)")
     g.add_argument("--core", help="one core (same as --cores <core>)")

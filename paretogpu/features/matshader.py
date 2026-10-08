@@ -13,7 +13,7 @@ from paretogpu import progress as progress_ui
 from paretogpu.app import ablation as ablation_run
 from paretogpu.app import materials
 from paretogpu.core import ablation
-from paretogpu.core.materials import NS, apis_of, describe, pseudo_events
+from paretogpu.core.materials import NS, apis_of, describe
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.core.variants import match
 from paretogpu.views import html
@@ -33,7 +33,7 @@ def run(project, material, root, cores, platforms=("gles3", "vulkan"), api="vulk
     ablate_cores = [c for c in (ablate_cores or cores[:1]) if c in cores] or cores[:1]
     jobs_ = []
     for p, k in zip(side["passes"], prep["keys"][0]):
-        recs, why = match(pseudo_events([k])[0], prep["state"], "gles")
+        recs, why = match(k.as_event(), prep["state"], "gles")
         for stage, short in STAGES:
             fn = ((recs or {}).get(stage) and next(iter(recs[stage].values()))["file"])
             if fn:

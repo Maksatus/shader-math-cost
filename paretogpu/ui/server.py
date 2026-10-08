@@ -41,10 +41,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 DOCS = os.path.join(ROOT, "docs")
 OUT = workspace.OUT
-REAL = workspace.REAL
-STATE = os.path.join(OUT, "_ui")
-MATCMP = os.path.join(OUT, "_matcompare")  # results of `matcompare` started from the UI
-MATSH = os.path.join(OUT, "_matshader")  # results of `matshader` started from the UI
+STATE = workspace.UI
+MATCMP = workspace.results_dir("matcompare")  # results of `matcompare` started from the UI
+MATSH = workspace.results_dir("matshader")  # results of `matshader` started from the UI
 JOBS = os.path.join(STATE, "jobs")
 LOG_LINES = 50000  # kept in memory per run; the file has all of them
 
@@ -244,18 +243,17 @@ class Runner:
         if preset_id == "frame_cost":
             if not values.get("project"):
                 raise ValueError("укажите Unity-проект")
-            frame_dir = os.path.join(OUT, workspace.frame_dir_name(values["project"], time.strftime('%Y%m%d_%H%M%S'),
-                                                             values.get("suffix")))
+            frame_dir = workspace.new_snapshot_dir(values["project"], values.get("suffix"))
         if preset_id == "matcompare":
-            values["out"] = os.path.join(MATCMP, time.strftime("%Y%m%d_%H%M%S"))
+            values["out"] = workspace.new_result_dir("matcompare")
         if preset_id == "matshader":
-            values["out"] = os.path.join(MATSH, time.strftime("%Y%m%d_%H%M%S"))
+            values["out"] = workspace.new_result_dir("matshader")
         if preset_id in ("frame_cost", "cost", "matcompare", "matshader") and not values.get("variants"):
             # one variants folder per project: a variant is compiled once and priced in every frame of the project
             project = values.get("project") or (_cached_json(os.path.join(values.get("frame") or "",
                                                                           "frame_events.json")) or {}).get("project")
             if project:
-                values["variants"] = os.path.join(OUT, f"variants_{os.path.basename(os.path.abspath(project))}")
+                values["variants"] = workspace.variants_dir(project)
         for st in preset["steps"]:
             cmd = st["cmd"]
             mine = {a["dest"] for a in sch[cmd]["args"]}
@@ -554,13 +552,8 @@ def _cached_json(path):
 
 def snapshots():
     rows = []
-    if not os.path.isdir(OUT):
-        return rows
-    for name in os.listdir(OUT):
-        d = os.path.join(OUT, name)
-        ev = os.path.join(d, "frame_events.json")
-        if not os.path.exists(ev):
-            continue
+    for name, d in workspace.snapshot_dirs():
+        ev = os.path.join(d, workspace.SNAPSHOT_FILE)
         meta = _cached_json(ev) or {}
         events = meta.get("events") or []
         row = {"name": name, "path": d, "time": os.path.getmtime(ev), "project": meta.get("project"),
@@ -604,7 +597,7 @@ def cost_runs():
 def run_file(rid):
     """<snapshot>/<run> -> the run's file in paretogpu/out (nothing else is read by id)."""
     name, _, run = (rid or "").partition("/")
-    folder = snapshot_dir(name)
+    folder = workspace.snapshot_dir(name)
     if not folder or not RUN_ID.fullmatch(run):
         return None
     path = runs_store.run_path(folder, run)
@@ -700,9 +693,8 @@ def options():
                       "snapshots": sum(1 for x in snaps if x["project"]
                                        and os.path.normcase(x["project"]) == os.path.normcase(path))})
     projects = [p["path"] for p in unity]
-    variants = [os.path.join(OUT, n) for n in sorted(os.listdir(OUT))
-                if n.startswith("variants") and os.path.isdir(os.path.join(OUT, n))] if os.path.isdir(OUT) else []
-    folders = variants + ([os.path.join(REAL, n) for n in sorted(os.listdir(REAL))] if os.path.isdir(REAL) else [])
+    variants = workspace.variants_dirs()
+    folders = variants + workspace.export_dirs()
     from paretogpu.model import cores
     return {"projects": projects, "unity_projects": unity, "snapshots": [{"path": s["path"], "name": s["name"], "project": s["project"]}
                                                 for s in snaps],
@@ -952,13 +944,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if p == "/api/stop":
                 return self._json({"stopped": RUNNER.stop()})
             if p == "/api/reveal":
-                path = snapshot_dir(body.get("name")) if body.get("name") else os.path.abspath(body.get("path", ""))
+                path = workspace.snapshot_dir(body.get("name")) if body.get("name") else os.path.abspath(body.get("path", ""))
                 if path and os.path.isdir(path):
                     os.startfile(path)
                     return self._json({"ok": True})
                 return self._json({"error": "нет такой папки"}, 404)
             if p == "/api/delete":
-                path = snapshot_dir(body.get("name"))
+                path = workspace.snapshot_dir(body.get("name"))
                 if not path:
                     return self._json({"error": "нет такого снимка"}, 404)
                 with RUNNER.lock:
@@ -972,14 +964,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except ValueError as e:
             return self._json({"error": str(e)}, 400)
         return self.send_error(404)
-
-
-def snapshot_dir(name):
-    """A snapshot folder directly in paretogpu/out (nothing else is deleted or opened by name)."""
-    if not name or os.path.basename(name) != name or name.startswith((".", "_")):
-        return None
-    path = os.path.join(OUT, name)
-    return path if os.path.exists(os.path.join(path, "frame_events.json")) else None
 
 
 class Server(http.server.ThreadingHTTPServer):

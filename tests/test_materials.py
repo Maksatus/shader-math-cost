@@ -10,6 +10,7 @@ import unittest
 
 from paretogpu.adapters.unity import assets as materials
 from paretogpu.core import materials as shaders
+from paretogpu.model.variant import VariantKey
 
 MAT = """%YAML 1.1
 --- !u!21 &2100000
@@ -69,7 +70,7 @@ class ProjectTest(unittest.TestCase):
         info = shaders.snapshot_info(snap)
         # without the editor: only the passes the snapshots drew, the water shader is skipped
         keys, skipped = shaders.plan(ms, info)
-        self.assertEqual(sorted(keys), [("Test/Lit", 0, 0, "Forward Opaque", ("_CLUSTERED", "_EMISSION"))])
+        self.assertEqual(sorted(keys), [VariantKey("Test/Lit", 0, 0, "Forward Opaque", ("_CLUSTERED", "_EMISSION"))])
         self.assertEqual(sorted(x["material"] for x in skipped),
                          ["Assets/M/builtin.mat", "Assets/M/glass.mat", "Assets/M/water.mat"])
         # with the editor's pass lists: every color pass the material does not switch off
@@ -78,10 +79,11 @@ class ProjectTest(unittest.TestCase):
                {"subshader": 0, "pass_index": 2, "pass": "ShadowCaster", "light_mode": "ShadowCaster"}]
         keys, skipped = shaders.plan(ms, info, {"Test/Lit": lit, "Custom/Water": lit[:1]})
         self.assertEqual(sorted(keys), [
-            ("Custom/Water", 0, 0, "Forward Opaque", ("_CLUSTERED",)),
-            ("Test/Lit", 0, 0, "Forward Opaque", ("_CLUSTERED", "_EMISSION")),
-            ("Test/Lit", 0, 1, "Forward Transparent", ("_ALPHA", "_FOG"))])
-        self.assertEqual(keys[("Test/Lit", 0, 1, "Forward Transparent", ("_ALPHA", "_FOG"))], ["Assets/M/glass.mat"])
+            VariantKey("Custom/Water", 0, 0, "Forward Opaque", ("_CLUSTERED",)),
+            VariantKey("Test/Lit", 0, 0, "Forward Opaque", ("_CLUSTERED", "_EMISSION")),
+            VariantKey("Test/Lit", 0, 1, "Forward Transparent", ("_ALPHA", "_FOG"))])
+        self.assertEqual(keys[VariantKey("Test/Lit", 0, 1, "Forward Transparent", ("_ALPHA", "_FOG"))],
+                         ["Assets/M/glass.mat"])
         self.assertEqual([x["material"] for x in skipped], ["Assets/M/builtin.mat"])
 
 

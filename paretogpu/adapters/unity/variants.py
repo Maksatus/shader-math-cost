@@ -14,7 +14,7 @@ import re
 import threading
 
 from paretogpu.adapters.unity.cli import UnityError, editor_ready, errors_of, run_script, script
-from paretogpu.model.variant import NOT_FINISHED
+from paretogpu.model.variant import NOT_FINISHED, VariantKey
 
 SCRIPT = script("ParetoGpuVariants.cs")
 
@@ -68,9 +68,10 @@ def compile_variants(project, keys, raw, platforms, timeout=1800, on_start=None,
     if on_start:
         on_start(len(keys))
     with open(config, "w", encoding="utf-8") as f:
-        json.dump({"shaders": [k[0] for k in keys], "subshaders": [k[1] for k in keys],
-                   "pass_indices": [k[2] for k in keys], "passes": [k[3] for k in keys],
-                   "keywords": [" ".join(k[4]) for k in keys], "platforms": list(platforms), "out": raw}, f, indent=1)
+        json.dump({"shaders": [k.shader for k in keys], "subshaders": [k.subshader for k in keys],
+                   "pass_indices": [k.pass_index for k in keys], "passes": [k.pass_name for k in keys],
+                   "keywords": [" ".join(k.keywords) for k in keys], "platforms": list(platforms), "out": raw}, f,
+                  indent=1)
     stop = threading.Event()
     watch = threading.Thread(target=_watch_compiled, args=(raw, len(keys), stop, on_step), daemon=True)
     watch.start()
@@ -110,7 +111,7 @@ def unfinished_run(raw):
         return None
     with open(config, encoding="utf-8") as f:
         cfg = json.load(f)
-    keys = [(s, ss, pi, p, tuple(kw.split())) for s, ss, pi, p, kw in
+    keys = [VariantKey(s, ss, pi, p, tuple(kw.split())) for s, ss, pi, p, kw in
             zip(cfg["shaders"], cfg["subshaders"], cfg["pass_indices"], cfg["passes"], cfg["keywords"])]
     files = {}
     for fn in os.listdir(raw):

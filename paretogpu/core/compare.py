@@ -19,6 +19,8 @@ import os
 import time
 from collections import Counter
 
+from paretogpu.model.cost import CostRun
+
 STAGES = (("fragment", "pixels", "px_price"), ("vertex", "vertices", "vtx_price"), ("compute", "threads", "cs_price"))
 EVENTS_SHOWN = 12  # events of a variant listed in its details
 
@@ -167,7 +169,7 @@ def compare_core(a, b, core):
             "shaders": sorted(shaders.values(), key=lambda s: -abs(s["delta"]))}
 
 
-def compare(a, b):
+def compare(a: CostRun, b: CostRun) -> dict:
     """Comparison of runs a (before) and b (after) on every core both have."""
     ia, ib = info(a), info(b)
     cores = [c for c in ib["cores"] if c in ia["cores"]]

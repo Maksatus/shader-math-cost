@@ -10,7 +10,7 @@ import os
 from collections import OrderedDict
 
 from paretogpu.core import pricing as heavy
-from paretogpu.model.cores import ARCH_SHORT, ARCHS, MAIN_CORE
+from paretogpu.model.cores import ARCH_SHORT, ARCHS, main_core
 
 
 def build_rows(records, fp16_threshold=heavy.FP16_THRESHOLD):
@@ -27,7 +27,7 @@ def build_rows(records, fp16_threshold=heavy.FP16_THRESHOLD):
             "pass": rec.get("pass", ""), "keywords": rec.get("keywords", []), "stage": rec["stage"],
             "api": rec["api"], "scores": {}})
         row["scores"][rec["core"]] = heavy.score(rec, fp16_threshold)
-    main = MAIN_CORE if MAIN_CORE in cores else next(iter(cores), None)
+    main = main_core(list(cores))
     for row in rows.values():
         sc = row["scores"]
         core = main if main in sc else next(iter(sc))

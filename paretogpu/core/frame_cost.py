@@ -20,7 +20,10 @@ from collections import OrderedDict, defaultdict
 from paretogpu.core import pixels as px
 from paretogpu.core import variants
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, loop_n, price
-from paretogpu.model.variant import key_of, key_str
+from paretogpu.model.cores import MAIN_CORE
+from paretogpu.model.cost import CostRun
+from paretogpu.model.frame import Event
+from paretogpu.model.variant import VariantKey, VariantState
 
 GROUPS = ("stage", "shader", "variant", "object", "rt")
 
@@ -55,8 +58,8 @@ def threads(ev):
     return (n, "dispatch") if c.get("groups") else (0, "none")
 
 
-def compute(meta, events, state, api="vulkan", cores=None, main_core="Mali-G78",
-            loop_iters=LOOP_ITERS, loop_overrides=None, loop_ns=LOOP_NS):
+def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", cores=None, main_core=MAIN_CORE,
+            loop_iters=LOOP_ITERS, loop_overrides=None, loop_ns=LOOP_NS) -> CostRun:
     """Cost of every event on every core. Returns the frame_cost.json structure.
     loop_iters: trip count of every outer dynamic loop (lights, probes, ray steps) of a shader whose longest path
     is N/A on some core (state["loops"], core/loops.py); loop_overrides: {part of a shader name: n};
@@ -83,7 +86,7 @@ def compute(meta, events, state, api="vulkan", cores=None, main_core="Mali-G78",
             "pixels": p["pixels"], "pixel_method": p["method"], "pixels_low": p["low"], "pixels_high": p["high"],
             "pixel_note": p["note"], "vertices": nv, "vertex_method": vmethod, "threads": nt, "thread_method": tmethod,
             "kernel": (ev.get("compute") or {}).get("kernel"),
-            "variant": key_str(key_of(ev)),
+            "variant": str(VariantKey.of(ev)),
             "files": {}, "cost": {}, "reason": why, "loop": None,
         }
         n_ev, fixed = loop_n(row["shader"], loop_iters, loop_overrides)

@@ -17,7 +17,7 @@ from paretogpu.core import pricing as heavy
 from paretogpu.core import loops
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, loop_n, price
 from paretogpu.core.variants import match
-from paretogpu.model.variant import API, key_str
+from paretogpu.model.variant import API, VariantKey
 
 COLOR_STAGES = ("opaque", "transparent")
 NS = LOOP_NS
@@ -81,14 +81,8 @@ def plan(materials, info, editor_passes=None):
         for sub, idx, name, lm in passes:
             g = info["globals"].get((sh, name)) or info["by_light_mode"].get(lm) or Counter({(): 1})
             kw = tuple(sorted(set(m["keywords"]) | set(g.most_common(1)[0][0])))
-            keys[(sh, sub, idx, name, kw)].append(m["path"])
+            keys[VariantKey(sh, sub, idx, name, kw)].append(m["path"])
     return dict(keys), skipped
-
-
-def pseudo_events(keys):
-    """Draw events that name the variants, for frame/variants.run()."""
-    return [{"index": -1, "kind": "draw", "shader": k[0], "subshader": k[1], "pass_index": k[2], "pass": k[3],
-             "keywords": list(k[4])} for k in keys]
 
 
 def _code(state, files, core):
@@ -119,17 +113,17 @@ def rows(keys, skipped, state, cost, api="vulkan", loop_iters=LOOP_ITERS, loop_o
                 f["share"][c] += x["share"]
     out, unpriced = {}, []
     for k, mats in keys.items():
-        ev = pseudo_events([k])[0]
+        ev = k.as_event()
         recs, why = match(ev, state, api)
         if not recs or "fragment" not in recs or "vertex" not in recs:
-            unpriced.append({"shader": k[0], "pass": k[3], "keywords": list(k[4]), "materials": mats,
+            unpriced.append({"shader": k.shader, "pass": k.pass_name, "keywords": list(k.keywords), "materials": mats,
                              "reason": why or "not compiled"})
             continue
         files = {s: next(iter(r.values()))["file"] for s, r in recs.items()}
         code = _code(state, files, main) or (k,)
         row = out.get(code)
         if row is None:
-            n, fixed = loop_n(k[0], loop_iters, loop_overrides)
+            n, fixed = loop_n(k.shader, loop_iters, loop_overrides)
             prices = {}
             for c in cores:
                 if c not in recs["fragment"] or c not in recs["vertex"]:
@@ -140,10 +134,10 @@ def rows(keys, skipped, state, cost, api="vulkan", loop_iters=LOOP_ITERS, loop_o
                              "vtx_price": v["cycles"], "vtx_bound": v["bound"], "regs": f["work_regs"],
                              "fp16": f["fp16_pct"], "flags": sorted(set(f["flags"]) | {x for x in v["flags"] if x != "low_fp16"})}
             fr = in_frame.get(code)
-            row = out[code] = {"shader": k[0], "pass": k[3], "keyword_sets": [], "materials": [], "prices": prices,
+            row = out[code] = {"shader": k.shader, "pass": k.pass_name, "keyword_sets": [], "materials": [], "prices": prices,
                                "in_frame": dict(fr["share"]) if fr else {}, "frame_events": fr["events"] if fr else 0,
                                "frame_pixels": fr["pixels"] if fr else 0, "files": files}
-        row["keyword_sets"].append(list(k[4]))
+        row["keyword_sets"].append(list(k.keywords))
         row["materials"] += [m for m in mats if m not in row["materials"]]
     result = sorted(out.values(), key=lambda r: -(r["prices"].get(main, {}).get("px_price") or 0))
     for r in result:
@@ -184,7 +178,7 @@ def _pipes(rec, file, core, ns, loop_data):
 
 def _price_pass(k, state, cores, api, loop_data, ns):
     """Prices of one variant on every core at every n, or (None, reason)."""
-    recs, why = match(pseudo_events([k])[0], state, api)
+    recs, why = match(k.as_event(), state, api)
     if not recs or "fragment" not in recs or "vertex" not in recs:
         return None, why or "не скомпилирован"
     files = {s: next(iter(r.values()))["file"] for s, r in recs.items()}
@@ -219,9 +213,9 @@ def describe(m, keys, state, cores, apis, ns=NS):
             if priced:
                 by_api[x] = priced
         main = by_api.get(apis[0]) or {"files": {}, "prices": {}}
-        passes.append({"pass": k[3], "subshader": k[1], "pass_index": k[2], "keywords": list(k[4]),
-                       "global_keywords": sorted(set(k[4]) - set(m["keywords"])),
-                       "variant": key_str(k), "key": [k[0], k[1], k[2], k[3], list(k[4])],
+        passes.append({"pass": k.pass_name, "subshader": k.subshader, "pass_index": k.pass_index,
+                       "keywords": list(k.keywords), "global_keywords": sorted(set(k.keywords) - set(m["keywords"])),
+                       "variant": str(k), "key": k.to_list(),
                        "error": errors[apis[0]], **main,
                        "prices_by_api": {x: v["prices"] for x, v in by_api.items()},
                        "files_by_api": {x: v["files"] for x, v in by_api.items()},
