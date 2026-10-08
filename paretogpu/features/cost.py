@@ -16,7 +16,7 @@ from paretogpu.app import variants
 from paretogpu.core import frame_cost
 from paretogpu.core import materials as shaders
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS
-from paretogpu.features.common import JOBS, cores_args, fail, parse_cores
+from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
 from paretogpu.features.spec import Arg, Command
 from paretogpu.model.cores import main_core as main_core_of
 from paretogpu.store import cost_runs, workspace
@@ -156,4 +156,6 @@ COST = Command(
      Arg("--out", help="output folder (default: the snapshot folder)")],
     run_command,
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
-                                                                         "report"])
+                                                                         "report"],
+    report=lambda v: os.path.join(v.get("out") or v["frame"], "frame_report.html"),
+    ui_values=default_variants)

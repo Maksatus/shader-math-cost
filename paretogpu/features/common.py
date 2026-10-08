@@ -6,6 +6,7 @@ from paretogpu.adapters import malioc
 from paretogpu.core.pricing import FP16_THRESHOLD
 from paretogpu.features.spec import Arg, Group
 from paretogpu.model.cores import MAIN_CORE, PRESETS
+from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE as rep
 
 
@@ -27,6 +28,16 @@ def parse_cores(args):
         return malioc.parse_cores(args.core or args.cores)
     except (ValueError, malioc.MaliocError) as e:
         fail(str(e), e)
+
+
+def default_variants(values):
+    """The UI's values with the project's variants folder when none is given: a variant is compiled once and priced
+    in every frame of the project."""
+    if not values.get("variants"):
+        project = values.get("project") or workspace.snapshot_project(values.get("frame"))
+        if project:
+            values["variants"] = workspace.variants_dir(project)
+    return values
 
 
 def cores_args(default="preset:mobile", help=None):

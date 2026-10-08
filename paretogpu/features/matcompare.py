@@ -15,7 +15,7 @@ import os
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import materials
 from paretogpu.core.materials import NS, apis_of, describe, pair_passes
-from paretogpu.features.common import JOBS, cores_args, fail, parse_cores
+from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
 from paretogpu.features.spec import Arg, Command
 from paretogpu.store import workspace
 from paretogpu.views import html
@@ -82,4 +82,6 @@ MATCOMPARE = Command(
      Arg("--recompile", action="store_true", help="compile the materials' variants again"),
      JOBS,
      Arg("--out", help="output folder (default: paretogpu/out/_matcompare/<time>)")],
-    run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "report"])
+    run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "report"],
+    report=lambda v: os.path.join(v["out"], "matcompare.html"),
+    ui_values=lambda v: default_variants({**v, "out": workspace.new_result_dir("matcompare")}))

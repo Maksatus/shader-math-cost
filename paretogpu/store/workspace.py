@@ -52,6 +52,15 @@ def new_result_dir(kind):
     return os.path.join(results_dir(kind), time_id())
 
 
+def snapshot_project(path):
+    """The Unity project a snapshot was taken in, or None."""
+    try:
+        with open(os.path.join(path or "", SNAPSHOT_FILE), encoding="utf-8") as f:
+            return json.load(f).get("project")
+    except (OSError, ValueError):
+        return None
+
+
 def is_snapshot(path):
     return os.path.exists(os.path.join(path, SNAPSHOT_FILE))
 

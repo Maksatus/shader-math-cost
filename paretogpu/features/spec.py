@@ -107,6 +107,12 @@ class Command:
     def phases_of(self, values):
         return self.phases(values) if self.phases else []
 
+    def report_of(self, values):
+        return self.report(values) if self.report else None
+
+    def ui_values_of(self, values):
+        return self.ui_values(dict(values)) if self.ui_values else dict(values)
+
 
 def build_parser(commands, prog="paretogpu"):
     ap = argparse.ArgumentParser(prog=prog)

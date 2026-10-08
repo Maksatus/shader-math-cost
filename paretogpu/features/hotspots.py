@@ -144,4 +144,5 @@ HOTSPOTS = Command(
      Arg("--core", help="core to ablate on (default: the snapshot's main core)"),
      JOBS,
      Arg("--out", help="output folder (default: the snapshot folder)")],
-    run_command, phases=lambda v: ["ablation", "report"])
+    run_command, phases=lambda v: ["ablation", "report"],
+    report=lambda v: os.path.join(v.get("out") or v["frame"], "hotspots.html"))

@@ -17,7 +17,7 @@ from paretogpu.core import ablation
 from paretogpu.core.materials import NS, apis_of, describe
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.core.variants import match
-from paretogpu.features.common import JOBS, cores_args, fail, parse_cores
+from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
 from paretogpu.features.spec import Arg, Command
 from paretogpu.model.cores import main_core
 from paretogpu.store import workspace
@@ -130,4 +130,6 @@ MATSHADER = Command(
      Arg("--recompile", action="store_true", help="compile the material's variants again"),
      JOBS,
      Arg("--out", help="output folder (default: paretogpu/out/_matshader/<time>)")],
-    run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"])
+    run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"],
+    report=lambda v: os.path.join(v["out"], "matshader.html"),
+    ui_values=lambda v: default_variants({**v, "out": workspace.new_result_dir("matshader")}))
