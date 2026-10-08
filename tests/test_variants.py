@@ -13,6 +13,7 @@ from unittest import mock
 from paretogpu.app import variants
 from paretogpu.model.variant import VariantKey
 from paretogpu.store import variant_store
+from paretogpu.views.reporter import QUIET
 
 EV = {"index": 0, "kind": "draw", "shader": "Test/Lit", "subshader": 0, "pass_index": 0, "pass": "Forward",
       "keywords": ["_A"]}
@@ -29,7 +30,7 @@ class RunTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def compile_stub(self, project, keys, root, platforms, timeout=1800):
+    def compile_stub(self, project, keys, root, platforms, timeout=1800, rep=None):
         self.compiled.append(list(keys))
         result = {"variants": []}
         raw = os.path.join(root, "_compiled")
@@ -51,7 +52,7 @@ class RunTest(unittest.TestCase):
                 mock.patch.object(variants, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
                 mock.patch.object(variants, "compile_variants", side_effect=self.compile_stub), \
                 mock.patch.object(variants.measure, "run", return_value=([], [])):
-            return variants.run([EV], "project", self.root, ["Mali-G78"], ["vulkan"], progress=lambda m: None, **kw)
+            return variants.run([EV], "project", self.root, ["Mali-G78"], ["vulkan"], rep=QUIET, **kw)
 
     def test_current_variant_is_reused(self):
         self.run_once()

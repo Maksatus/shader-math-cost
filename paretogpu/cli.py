@@ -23,20 +23,26 @@ import argparse
 import os
 import sys
 
-from paretogpu import progress
 from paretogpu.adapters import malioc as mali
 from paretogpu.app import measure
 from paretogpu.model import cores as core_presets
 from paretogpu.model.cores import MAIN_CORE, main_core as main_core_of
 from paretogpu.store import workspace
 from paretogpu.store.workspace import OUT
+from paretogpu.views.reporter import CONSOLE as rep
 
 
 def parse_cores(args):
     try:
         return mali.parse_cores(args.core or args.cores)
     except (ValueError, mali.MaliocError) as e:
-        sys.exit(str(e))
+        fail(str(e), e)
+
+
+def fail(message, e=None, code=None):
+    """Stop the command: the message for the console, the error code (model/errors.py) for the UI."""
+    rep.error(code or getattr(e, "code", "error"))
+    sys.exit(message)
 
 
 def positive_int(v):
@@ -101,7 +107,7 @@ def cmd_frame(args):
     try:
         meta, events = snapshot.run(args.project, out, args.timeout, args.max_events)
     except (snapshot.SnapshotError, RenderDocError) as e:
-        sys.exit(f"snapshot failed: {e}")
+        fail(f"snapshot failed: {e}", e)
     draws = [e for e in events if e["kind"] == "draw"]
     print(f"Unity {meta['unity']} ({meta['graphics_api']}, quality {meta['quality']}, "
           f"{'play' if meta['play_mode'] else 'edit'} mode): {len(events)} events in {meta['seconds']} s")
@@ -141,7 +147,7 @@ def cmd_cost(args):
     from paretogpu.views import tables
     path = os.path.join(args.frame, "frame_events.json")
     if not os.path.exists(path):
-        sys.exit(f"no frame_events.json in {args.frame}: run `frame` first")
+        fail(f"no frame_events.json in {args.frame}: run `frame` first", code="no_snapshot")
     with open(path, encoding="utf-8") as f:
         frame = json.load(f)
     events = frame["events"]
@@ -162,16 +168,16 @@ def cmd_cost(args):
     if args.materials:
         if not project or not os.path.isdir(project):
             sys.exit(f"--materials needs the Unity project (--project), got {project}")
-        progress.phase("materials")
+        rep.phase("materials")
         mat_keys, mat_skipped = project_variants(project, events, args, root)
     try:
         state = variants.run(events + ([k.as_event() for k in mat_keys] if mat_keys else []), project, root, cores,
                              platforms, args.jobs, compile_missing=not args.no_compile,
                              recompile=args.recompile, retry_failed=args.retry_failed)
     except VariantsError as e:
-        sys.exit(f"variants failed: {e}")
+        fail(f"variants failed: {e}", e)
     state["loops"] = variants.loops_of(state, root, cores, args.jobs)
-    progress.phase("report")
+    rep.phase("report")
     c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
                            loop_iters=args.loop_iters, loop_overrides=overrides)
     c["variants_checked"] = state["checked"]
@@ -273,7 +279,7 @@ def cmd_matcompare(args):
                              ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"], args.api, args.jobs,
                              compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[OUT])
     except (ValueError, VariantsError) as e:
-        sys.exit(f"matcompare: {e}")
+        fail(f"matcompare: {e}", e)
     for w in res["warnings"]:
         print(f"  ! {w}")
     mc = res["main_core"]
@@ -303,7 +309,7 @@ def cmd_matshader(args):
                             compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[OUT],
                             ablate_cores=ablate, n=args.n)
     except (ValueError, VariantsError) as e:
-        sys.exit(f"matshader: {e}")
+        fail(f"matshader: {e}", e)
     for w in res["warnings"]:
         print(f"  ! {w}")
     for p in res["m"]["passes"]:
@@ -332,7 +338,7 @@ def cmd_hotspots(args):
     try:
         res = hotspots.run(args.frame, args.top, args.core, args.jobs)
     except ValueError as e:
-        sys.exit(f"hotspots: {e}")
+        fail(f"hotspots: {e}", e)
     for it in res["shaders"]:
         print(f"{100 * (it['share'] or 0):5.1f}%  {it['variant']}")
         for stage, a in it["ablation"].items():
@@ -390,10 +396,10 @@ def cmd_export(args):
     cores = parse_cores(args) if args.measure else None
     out = args.out or workspace.export_dir(args.project)
     try:
-        progress.phase("unity_export")
+        rep.phase("unity_export")
         res = export.export(args.project, args.shaders, out, args.platforms.split(","), args.mode, args.timeout)
     except UnityError as e:
-        sys.exit(f"export failed: {e}")
+        fail(f"export failed: {e}", e)
     print(f"Unity {res.get('unity')} ({res['mode']}, {res['seconds']} s)")
     bad = len(res.get("errors", []))
     for e in res.get("errors", []):

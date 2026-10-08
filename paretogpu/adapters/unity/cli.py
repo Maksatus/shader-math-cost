@@ -107,3 +107,10 @@ def editor_ready(project, allow_play=False):
 
 def errors_of(d):
     return "; ".join(e.get("message", "") for e in d.get("errors") or []) or json.dumps(d)[:2000]
+
+
+def code_of(d):
+    """The error code of a failed Unity CLI answer (model/errors.py), or None for the error's own."""
+    if "No Pipeline instance found" in json.dumps(d):
+        return "unity_cli_off"
+    return None

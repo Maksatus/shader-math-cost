@@ -5,13 +5,13 @@
 import concurrent.futures as cf
 import os
 
-from paretogpu import progress as progress_ui
 from paretogpu.adapters import malioc as mali
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.core import vertexmove
 from paretogpu.core.ablation import ablated, explain, parse, tree
 from paretogpu.model.measurement import PIPES
+from paretogpu.views.reporter import CONSOLE
 
 
 def measure(src, core, stage, n, forced_loops):
@@ -33,7 +33,7 @@ def measure(src, core, stage, n, forced_loops):
             "price": round(price, 4), "bound": bound, "regs": regs, "na": c["longest"] is None}
 
 
-def run(src, stage, cores, n=2, jobs=None, progress=print, tick=None):
+def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None):
     """Ablation of every statement of main() on every core. Returns
     {"lines": main()'s lines [{"no", "text", "stmt"}], "statements": {id: {...}}, "by_core": {core: {"base", "stmts"}}}."""
     p = parse(src, stage)
@@ -44,8 +44,8 @@ def run(src, stage, cores, n=2, jobs=None, progress=print, tick=None):
     forced = {c: bool(probe[c].get("ok")) and heavy.combined(probe[c])["longest"] is None for c in cores}
     base = {c: measure(src, c, stage, n, forced[c]) for c in cores}
     tasks = [(s["id"], c) for s in targets for c in cores if "error" not in base[c]]
-    progress(f"ablation of {len(targets)} statements of the {stage} shader on {', '.join(cores)} ...")
-    tick = tick or progress_ui.counter(len(tasks))  # one counter may span several shaders
+    rep.log(f"ablation of {len(targets)} statements of the {stage} shader on {', '.join(cores)} ...")
+    tick = tick or rep.counter(len(tasks))  # one counter may span several shaders
 
     def job(t):
         sid, c = t

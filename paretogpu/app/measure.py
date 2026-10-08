@@ -17,12 +17,12 @@ import csv
 import json
 import os
 
-from paretogpu import progress
 from paretogpu.adapters import malioc as mali
 from paretogpu.core import pricing as heavy
 from paretogpu.core import ranking
 from paretogpu.model.cores import MAIN_CORE
 from paretogpu.views import tables
+from paretogpu.views.reporter import CONSOLE
 
 
 def find_shaders(folder):
@@ -52,15 +52,15 @@ def measure_one(path, core, api):
         return {"ok": False, "error": str(e)}
 
 
-def run(folder, cores=(MAIN_CORE,), api="gles", out=None, jobs=None):
+def run(folder, cores=(MAIN_CORE,), api="gles", out=None, jobs=None, rep=CONSOLE):
     """Measure the folder on every core; returns (records, failures). Writes the CSV and JSONL into out."""
     if isinstance(cores, str):
         cores = [cores]
     out = out or folder
     shaders = find_shaders(folder)
     tasks = [(s, core) for s in shaders for core in cores]
-    progress.phase("measure", len(tasks))
-    tick = progress.counter(len(tasks))
+    rep.phase("measure", len(tasks))
+    tick = rep.counter(len(tasks))
 
     def job(t):
         r = measure_one(t[0][0], t[1], api)

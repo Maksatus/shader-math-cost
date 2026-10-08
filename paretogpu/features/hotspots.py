@@ -12,11 +12,11 @@ import json
 import os
 import time
 
-from paretogpu import progress as progress_ui
 from paretogpu.app import ablation as ablation_run
 from paretogpu.core import ablation
 from paretogpu.core.pricing import LOOP_ITERS, loop_n
 from paretogpu.views import html
+from paretogpu.views.reporter import CONSOLE
 
 VERTEX_SHARE = 0.25  # the vertex shader is ablated too when it is at least this part of the variant's cost
 
@@ -53,7 +53,7 @@ def plan(c, top, core):
     return out
 
 
-def run(frame_dir, top=10, core=None, jobs=None, progress=print):
+def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
     path = os.path.join(frame_dir, "frame_cost.json")
     if not os.path.exists(path):
         raise ValueError(f"no frame_cost.json in {frame_dir}: price the snapshot first (cost)")
@@ -85,12 +85,12 @@ def run(frame_dir, top=10, core=None, jobs=None, progress=print):
                 it["ablation"][stage] = {"error": f"не удалось разобрать main(): {e}"}
                 continue
             work.append((it, stage, src, n, count))
-    progress_ui.phase("ablation", sum(w[4] for w in work))
-    tick = progress_ui.counter(sum(w[4] for w in work))
+    rep.phase("ablation", sum(w[4] for w in work))
+    tick = rep.counter(sum(w[4] for w in work))
     for it, stage, src, n, _ in work:
-        progress(f"{it['variant']} {stage}:")
-        it["ablation"][stage] = ablation_run.run(src, stage, [core], n, jobs, progress, tick)
-    progress_ui.phase("report")
+        rep.log(f"{it['variant']} {stage}:")
+        it["ablation"][stage] = ablation_run.run(src, stage, [core], n, jobs, rep, tick)
+    rep.phase("report")
     t = ((c.get("totals") or {}).get(core) or {}).get("total")
     return {"kind": "hotspots", "snapshot": os.path.basename(os.path.abspath(frame_dir)),
             "frame_dir": os.path.abspath(frame_dir), "project": (c.get("frame") or {}).get("project"), "core": core,

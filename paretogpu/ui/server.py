@@ -31,11 +31,11 @@ import urllib.request
 import webbrowser
 
 from paretogpu import cli
-from paretogpu import progress
 from paretogpu.core import compare
 from paretogpu.store import cost_runs as runs_store
 from paretogpu.store import workspace
 from paretogpu.views import html
+from paretogpu.views import reporter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -49,7 +49,7 @@ LOG_LINES = 50000  # kept in memory per run; the file has all of them
 
 
 def phases_of(cmd, v):
-    """Phases a step goes through, in order (the ids progress.phase() prints); [] = one phase, "run"."""
+    """Phases a step goes through, in order (the ids Reporter.phase() prints); [] = one phase, "run"."""
     if cmd == "frame":
         return ["rd_capture", "snapshot", "rd_counters"]
     if cmd == "cost":
@@ -363,9 +363,9 @@ class Runner:
             for line in proc.stdout:
                 line = line.rstrip("\r\n")
                 with self.lock:
-                    if line.startswith(progress.PREFIX):
+                    if line.startswith(reporter.PREFIX):
                         try:
-                            self._event(s, json.loads(line[len(progress.PREFIX):]))
+                            self._event(s, json.loads(line[len(reporter.PREFIX):]))
                         except ValueError:
                             self._log(job, line, f)
                     else:
@@ -423,6 +423,8 @@ class Runner:
                     p["done"] = e["done"]
                 if e.get("note"):
                     p["note"] = e["note"]
+        elif ev == "error":
+            s["error_code"] = e.get("code")
 
     def _end_step(self, s, status):
         now = time.time()
@@ -494,25 +496,32 @@ def cost_summary(folder):
 
 
 # known failures -> what to do, in words for someone who has not seen the CLI; `action`: a button the panel offers
+# known failures: (error code the command reports (model/errors.py), text of the log that names it when there is no
+# code, what to do, in words for someone who has not seen the CLI; `action`: a button the panel offers)
 HINTS = [
-    ("No Pipeline instance found", "Unity CLI в редакторе отключился. Включите его в Unity заново "
+    ("unity_cli_off", "No Pipeline instance found", "Unity CLI в редакторе отключился. Включите его в Unity заново "
      "(пакет com.unity.pipeline) и запустите ещё раз: ожидание не поможет.", None),
-    ("does not answer Unity CLI or is busy", "Unity не отвечает: откройте проект в Unity и дождитесь конца "
-     "компиляции и импорта (полоса прогресса внизу редактора), затем запустите ещё раз.", "no_compile"),
-    ("is not the game frame", "RenderDoc несколько раз подряд записал только окно редактора, а не кадр игры. Сделайте вкладку "
-     "Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и запустите проверку ещё раз.", None),
-    ("renderdoc", "Не получилось снять кадр через RenderDoc. В Unity на вкладке Game нажмите правой кнопкой "
+    ("editor_busy", "does not answer Unity CLI or is busy", "Unity не отвечает: откройте проект в Unity и дождитесь "
+     "конца компиляции и импорта (полоса прогресса внизу редактора), затем запустите ещё раз.", "no_compile"),
+    ("rd_not_game_frame", "is not the game frame", "RenderDoc несколько раз подряд записал только окно редактора, а не "
+     "кадр игры. Сделайте вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и запустите проверку "
+     "ещё раз.", None),
+    ("renderdoc", "renderdoc", "Не получилось снять кадр через RenderDoc. В Unity на вкладке Game нажмите правой кнопкой "
      "мыши → Load RenderDoc и запустите проверку ещё раз.", None),
-    ("malioc", "Не найден или упал malioc (Arm Performance Studio). Запустите start.bat: он покажет, чего не "
+    ("malioc", "malioc", "Не найден или упал malioc (Arm Performance Studio). Запустите start.bat: он покажет, чего не "
      "хватает.", None),
-    ("no frame_events.json", "Снимок не найден или не дописан: снимите кадр заново.", None),
+    ("no_snapshot", "no frame_events.json", "Снимок не найден или не дописан: снимите кадр заново.", None),
 ]
 
 
 def hint_of(job):
+    codes = [s.get("error_code") for s in job["steps"] if s.get("error_code")]
     text = ("\n".join(job["log"][-400:]) + "\n" + (job.get("error") or "")).lower()
-    for needle, hint, action in HINTS:
-        if needle.lower() in text:
+    for code, needle, hint, action in HINTS:
+        if code in codes or (not codes and needle.lower() in text):
+            return {"text": hint, "action": action if any(s["cmd"] == "cost" for s in job["steps"]) else None}
+    for code, needle, hint, action in HINTS:
+        if codes and needle.lower() in text:
             return {"text": hint, "action": action if any(s["cmd"] == "cost" for s in job["steps"]) else None}
     return {"text": "Что-то пошло не так, подробности в логе ниже. Если непонятно, пришлите лог тому, "
                     "кто поддерживает ParetoGPU.", "action": None}

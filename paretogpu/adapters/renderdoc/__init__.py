@@ -13,7 +13,7 @@ import subprocess
 import time
 import winreg
 
-from paretogpu.adapters.unity.cli import errors_of, run_script, script
+from paretogpu.adapters.unity.cli import code_of, errors_of, run_script, script
 from paretogpu.model.errors import ParetoError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +47,7 @@ def _run_entry(project, entry, args, timeout=120):
     res = (d.get("data") or {}).get("result") or {}
     if not d.get("success") or not res.get("success"):
         diag = "; ".join(x.get("message", "") for x in res.get("diagnostics") or [] if x.get("severity") == "error")
-        raise RenderDocError(f"{entry}: {diag or res.get('errorDetails') or errors_of(d)}"[:2000])
+        raise RenderDocError(f"{entry}: {diag or res.get('errorDetails') or errors_of(d)}"[:2000], code_of(d))
     return res.get("result")
 
 

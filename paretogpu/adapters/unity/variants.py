@@ -13,7 +13,7 @@ import os
 import re
 import threading
 
-from paretogpu.adapters.unity.cli import UnityError, editor_ready, errors_of, run_script, script
+from paretogpu.adapters.unity.cli import UnityError, code_of, editor_ready, errors_of, run_script, script
 from paretogpu.model.variant import NOT_FINISHED, VariantKey
 
 SCRIPT = script("ParetoGpuVariants.cs")
@@ -31,7 +31,8 @@ def _check(d, prefix=""):
     res = (d.get("data") or {}).get("result") or {}
     if not d.get("success") or not res.get("success") or not str(res.get("result", "")).startswith("ok"):
         diag = "; ".join(x.get("message", "") for x in res.get("diagnostics") or [] if x.get("severity") == "error")
-        raise VariantsError(f"{prefix}{res.get('result') or diag or res.get('errorDetails') or errors_of(d)}"[:3000])
+        raise VariantsError(f"{prefix}{res.get('result') or diag or res.get('errorDetails') or errors_of(d)}"[:3000],
+                            code_of(d))
 
 
 def shader_query(project, entry, shaders, raw, timeout=600):

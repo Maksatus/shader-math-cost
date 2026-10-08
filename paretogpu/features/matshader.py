@@ -9,7 +9,6 @@ dynamic loops at n iterations.
 """
 import os
 
-from paretogpu import progress as progress_ui
 from paretogpu.app import ablation as ablation_run
 from paretogpu.app import materials
 from paretogpu.core import ablation
@@ -17,17 +16,18 @@ from paretogpu.core.materials import NS, apis_of, describe
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.core.variants import match
 from paretogpu.views import html
+from paretogpu.views.reporter import CONSOLE
 
 STAGES = (("fragment", "frag"), ("vertex", "vert"))
 
 
 def run(project, material, root, cores, platforms=("gles3", "vulkan"), api="vulkan", jobs=None,
         compile_missing=True, recompile=False, ns=NS, snapshot_folders=(), ablate_cores=None,
-        n=LOOP_ITERS, progress=print):
+        n=LOOP_ITERS, rep=CONSOLE):
     if "gles3" not in platforms:
         raise ValueError("абляции нужен GLES-вариант (в нём остаются имена): не запускайте с --vulkan-only")
     prep = materials.prepare(project, [material], root, cores, platforms, jobs, compile_missing, recompile,
-                             snapshot_folders, progress)
+                             snapshot_folders, rep)
     apis = apis_of(api, platforms)
     side = describe(prep["mats"][0], prep["keys"][0], prep["state"], cores, apis, ns)
     ablate_cores = [c for c in (ablate_cores or cores[:1]) if c in cores] or cores[:1]
@@ -48,16 +48,16 @@ def run(project, material, root, cores, platforms=("gles3", "vulkan"), api="vulk
             total += sum(1 for s in ablation.parse(src, stage)["statements"] if s["ablate"]) * len(ablate_cores)
         except (ValueError, StopIteration):
             pass
-    progress_ui.phase("ablation", total)
-    tick = progress_ui.counter(total)
+    rep.phase("ablation", total)
+    tick = rep.counter(total)
     for p, stage, path in jobs_:
         with open(path, encoding="utf-8", errors="replace") as f:
             src = f.read()
         try:
-            p.setdefault("ablation", {})[stage] = ablation_run.run(src, stage, ablate_cores, n, jobs, progress, tick)
+            p.setdefault("ablation", {})[stage] = ablation_run.run(src, stage, ablate_cores, n, jobs, rep, tick)
         except (ValueError, StopIteration) as e:
             p.setdefault("ablation", {})[stage] = {"error": f"не удалось разобрать main(): {e}"}
-    progress_ui.phase("report")
+    rep.phase("report")
     return {"kind": "material", **materials.common(prep, [side], cores, api, apis, ns), "m": side,
             "ablate_cores": ablate_cores, "ablate_n": n}
 

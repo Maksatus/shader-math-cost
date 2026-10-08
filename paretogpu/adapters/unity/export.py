@@ -20,8 +20,8 @@ import subprocess
 import time
 
 from paretogpu.adapters.unity import split as split_unity
-from paretogpu.adapters.unity.cli import (UnityError, editor_ready, errors_of, project_open, run_script, script,
-                                         unity_exe)
+from paretogpu.adapters.unity.cli import (UnityError, code_of, editor_ready, errors_of, project_open, run_script,
+                                         script, unity_exe)
 
 SCRIPT = script("ParetoGpuExport.cs")
 TEMP_DIR = "ParetoGpuExportTemp"  # Assets/Editor/<this> during a batchmode run
@@ -36,7 +36,7 @@ def run_in_editor(project, config, timeout):
     res = (d.get("data") or {}).get("result") or {}
     if not d.get("success") or not res.get("success"):
         diag = "; ".join(str(x) for x in res.get("diagnostics") or [])
-        raise ExportError(f"run_script failed: {diag or errors_of(d)}")
+        raise ExportError(f"run_script failed: {diag or errors_of(d)}", code_of(d))
     return json.loads(res["result"])
 
 

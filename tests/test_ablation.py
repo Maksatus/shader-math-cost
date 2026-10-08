@@ -8,6 +8,7 @@ import unittest
 from paretogpu.adapters import malioc as mali
 from paretogpu.app import ablation as ablation_run
 from paretogpu.core import ablation
+from paretogpu.views.reporter import QUIET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SYNTH = os.path.join(HERE, "..", "paretogpu", "corpus", "synthetic")
@@ -115,8 +116,8 @@ class Parse(unittest.TestCase):
 class Measure(unittest.TestCase):
     def test_sin_is_about_8_fma_on_valhall(self):
         """Ready-when of A3.2: the self cost of a sin ≈ 8 FMA on Valhall."""
-        sin = ablation_run.run(read("sin_x4.frag"), "fragment", [CORE], jobs=4, progress=lambda *a: None)
-        mad = ablation_run.run(read("mad4_x64.frag"), "fragment", [CORE], jobs=4, progress=lambda *a: None)
+        sin = ablation_run.run(read("sin_x4.frag"), "fragment", [CORE], jobs=4, rep=QUIET)
+        mad = ablation_run.run(read("mad4_x64.frag"), "fragment", [CORE], jobs=4, rep=QUIET)
         rows = lambda r: r["by_core"][CORE]["stmts"]
         sins = [rows(sin)[i]["self"]["fma"] for i, s in sin["statements"].items() if "sin(" in s["text"]]
         fma = mad["by_core"][CORE]["base"]["pipes"]["fma"] / (64 * 4)  # 64 vec4 mads

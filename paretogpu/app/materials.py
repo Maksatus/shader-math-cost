@@ -8,7 +8,6 @@ import os
 import time
 from collections import Counter
 
-from paretogpu import progress as progress_ui
 from paretogpu.adapters.unity import assets as materials
 from paretogpu.adapters.unity import cli as unity
 from paretogpu.app import variants
@@ -17,6 +16,7 @@ from paretogpu.core.materials import NS
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.model.cores import main_core
 from paretogpu.store import workspace
+from paretogpu.views.reporter import CONSOLE
 
 
 def resolve(project, path, guids=None):
@@ -38,11 +38,11 @@ def resolve(project, path, guids=None):
 
 
 def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
-            recompile=False, snapshot_folders=(), progress=print):
+            recompile=False, snapshot_folders=(), rep=CONSOLE):
     """Materials -> their variants (passes, material and pipeline keywords) -> compiled and measured, with the
     dynamic loops priced. Returns {"project", "mats", "keys" (per material, sorted by pass), "state", "snaps"}."""
     project = os.path.abspath(project)
-    progress_ui.phase("materials")
+    rep.phase("materials")
     guids = materials.shader_guids(project)
     mats = [resolve(project, x, guids) for x in paths]
     for side, m in zip("AB" if len(mats) > 1 else [""], mats):
@@ -56,7 +56,7 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
         if unity.editor_ready(project, allow_play=True):
             editor = variants.shader_query(project, "Passes", names, root)
     if editor is None:
-        progress("passes are taken from the snapshots only "
+        rep.log("passes are taken from the snapshots only "
                  + ("(--no-compile)" if not compile_missing else "(the editor does not answer Unity CLI)"))
     if not info["by_light_mode"] and editor:
         # no snapshot of the project: every pass that shades the picture, without global keywords
@@ -70,10 +70,10 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
             raise ValueError(f"{m['path']}: " + (skipped[0]["reason"] if skipped else "ни одного прохода"))
         all_keys.update(keys)
         sides.append(sorted(keys, key=lambda k: (k.subshader, k.pass_index)))
-    progress(f"materials: {len(all_keys)} variants, {len(snaps)} snapshots of the project for global keywords")
+    rep.log(f"materials: {len(all_keys)} variants, {len(snaps)} snapshots of the project for global keywords")
     state = variants.run([k.as_event() for k in all_keys], project, root, cores, platforms, jobs,
-                         compile_missing=compile_missing, recompile=recompile, progress=progress)
-    state["loops"] = variants.loops_of(state, root, cores, jobs, progress)
+                         compile_missing=compile_missing, recompile=recompile, rep=rep)
+    state["loops"] = variants.loops_of(state, root, cores, jobs, rep)
     return {"project": project, "mats": mats, "keys": sides, "state": state, "snaps": snaps}
 
 

@@ -21,7 +21,6 @@ the dynamic loops (core/loops.py) of the files whose longest path is N/A.
 import concurrent.futures as cf
 import os
 
-from paretogpu import progress as progress_ui
 from paretogpu.adapters import malioc as mali
 from paretogpu.adapters.unity import cli as unity
 from paretogpu.adapters.unity import split as split_unity
@@ -33,6 +32,7 @@ from paretogpu.model.frame import Event
 from paretogpu.model.measurement import LoopProfile
 from paretogpu.model.variant import COMPUTE_NOT_COMPILED, NOT_FINISHED, VariantKey, VariantState
 from paretogpu.store import variant_store as store
+from paretogpu.views.reporter import CONSOLE
 
 
 def _es31(platform, data):
@@ -55,12 +55,11 @@ def recover(root):
     return errors
 
 
-def compile_variants(project, keys, root, platforms, timeout=1800):
+def compile_variants(project, keys, root, platforms, timeout=1800, rep=CONSOLE):
     """Compile `keys` in the open editor; writes the files and manifests; returns {key: [errors]}."""
     raw = store.raw_dir(root)
     result = unity_variants.compile_variants(project, keys, raw, platforms, timeout,
-                                             on_start=lambda n: progress_ui.phase("compile", n),
-                                             on_step=progress_ui.step)
+                                             on_start=lambda n: rep.phase("compile", n), on_step=rep.step)
     return store.place(root, raw, keys, result, _es31)
 
 
@@ -73,7 +72,7 @@ def shader_query(project, entry, shaders, root):
 
 
 def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
-        progress=print, recompile=False, retry_failed=False) -> VariantState:
+        rep=CONSOLE, recompile=False, retry_failed=False) -> VariantState:
     """Compile and measure the variants of the frame's draws. Returns the state for core/variants.match():
     {"keys", "files": {key: {(platform, stage): file}}, "errors": {key: [..]}, "measurements",
      "checked": True if the compiled files were checked against the shaders in the open editor}.
@@ -83,7 +82,7 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
     keys = list(dict.fromkeys(VariantKey.of(e) for e in events if e["kind"] in ("draw", "compute")))
     recovered = recover(root) or {}
     if recovered:
-        progress(f"recovered {sum(1 for e in recovered.values() if not e)} variants of an unfinished Unity run")
+        rep.log(f"recovered {sum(1 for e in recovered.values() if not e)} variants of an unfinished Unity run")
     stored = {}
     have = store.load_manifests(root, stored, platforms)
     index = store.load_index(root)  # every variant this folder has seen, of any frame: {key: entry}
@@ -95,11 +94,11 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
     current = None
     if compile_missing and draw_keys:
         if project and unity.editor_ready(project, allow_play=True):
-            progress_ui.phase("fingerprints")
+            rep.phase("fingerprints")
             current = current_fingerprints(project, [k.shader for k in draw_keys], root)
         else:
-            progress_ui.skip("fingerprints", "the editor does not answer")
-            progress("the editor does not answer Unity CLI: compiled variants are used without checking "
+            rep.skip("fingerprints", "the editor does not answer")
+            rep.log("the editor does not answer Unity CLI: compiled variants are used without checking "
                      "their shaders for changes")
 
     def failed_before(k):
@@ -118,20 +117,20 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
             errors[k] = [COMPUTE_NOT_COMPILED]
     if missing and compile_missing:
         if stale:
-            progress(f"{len(stale)} compiled variants are out of date (shader, includes, Unity or platform defines "
+            rep.log(f"{len(stale)} compiled variants are out of date (shader, includes, Unity or platform defines "
                      f"changed{', --recompile' if recompile else ''}): compiling them again")
-        progress(f"compiling {len(missing)} of {len(keys)} variants in Unity ...")
-        errors.update(compile_variants(project, missing, root, platforms))
+        rep.log(f"compiling {len(missing)} of {len(keys)} variants in Unity ...")
+        errors.update(compile_variants(project, missing, root, platforms, rep=rep))
         stored = {}
         have = store.load_manifests(root, stored, platforms)
     else:
-        progress_ui.skip("compile", "nothing to compile" if compile_missing else "--no-compile")
+        rep.skip("compile", "nothing to compile" if compile_missing else "--no-compile")
     pending = set() if compile_missing else {k for k in missing if not complete(k)}
     if any(have.get(k) for k in keys):
-        progress(f"measuring {root} on {', '.join(cores)} ...")
-        records, failures = measure.run(root, cores, "gles", root, jobs)
+        rep.log(f"measuring {root} on {', '.join(cores)} ...")
+        records, failures = measure.run(root, cores, "gles", root, jobs, rep)
         if failures:
-            progress(f"  malioc failed on {len(failures)} files")
+            rep.log(f"  malioc failed on {len(failures)} files")
     for k in keys:
         index[k] = {"key": k.to_list(),
                     "files": {f"{p}/{s}": fn for (p, s), fn in sorted(have.get(k, {}).items())},
@@ -165,7 +164,7 @@ def parametric(forced, api, stage, core, cache=mali.CACHE) -> LoopProfile | None
     return {"c": cs, "work_regs": regs, "spilling": spill}
 
 
-def loops_of(state: VariantState, root, cores, jobs=None, progress=print) -> dict:
+def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     """Loop prices of every measured file of the variants whose longest path is N/A on some core:
     {relative file: {core: parametric()}}; files whose loops cannot be forced map to {}."""
     files = sorted({fn for k in state["keys"] for fn in state["files"].get(k, {}).values()})
@@ -173,16 +172,16 @@ def loops_of(state: VariantState, root, cores, jobs=None, progress=print) -> dic
            if any(r.get("ok", True) and heavy.combined(r)["longest"] is None
                   for r in state["measurements"].get(fn, {}).values())]
     if not dyn:
-        progress_ui.skip("loops")
+        rep.skip("loops")
         return {}
-    progress(f"pricing dynamic loops of {len(dyn)} files at n = {', '.join(map(str, loops.NS))} ...")
-    progress_ui.phase("loops", len(dyn) * len(cores))
+    rep.log(f"pricing dynamic loops of {len(dyn)} files at n = {', '.join(map(str, loops.NS))} ...")
+    rep.phase("loops", len(dyn) * len(cores))
     forced = {}
     for fn in dyn:
         src = mali.read_source(os.path.join(root, fn))
         forced[fn] = [loops.force(src, n) for n in loops.NS]
     tasks = [(fn, c) for fn in dyn for c in cores]
-    tick = progress_ui.counter(len(tasks))
+    tick = rep.counter(len(tasks))
 
     def job(t):
         fn, core = t
@@ -199,6 +198,6 @@ def loops_of(state: VariantState, root, cores, jobs=None, progress=print) -> dic
             out[fn][core] = p
     bad = [fn for fn in dyn if len(out[fn]) < len(cores)]
     if bad:
-        progress(f"  loops not forced in {len(bad)} files (priced by total): " + ", ".join(bad[:5])
+        rep.log(f"  loops not forced in {len(bad)} files (priced by total): " + ", ".join(bad[:5])
                  + (" ..." if len(bad) > 5 else ""))
     return out
