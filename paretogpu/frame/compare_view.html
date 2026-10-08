@@ -96,6 +96,22 @@ table.chars { table-layout: fixed; }
 .bnd i { font-style: normal; font-weight: 400; color: var(--muted); }
 .costhelp { color: var(--accent, #34d399); font-size: 12px; text-decoration: none; }
 .costhelp:hover { text-decoration: underline; }
+.abl { margin-top: 16px; }
+.parts td { cursor: pointer; }
+.parts tr.on td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.parts td.code, .codev td.code { font: 12.5px var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+.parts tr.kid td { color: var(--muted); }
+.codev { max-height: 560px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; }
+.codev table { margin: 0; }
+.codev td { padding: 1px 8px; border-bottom: 0; vertical-align: middle; }
+.codev td.no { color: var(--muted); font: 11.5px var(--mono); text-align: right; width: 52px; user-select: none; }
+.codev td.heat { width: 150px; }
+.codev td.val { width: 64px; font: 11.5px var(--mono); text-align: right; color: var(--muted); }
+.codev tr.part td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.codev tr.mv td { background: color-mix(in srgb, var(--info) 16%, transparent); }
+.codev tr.sel td { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.hb { height: 8px; border-radius: 4px; background: var(--heavy); opacity: .85; }
+.hb.lo { background: var(--medium); }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 </style>
 </head>
@@ -152,6 +168,8 @@ function side(i, tag) {
 function render() {
   if (!D) { $("#app").innerHTML = `<div class="empty">Нет данных сравнения.</div>`; return; }
   if (D.kind === "materials") return renderMaterials();
+  if (D.kind === "material") return renderMaterial();
+  if (D.kind === "hotspots") return renderHotspots();
   const x = D.by_core[core];
   const head = `<div class="card"><h1>Сравнение кадров</h1>
     <div class="ab">${side(D.a, "A")}<div class="arrow">→</div>${side(D.b, "B")}</div>
@@ -234,6 +252,205 @@ function details(s) {
         <table style="margin-top:4px"><tr><th>Объект</th><th>Стадия</th><th class="n">Номер A / B</th><th class="n">Пиксели</th><th class="n">A</th><th class="n">B</th><th class="n">Разница</th></tr>${evs}</table></details>` : ""}</div>`;
   }).join("") + (shown.length && same.length ? `<div class="small muted">Ещё ${same.length} ${same.length === 1 ? "вариант" : "вариантов"} без изменений: ${same.map(v => esc(v.pass || v.variant)).join(", ")}</div>` : "");
 }
+/* ---------- one material: its shader and what every line costs (python -m paretogpu matshader) ---------- */
+let ablMetric = null, ablPart = {}, ablCore = null;
+const METRICS = {price: ["Экономия цены", "Насколько упадёт цена шейдера (циклы самого загруженного блока), если убрать часть"],
+  arith: ["A", "Арифметика: FMA, CVT, SFU"], ls: ["LS", "Память: буферы, спилл регистров"], v: ["V", "Varyings"], t: ["T", "Текстуры"]};
+const mInc = (row, m) => !row || row.error ? null : m === "price" ? row.price : (row.incl || {})[m];
+const mSelf = (row, m) => !row || row.error ? null : m === "price" ? row.self_price : (row.self || {})[m];
+
+function singlePipes(x, k, n) {
+  const g = x && x[k + "_pipes"];
+  if (!g) return "";
+  const l = g.longest[n], top = Math.max(...["arith", "ls", "v", "t"].filter(p => l[p] != null).map(p => l[p]));
+  const rows = PIPES.filter(([key]) => [l, g.shortest, g.total].some(c => c && c[key] != null)).map(([key, label, sub]) => {
+    const hot = ["arith", "ls", "v", "t"].includes(key) && Math.abs(l[key] - top) < 1e-6;
+    return `<tr${sub ? ` class="subp"` : ""}><td title="${esc(PIPE[key][2])}" style="cursor:help">${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
+      <td class="n">${hot ? `<b class="hot" title="Самый загруженный блок: его циклы и есть цена (упор)">${c1(l[key])} ●</b>` : c1(l[key])}</td>
+      <td class="n gl">${c1(g.shortest && g.shortest[key])}</td><td class="n gl">${c1(g.total && g.total[key])}</td></tr>`;
+  }).join("");
+  return `<table class="cmp">${cols(3)}<tr><th>Конвейер</th><th class="n" title="Самый дорогой путь: каждый if идёт по более дорогой ветке. По нему считается цена">Длинный путь${byNs(x, k) ? ` (n = ${n})` : ""}</th>
+    <th class="n gl" title="Все if идут по дешёвой ветке">Короткий</th><th class="n gl" title="Каждая инструкция один раз: объём кода, а не время">Всего</th></tr>${rows}</table>`;
+}
+
+const ABL = {}, ablMove = {}, ablCode = {};
+// the ablation of one shader stage: its costliest parts, the candidates for the vertex shader, its code with heat
+function ablationBlock(key, a, opts = {}) {
+  if (!a) return "";
+  if (a.error) return `<div class="warn">Разбор по строкам: ${esc(a.error)}</div>`;
+  ABL[key] = a;
+  const cores = Object.keys(a.by_core);
+  const c = cores.includes(core) ? core : cores[0];
+  const x = a.by_core[c];
+  if (x.base.error) return `<div class="warn">Разбор по строкам на ${esc(c)}: ${esc(x.base.error)}</div>`;
+  const ids = Object.keys(a.statements);
+  const roots = ids.filter(id => a.statements[id].parent == null && x.stmts[id] && !x.stmts[id].error);
+  let m = ablMetric;
+  if (!m) m = roots.some(id => (x.stmts[id].price || 0) > 0) ? "price" : "arith";
+  const baseV = m === "price" ? x.base.price : x.base.pipes[m];
+  const share = v => baseV ? p0(Math.max(0, v) / baseV) : "";
+  const sel = ablPart[key];
+  const sub = id => [id, ...(a.statements[id].children || []).flatMap(sub)];
+  const inPart = new Set(sel != null ? sub(String(sel)).map(String) : []);
+  const mv = (a.vertex_candidates || []).find(v => String(v.id) === String(ablMove[key]));
+  const inMove = new Set(mv ? mv.chain.map(String) : []);
+  const byM = (u, w) => (mInc(x.stmts[w], m) || 0) - (mInc(x.stmts[u], m) || 0) || ((x.stmts[w].incl || {}).arith || 0) - ((x.stmts[u].incl || {}).arith || 0);
+  roots.sort(byM);
+  const st = id => a.statements[id];
+  const line = id => st(id).line + 1;
+  const loopMark = id => st(id).loop ? ` <span class="lp" title="Строка в динамическом цикле: её цена — за n = ${a.n} итераций">↻</span>` : "";
+  const pipesOf = row => ["arith", "ls", "v", "t"].filter(p => Math.abs(row.incl[p] || 0) >= 0.01).map(p => `${PIPE[p][0]} ${c1(row.incl[p])}`).join(" · ");
+  const partRow = (id, kid) => { const row = x.stmts[id], v = mInc(row, m), n = sub(id).length, ex = st(id).explain;
+    return `<tr class="${kid ? "kid" : ""} ${String(sel) === String(id) ? "on" : ""}" data-part="${id}" data-key="${key}"><td class="n">${line(id)}</td>
+      <td class="code" title="${esc(st(id).text)}">${kid ? "↳ " : ""}${esc(st(id).text)}</td>
+      <td class="small" title="${esc(ex ? ex.text : "")}">${esc(ex ? ex.text : "")}</td><td class="n">${n > 1 ? n : ""}</td>
+      <td class="n"><b>${c1(v)}</b>${loopMark(id)}</td><td class="n">${share(v)}</td><td class="small muted">${pipesOf(row)}</td></tr>`; };
+  const top = opts.top || 15;
+  const rows = roots.slice(0, top).map(id => partRow(id) + (String(sel) === String(id)
+    ? (st(id).children || []).filter(k => x.stmts[k] && !x.stmts[k].error).sort(byM).slice(0, 12).map(k => partRow(k, true)).join("") : "")).join("");
+  const metricSeg = `<div class="seg" data-metrics="1">${Object.entries(METRICS).filter(([k]) => k === "price" || x.base.pipes[k] != null)
+    .map(([k, [t, tip]]) => `<button data-m="${k}" title="${esc(tip)}" class="${k === m ? "on" : ""}">${t}</button>`).join("")}</div>`;
+  // candidates for the vertex shader: what moving each saves is its own ablation (the same new varying)
+  const cands = (a.vertex_candidates || []).map(v => ({...v, row: x.stmts[v.id]})).sort((u, w) => (mInc(w.row, m) || 0) - (mInc(u.row, m) || 0));
+  const moves = cands.length ? `<h3>Можно посчитать в вертексе <span class="muted small" title="Значения, аффинные по varying с коэффициентами из свойств: их можно точно посчитать в вершинном шейдере и передать через Custom Interpolator">${cands.length} · ${refLink("vertex-move", "что это")}</span></h3>
+    <table class="cmp parts">${`<colgroup><col style="width:56px"><col style="width:400px"><col style="width:250px"><col style="width:70px"><col style="width:90px"><col style="width:70px"><col style="width:70px"></colgroup>`}
+      <tr><th class="n">Строка</th><th title="Значение, которое станет новым varying; клик — его цепочка в коде">Значение</th><th>Что это</th>
+      <th class="n" title="Сколько компонент займёт в varyings">Компонент</th>
+      <th class="n" title="${esc(METRICS[m][1])}: столько сэкономит пиксельный шейдер (с учётом нового varying)">${esc(METRICS[m][0])}</th>
+      <th class="n" title="Доля от цены шейдера">Доля</th><th class="n" title="Строк в цепочке, которая переедет в вертекс">Строк</th></tr>
+      ${cands.slice(0, top).map(v => { const val = mInc(v.row, m);
+        return `<tr class="${mv && mv.id === v.id ? "on" : ""}" data-move="${v.id}" data-key="${key}"><td class="n">${v.line + 1}</td>
+        <td class="code" title="${esc(v.text)}">${esc(v.text)}</td><td class="small">${esc(v.label)}</td><td class="n">${v.width}</td>
+        <td class="n ${val > 0 ? "good" : "muted"}"><b>${c1(val)}</b></td><td class="n">${val > 0 ? share(val) : ""}</td><td class="n">${v.chain.length}</td></tr>`; }).join("")}</table>
+    ${a.varyings ? `<div class="small muted" title="Mali интерполирует varyings по 4 компоненты; у vec3 и vec2 свободные компоненты можно занять без нового слота">varyings сейчас: ${a.varyings.varyings}, свободных компонент в них: ${a.varyings.free_components}</div>` : ""}` : "";
+  const showCode = opts.code !== false || ablCode[key];
+  const maxSelf = Math.max(...ids.map(id => mSelf(x.stmts[id], m) || 0), 1e-9);
+  const code = !showCode ? "" : a.lines.map(l => { const id = l.stmt, row = id != null ? x.stmts[id] : null, v = mSelf(row, m);
+    const w = v ? Math.max(2, 100 * v / maxSelf) : 0;
+    const cl = id != null && inPart.has(String(id)) ? (String(id) === String(sel) ? "sel" : "part") : id != null && inMove.has(String(id)) ? "mv" : "";
+    return `<tr id="L-${key}-${l.no}" class="${cl}"${id != null ? ` data-part="${id}" data-key="${key}" style="cursor:pointer"` : ""}>
+      <td class="no">${l.no}</td><td class="heat">${w ? `<div class="hb ${v < maxSelf / 4 ? "lo" : ""}" style="width:${w}%"></div>` : ""}</td>
+      <td class="val">${v ? c1(v) : ""}</td><td class="code">${esc(l.text)}</td></tr>`; }).join("");
+  return `<div class="abl"><h3>Самые тяжёлые части <span class="muted small">${esc(c)}, GLES, n = ${a.n} · ${refLink("ablation", "как считается")}</span></h3>
+    <div class="tools" style="margin:0 0 6px"><span class="small muted" title="По какому блоку сортировать части и красить строки">Сортировать по</span>${metricSeg}
+      <span class="small muted" title="Цена этого шейдера в GLES на ${esc(c)} при n = ${a.n}">из ${c1(baseV)} ${m === "price" ? "циклов цены" : "циклов " + PIPE[m][0]}</span></div>
+    <table class="cmp parts">${`<colgroup><col style="width:56px"><col style="width:400px"><col style="width:300px"><col style="width:50px"><col style="width:80px"><col style="width:60px"><col style="width:220px"></colgroup>`}
+      <tr><th class="n" title="Строка в коде шейдера">Строка</th><th title="Последняя строка части; клик — её строки в коде и самые дорогие подчасти">Часть</th>
+      <th title="Что делает часть: выборки текстур, чтение буферов, sin, деления… (по всем её строкам)">Что внутри</th>
+      <th class="n" title="Сколько строк кода в части: строка и всё, что без неё стало бы мёртвым кодом">Строк</th>
+      <th class="n" title="${esc(METRICS[m][1])}: насколько упадёт, если убрать часть">${esc(METRICS[m][0])}</th><th class="n" title="Доля от цены шейдера">Доля</th>
+      <th title="Насколько упадёт каждый блок, если убрать часть">По блокам</th></tr>${rows}</table>
+    ${moves}
+    <h3>Код <span class="muted small" title="Полоса и число — собственная цена строки: без строк её части">собственная цена строки · клик — её часть</span></h3>
+    ${showCode ? `<div class="codev" id="code-${key}"><table>${code}</table></div>` : `<button class="btn" data-code="${key}">Показать код (${a.lines.length} строк)</button>`}</div>`;
+}
+
+// clicks of the ablation blocks: a part, a vertex candidate, the code, the metric
+function bindAbl() {
+  const scrollTo = (kk, line) => { const row = line && document.getElementById(`L-${kk}-${line}`);
+    if (row) { const box = row.closest(".codev"); box.scrollTop = row.offsetTop - box.clientHeight / 2; } };
+  document.querySelectorAll("[data-part]").forEach(el => el.onclick = () => {
+    const kk = el.dataset.key, id = el.dataset.part;
+    ablPart[kk] = String(ablPart[kk]) === id && el.closest(".parts") ? null : id;
+    ablMove[kk] = null; ablCode[kk] = true;
+    render();
+    const a = ABL[kk];
+    scrollTo(kk, ablPart[kk] != null && a.statements[ablPart[kk]] ? a.statements[ablPart[kk]].line + 1 : null);
+  });
+  document.querySelectorAll("[data-move]").forEach(el => el.onclick = () => {
+    const kk = el.dataset.key, id = el.dataset.move;
+    ablMove[kk] = String(ablMove[kk]) === id ? null : id;
+    ablPart[kk] = null; ablCode[kk] = true;
+    render();
+    const v = (ABL[kk].vertex_candidates || []).find(c => String(c.id) === id);
+    scrollTo(kk, v && ablMove[kk] != null ? v.line + 1 : null);
+  });
+  document.querySelectorAll("[data-code]").forEach(el => el.onclick = () => { ablCode[el.dataset.code] = true; render(); });
+  document.querySelectorAll("[data-metrics] button").forEach(b => b.onclick = () => { ablMetric = b.dataset.m; render(); });
+}
+
+/* ---------- why the heaviest shaders of a frame are heavy (python -m paretogpu hotspots) ---------- */
+function renderHotspots() {
+  core = D.core;
+  const STAGE_RU = {fragment: "Пиксельный шейдер", vertex: "Вершинный шейдер"};
+  const topPart = a => { if (!a || a.error) return null;
+    const x = a.by_core[D.core]; if (!x || x.base.error) return null;
+    const ids = Object.keys(a.statements).filter(id => x.stmts[id] && !x.stmts[id].error);
+    // the costliest part below the shader's output: a root that is not almost the whole shader
+    const roots = ids.filter(id => a.statements[id].parent == null).sort((u, w) => (x.stmts[w].price || 0) - (x.stmts[u].price || 0));
+    const kids = id => (a.statements[id].children || []).filter(k => x.stmts[k] && !x.stmts[k].error).sort((u, w) => (x.stmts[w].price || 0) - (x.stmts[u].price || 0));
+    let id = roots[0];
+    while (id != null && x.stmts[id].price > 0.75 * x.base.price && kids(id).length && x.stmts[kids(id)[0]].price > 0.25 * x.base.price) id = kids(id)[0];
+    return id == null ? null : {text: a.statements[id].explain.text, line: a.statements[id].line + 1, price: x.stmts[id].price, base: x.base.price};
+  };
+  const head = `<div class="card"><h1>Почему тяжёлые шейдеры</h1>
+    <div class="mode small muted">Снимок <b>${esc(D.snapshot)}</b> · ${esc(D.core)} · цены кадра — ${esc(D.api || "")}, разбор строк — GLES · malioc ${esc(D.malioc || "?")} · расчёт ${when(D.computed_at)}</div>
+    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <p class="small" style="margin:10px 0 0">${refLink("hotspots", "Как читать")} · ${costHelp}</p></div>`;
+  const overview = `<div class="card"><h2>Самые дорогие шейдеры кадра</h2><table class="cmp parts">
+    <colgroup><col style="width:40px"><col style="width:420px"><col style="width:80px"><col style="width:480px"><col style="width:90px"></colgroup>
+    <tr><th class="n">#</th><th>Шейдер · проход</th><th class="n" title="Доля в цене кадра на ${esc(D.core)}">% кадра</th>
+    <th title="Самая дорогая часть пиксельного шейдера ниже его выхода и что в ней">Что тяжёлое</th><th class="n" title="Кандидатов на перенос в вертекс">В вертекс</th></tr>
+    ${D.shaders.map((it, i) => { const t = topPart((it.ablation || {}).fragment) || topPart((it.ablation || {}).vertex);
+      const nm = ((it.ablation || {}).fragment || {}).vertex_candidates;
+      return `<tr data-go="hs-${i}"><td class="n">${i + 1}</td><td class="code" title="${esc(it.variant)}">${esc(it.shader)} · ${esc(it.pass || "")}</td>
+        <td class="n"><b>${pct(it.share || 0, 1).replace("+", "")}</b></td>
+        <td class="small">${t ? `${esc(t.text)} <span class="muted">· строка ${t.line}, ${p0(Math.max(0, t.price) / (t.base || 1))} цены</span>` : `<span class="muted">${esc((((it.ablation || {}).fragment || {}).error) || "—")}</span>`}</td>
+        <td class="n">${nm && nm.length ? nm.length : ""}</td></tr>`; }).join("")}</table></div>`;
+  const cards = D.shaders.map((it, i) => {
+    const pxPrice = it.pixels ? it.fragment / it.pixels : null;
+    return `<div class="card" id="hs-${i}"><h2>#${i + 1} ${esc(it.shader)} <span class="muted">· ${esc(it.pass || "")}</span>
+        <span class="badge" style="background:var(--chip)">${pct(it.share || 0, 1).replace("+", "")} кадра</span></h2>
+      <div class="small">${kws(it.keywords || [])}</div>
+      <div class="small muted" style="margin-top:4px">${num(it.events)} событий · ${num(it.pixels)} пикс. · ${num(it.vertices)} верш.${pxPrice != null ? ` · в кадре ${c1(pxPrice)} цикл./пикс. (${esc(D.api || "")})` : ""}</div>
+      ${Object.entries(it.ablation || {}).map(([stage, a]) => `<h3 style="margin-top:14px">${STAGE_RU[stage] || stage}</h3>${ablationBlock(`${i}:${stage}`, a, {code: false, top: 8})}`).join("")}</div>`;
+  }).join("");
+  $("#app").innerHTML = head + overview + cards;
+  document.querySelectorAll("[data-go]").forEach(el => { el.style.cursor = "pointer"; el.onclick = () => document.getElementById(el.dataset.go).scrollIntoView({behavior: "smooth"}); });
+  bindAbl();
+}
+
+function renderMaterial() {
+  const M_ = D.m, n = String(selN), k = selPart;
+  const stage = k === "px" ? "fragment" : "vertex";
+  const looped = M_.passes.some(p => Object.values(PR(p)).some(x => x.looped));
+  const head = `<div class="card"><h1>Материал</h1>
+    <div class="side"><b>${esc(M_.material)}</b>
+      <div class="small muted" style="font-family:var(--mono);word-break:break-all">${esc(M_.path)}</div>
+      <div class="small" style="margin-top:4px">${esc(M_.shader)}</div><div class="small" style="margin-top:4px">${kws(M_.keywords)}</div></div>
+    <div class="mode small muted">Расчёт ${when(D.computed_at)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
+    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <p class="small" style="margin:10px 0 0">${refLink("ablation", "Как читать")} · ${costHelp}</p></div>`;
+  if (!D.cores.length) { $("#app").innerHTML = head; return; }
+  const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;
+  const parts = `<div class="seg" id="parts">${Object.entries(PARTS).map(([kk, [t]]) => `<button data-k="${kk}" class="${kk === selPart ? "on" : ""}">${t}</button>`).join("")}</div>`;
+  const apis = (D.apis || [D.api]).length > 1 ? `<div class="seg" id="apis">${D.apis.map(x => `<button data-a="${esc(x)}" class="${x === selApi ? "on" : ""}">${API_NAME[x] || esc(x)}</button>`).join("")}</div>` : "";
+  const nsel = looped ? `<span class="small muted">n циклов</span><div class="seg" id="ns">${D.ns.map(v => `<button data-n="${v}" class="${v === selN ? "on" : ""}">${v}</button>`).join("")}</div>` : "";
+  const tools = `<div class="card" style="padding:10px 16px"><div class="tools" style="margin:0">${parts}${apis}<span class="small muted" style="margin-left:8px">Ядро</span>${cores}<span style="flex:1"></span>${nsel}</div></div>`;
+  const cards = M_.passes.map((p, pi) => {
+    const x = PR(p)[core];
+    const a = (p.ablation || {})[stage];
+    const price = x ? x[k][n] : null;
+    const bound = boundTag(x && x[k + "_bound"]);
+    const flags = (x && x.flags || []).map(f => `<span class="badge flagbad">${esc(FLAG[f] || f)}</span>`).join(" ");
+    const facts = x ? `<div class="kpis"><div class="kpi"><div class="k">${PARTS[k][0]}</div><div class="v">${c1(price)}</div>
+        <div class="s">циклов на ${PARTS[k][1]} · ${API_NAME[selApi] || esc(selApi)}${byNs(x, k) ? `, n = ${n}` : ""}</div></div>
+      <div class="kpi"><div class="k">Упор</div><div class="v" style="font-size:16px;margin-top:6px">${bound}</div></div>
+      <div class="kpi"><div class="k">Регистры</div><div class="v">${c1(k === "px" ? x.px_regs : x.vtx_regs)}</div>${k === "px" && x.px_fp16 != null ? `<div class="s">fp16 ${x.px_fp16}%</div>` : ""}</div></div>
+      ${flags ? `<div style="margin-top:8px">${flags}</div>` : ""}` : `<div class="warn">${esc(p.error || "нет цены на этом ядре")}</div>`;
+    return `<div class="card"><h2>Проход ${esc(p.pass)}</h2>${facts}
+      <div class="small" style="margin-top:8px"><span class="muted" title="Keywords материала + глобальные keywords пайплайна для прохода">Keywords варианта:</span> ${kws(p.keywords)}</div>
+      <h3>По конвейерам <span class="muted small">${esc(core)}, ${API_NAME[selApi] || esc(selApi)}</span></h3>${singlePipes(x, k, n)}
+      ${ablationBlock(`${pi}:${stage}`, a)}</div>`;
+  }).join("");
+  $("#app").innerHTML = head + tools + cards;
+  document.querySelectorAll("#cores button").forEach(b => b.onclick = () => { core = b.dataset.c; render(); });
+  document.querySelectorAll("#ns button").forEach(b => b.onclick = () => { selN = +b.dataset.n; render(); });
+  document.querySelectorAll("#parts button").forEach(b => b.onclick = () => { selPart = b.dataset.k; render(); });
+  document.querySelectorAll("#apis button").forEach(b => b.onclick = () => { selApi = b.dataset.a; render(); });
+  bindAbl();
+}
+
 /* ---------- two materials (python -m paretogpu matcompare) ---------- */
 let selN = D && D.default_n;
 const kws = k => k.length ? k.map(x => `<span class="kwc">${esc(x)}</span>`).join(" ") : `<span class="muted">без keywords</span>`;

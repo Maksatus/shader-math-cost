@@ -41,6 +41,7 @@ OUT = cli.OUT
 REAL = cli.REAL
 STATE = os.path.join(OUT, "_ui")
 MATCMP = os.path.join(OUT, "_matcompare")  # results of `matcompare` started from the UI
+MATSH = os.path.join(OUT, "_matshader")  # results of `matshader` started from the UI
 JOBS = os.path.join(STATE, "jobs")
 LOG_LINES = 50000  # kept in memory per run; the file has all of them
 
@@ -58,6 +59,10 @@ def phases_of(cmd, v):
         return ["measure"]
     if cmd == "matcompare":
         return ["materials", "fingerprints", "compile", "measure", "loops", "report"]
+    if cmd == "matshader":
+        return ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"]
+    if cmd == "hotspots":
+        return ["ablation", "report"]
     if cmd == "bench_run":
         return ["bench_compile"]
     return []
@@ -70,6 +75,8 @@ PRESETS = [
     {"id": "cost", "steps": [{"cmd": "cost"}]},
     {"id": "site", "steps": [{"cmd": "bench_run"}, {"cmd": "bench_site"}]},
     {"id": "matcompare", "steps": [{"cmd": "matcompare"}]},
+    {"id": "matshader", "steps": [{"cmd": "matshader"}]},
+    {"id": "hotspots", "steps": [{"cmd": "hotspots"}]},
 ]
 BENCH = {  # bench scripts are not paretogpu commands: their arguments by hand
     "bench_run": {"help": "measure every function on every Mali GPU (bench/run.py) -> docs/mali_math_cost.csv",
@@ -238,7 +245,9 @@ class Runner:
                                                              values.get("suffix")))
         if preset_id == "matcompare":
             values["out"] = os.path.join(MATCMP, time.strftime("%Y%m%d_%H%M%S"))
-        if preset_id in ("frame_cost", "cost", "matcompare") and not values.get("variants"):
+        if preset_id == "matshader":
+            values["out"] = os.path.join(MATSH, time.strftime("%Y%m%d_%H%M%S"))
+        if preset_id in ("frame_cost", "cost", "matcompare", "matshader") and not values.get("variants"):
             # one variants folder per project: a variant is compiled once and priced in every frame of the project
             project = values.get("project") or (_cached_json(os.path.join(values.get("frame") or "",
                                                                           "frame_events.json")) or {}).get("project")
@@ -267,6 +276,10 @@ class Runner:
                 report = os.path.join(s["values"].get("out") or s["values"]["frame"], "frame_report.html")
             if s["cmd"] == "matcompare":
                 report = os.path.join(s["values"]["out"], "matcompare.html")
+            if s["cmd"] == "matshader":
+                report = os.path.join(s["values"]["out"], "matshader.html")
+            if s["cmd"] == "hotspots":
+                report = os.path.join(s["values"].get("out") or s["values"]["frame"], "hotspots.html")
         now = time.time()
         job = {"id": time.strftime("%Y%m%d_%H%M%S", time.localtime(now)), "preset": preset_id, "title": preset_id,
                "status": "running", "started": now, "finished": None, "steps": steps, "log": [], "log_start": 0,
@@ -557,6 +570,8 @@ def snapshots():
         if os.path.exists(rp):
             row["report"] = out_url(rp)
             row["cost_time"] = os.path.getmtime(rp)
+        hs = os.path.join(d, "hotspots.html")
+        row["hotspots"] = out_url(hs) if os.path.exists(hs) else None
         cost = _cached_json(os.path.join(d, "frame_cost.json"))
         if cost:
             mc = cost.get("main_core")
@@ -607,15 +622,28 @@ def matcompares():
     return sorted(rows, key=lambda r: -(r["computed_at"] or 0))
 
 
+def matshaders():
+    """Analyses of one material in paretogpu/out/_matshader, newest first."""
+    rows = []
+    if os.path.isdir(MATSH):
+        for name in os.listdir(MATSH):
+            r = _cached_json(os.path.join(MATSH, name, "matshader.json"))
+            if r and os.path.exists(os.path.join(MATSH, name, "matshader.html")):
+                rows.append({"id": name, "url": out_url(os.path.join(MATSH, name, "matshader.html")),
+                             "project": r.get("project"), "computed_at": r.get("computed_at"),
+                             "m": {k: r["m"].get(k) for k in ("material", "path", "shader")}})
+    return sorted(rows, key=lambda r: -(r["computed_at"] or 0))
+
+
 _materials = {}  # project -> (time, rows)
 
 
-def project_materials(project):
-    """Materials of a Unity project for the pickers: path, name, shader (scanned once a minute at most)."""
+def project_materials(project, fresh=False):
+    """Materials of a Unity project for the pickers: path, name, shader (scanned once a minute at most, unless fresh)."""
     from paretogpu.project import materials
     key = os.path.normcase(os.path.abspath(project))
     hit = _materials.get(key)
-    if hit and time.time() - hit[0] < 60:
+    if hit and not fresh and time.time() - hit[0] < 60:
         return hit[1]
     rows = [{"path": m["path"], "name": m.get("name") or os.path.basename(m["path"]), "shader": m.get("shader"),
              "error": m.get("error")} for m in materials.scan(project)]
@@ -624,12 +652,15 @@ def project_materials(project):
 
 
 def material_by_content(project, name, text):
-    """Materials of the project named `name` (a .mat dropped from Explorer has no path), the same content first."""
+    """Materials of the project named `name` (a .mat dropped from Explorer has no path), the same content first.
+    A name missing from the cached list is looked up in a fresh scan (a branch switch adds materials)."""
     norm = lambda t: t.replace("\r\n", "\n").strip()
+    named = [m for m in project_materials(project) if os.path.basename(m["path"]).lower() == name.lower()]
+    if not named:
+        named = [m for m in project_materials(project, fresh=True)
+                 if os.path.basename(m["path"]).lower() == name.lower()]
     same, other = [], []
-    for m in project_materials(project):
-        if os.path.basename(m["path"]).lower() != name.lower():
-            continue
+    for m in named:
         try:
             with open(os.path.join(project, m["path"]), encoding="utf-8", errors="replace") as f:
                 (same if norm(f.read()) == norm(text) else other).append(m["path"])
@@ -860,6 +891,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"runs": cost_runs()})
             if p == "/api/matcompares":
                 return self._json({"items": matcompares()})
+            if p == "/api/matshaders":
+                return self._json({"items": matshaders()})
             if p == "/api/materials":
                 if not os.path.isdir(os.path.join(q.get("project", ""), "Assets")):
                     return self._json({"error": "нет такого Unity-проекта", "materials": []}, 404)

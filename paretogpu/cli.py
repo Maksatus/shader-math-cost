@@ -13,6 +13,10 @@
   python -m paretogpu matcompare --project <Unity> <A.mat> <B.mat> [--cores preset:mobile] [--api vulkan|gles]
                                  [--variants DIR] [--out DIR] [--no-compile] [--recompile]
                                  two materials: their variants (keywords, passes) per pixel / vertex at loop n = 0..8
+  python -m paretogpu matshader --project <Unity> <material.mat> [--cores ...] [--ablate-cores Mali-G78] [--n 2]
+                                one material: its variants and what every line of their code costs (ablation)
+  python -m paretogpu hotspots <snapshot folder> [--top 10] [--core Mali-G78]
+                               the heaviest shaders of a priced snapshot: their costliest parts and why -> hotspots.html
   python -m paretogpu ui [--port 8765] [--no-window]   local web UI: the function cost site, runs with progress, reports
 """
 import argparse
@@ -290,6 +294,75 @@ def cmd_matcompare(args):
     return 0
 
 
+def cmd_matshader(args):
+    from paretogpu.frame import variants
+    from paretogpu.project import matshader
+    cores = parse_cores(args)
+    ablate = [c.strip() for c in args.ablate_cores.split(",")] if args.ablate_cores else [
+        MAIN_CORE if MAIN_CORE in cores else cores[0]]
+    bad = [c for c in ablate if c not in cores]
+    if bad:
+        sys.exit(f"--ablate-cores {', '.join(bad)}: not among the cores ({', '.join(cores)})")
+    project = os.path.abspath(args.project)
+    root = args.variants or os.path.join(OUT, f"variants_{os.path.basename(project)}")
+    out = args.out or os.path.join(OUT, "_matshader", time_id())
+    try:
+        res = matshader.run(project, args.material, root, cores, ["gles3", "vulkan"], args.api, args.jobs,
+                            compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[OUT],
+                            ablate_cores=ablate, n=args.n)
+    except (ValueError, variants.VariantsError) as e:
+        sys.exit(f"matshader: {e}")
+    for w in res["warnings"]:
+        print(f"  ! {w}")
+    for p in res["m"]["passes"]:
+        for stage, a in (p.get("ablation") or {}).items():
+            if "error" in a:
+                print(f"{p['pass']} {stage}: {a['error']}")
+                continue
+            for core, x in a["by_core"].items():
+                if "error" in x["base"]:
+                    print(f"{p['pass']} {stage} {core}: {x['base']['error']}")
+                    continue
+                parts = sorted((sid for sid, st in a["statements"].items() if st["parent"] is None
+                                and "error" not in x["stmts"].get(sid, {"error": 1})),
+                               key=lambda sid: -x["stmts"][sid]["price"])
+                print(f"{p['pass']} {stage} {core}: {x['base']['price']} cycles (GLES, n = {a['n']}), "
+                      f"{len(a['statements'])} statements; costliest parts:")
+                for sid in parts[:5]:
+                    st = a["statements"][sid]
+                    print(f"  -{x['stmts'][sid]['price']:6.2f}  line {st['line'] + 1}: {st['text'][:80]}")
+    print(f"-> {os.path.abspath(matshader.write(res, out))}")
+    return 0
+
+
+def cmd_hotspots(args):
+    from paretogpu.project import hotspots
+    try:
+        res = hotspots.run(args.frame, args.top, args.core, args.jobs)
+    except ValueError as e:
+        sys.exit(f"hotspots: {e}")
+    for it in res["shaders"]:
+        print(f"{100 * (it['share'] or 0):5.1f}%  {it['variant']}")
+        for stage, a in it["ablation"].items():
+            if "error" in a:
+                print(f"        {stage}: {a['error']}")
+                continue
+            x = a["by_core"][res["core"]]
+            if "error" in x["base"]:
+                print(f"        {stage}: {x['base']['error']}")
+                continue
+            roots = sorted((sid for sid, st in a["statements"].items() if st["parent"] is None
+                            and "error" not in x["stmts"].get(sid, {"error": 1})),
+                           key=lambda sid: (-x["stmts"][sid]["price"], -x["stmts"][sid]["incl"].get("arith", 0)))
+            print(f"        {stage} {x['base']['price']} cycles (GLES, n = {a['n']}): "
+                  + "; ".join(f"line {a['statements'][sid]['line'] + 1} -{x['stmts'][sid]['price']:.2f} "
+                              f"({a['statements'][sid]['explain']['text']})" for sid in roots[:3]))
+            if a.get("vertex_candidates"):
+                print(f"        to the vertex shader: {len(a['vertex_candidates'])} candidates")
+    print(f"-> {os.path.abspath(hotspots.write(res, args.out or args.frame))}")
+    return 0
+
+
 def time_id():
     import time
     return time.strftime("%Y%m%d_%H%M%S")
@@ -478,6 +551,36 @@ def build_parser():
     m.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
     m.add_argument("--out", help="output folder (default: paretogpu/out/_matcompare/<time>)")
     m.set_defaults(func=cmd_matcompare)
+
+    s_ = sub.add_parser("matshader", help="one material of a Unity project: its shader variants (material and pipeline "
+                                           "keywords, color passes), their prices and what every line of their code "
+                                           "costs (ablation, plan A3.2); needs the open editor to compile")
+    s_.add_argument("material", help=".mat path, relative to the project or absolute")
+    s_.add_argument("--project", required=True, help="Unity project folder (its editor must be open to compile)")
+    s_.add_argument("--variants", help="folder of the compiled variants (default: paretogpu/out/variants_<project>)")
+    sg = s_.add_mutually_exclusive_group()
+    sg.add_argument("--cores", default="preset:mobile", help="comma separated cores and/or presets (default preset:mobile)")
+    sg.add_argument("--core", help="one core (same as --cores <core>)")
+    s_.add_argument("--ablate-cores", help="cores to ablate on, comma separated (default Mali-G78): every statement "
+                                           "is one malioc run per core")
+    s_.add_argument("--n", type=int, default=frame_cost_defaults()[0],
+                    help="iterations of the dynamic loops in the ablation (default %(default)s)")
+    s_.add_argument("--api", default="vulkan", choices=["vulkan", "gles"], help="main API of the prices (default vulkan)")
+    s_.add_argument("--no-compile", action="store_true", help="use only the variants already in the folder")
+    s_.add_argument("--recompile", action="store_true", help="compile the material's variants again")
+    s_.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
+    s_.add_argument("--out", help="output folder (default: paretogpu/out/_matshader/<time>)")
+    s_.set_defaults(func=cmd_matshader)
+
+    h = sub.add_parser("hotspots", help="why the heaviest shaders of a priced snapshot are heavy: every line of their "
+                                        "GLES variant ablated (plan A3.5), the costliest parts and what they do, the "
+                                        "candidates for moving to the vertex shader -> hotspots.html")
+    h.add_argument("frame", help="snapshot folder with frame_cost.json (after `cost`)")
+    h.add_argument("--top", type=positive_int, default=10, help="how many of the costliest variants (default %(default)s)")
+    h.add_argument("--core", help="core to ablate on (default: the snapshot's main core)")
+    h.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
+    h.add_argument("--out", help="output folder (default: the snapshot folder)")
+    h.set_defaults(func=cmd_hotspots)
 
     u = sub.add_parser("ui", help="local web UI (127.0.0.1): the function cost site, the commands with their "
                                   "progress, the reports of the snapshots")

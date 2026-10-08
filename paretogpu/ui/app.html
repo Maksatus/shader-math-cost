@@ -166,6 +166,7 @@ table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
     <button data-tab="run">Проверка кадра<span id="tabPill"></span></button>
     <button data-tab="reports">Отчёты</button>
     <button data-tab="compare">Сравнение</button>
+    <button data-tab="mat">Материал</button>
     <button data-tab="site">Цена функций</button>
     <button data-tab="ref">Справочник</button>
   </nav>
@@ -226,6 +227,7 @@ table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
       <button class="btn" id="repBack">← К списку</button>
       <b id="repName"></b>
       <span style="flex:1"></span>
+      <div class="seg" id="repWhich"><button data-w="report" class="on" title="Отчёт кадра: цена событий и шейдеров">Отчёт кадра</button><button data-w="hotspots" title="Самые дорогие шейдеры кадра: их самые тяжёлые части и что в них">Почему тяжёлые</button></div>
       <button class="btn" id="repRecalc">Пересчитать</button>
       <button class="btn" id="repFolder">Открыть папку</button>
       <a class="btn" id="repOpen" target="_blank">В браузере</a>
@@ -260,11 +262,25 @@ table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
   <iframe id="siteFrame" title="Цена функций"></iframe>
 </section>
 
+<section id="tab-mat">
+  <div class="bar2 cmpbar">
+    <select id="msProject" title="Unity-проект" style="width:auto;max-width:220px"></select>
+    <input type="text" id="msMat" list="dl-ms" placeholder="Материал: имя, путь или шейдер, или перетащите .mat" style="width:420px">
+    <button class="btn sm primary" id="msRun">Разобрать</button>
+    <span style="flex:1"></span>
+    <select id="msHist" title="Прошлые разборы" style="width:auto;max-width:360px"></select>
+    <a class="btn sm" id="msOpen" target="_blank">В браузере</a>
+  </div>
+  <div class="page" id="msEmpty" style="display:none"></div>
+  <iframe id="msFrame" title="Материал"></iframe>
+</section>
+
 <section id="tab-ref"><iframe id="refFrame" title="Справочник"></iframe></section>
 
 <datalist id="dl-cores"></datalist>
 <datalist id="dl-matA"></datalist>
 <datalist id="dl-matB"></datalist>
+<datalist id="dl-ms"></datalist>
 
 <script>
 "use strict";
@@ -298,14 +314,14 @@ const M = x => x == null ? "—" : (x / 1e6).toFixed(1);
 const pct = x => x == null ? "—" : (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
 
 const PRESET_TEXT = {frame_cost: "Проверка кадра", cost: "Пересчёт снимка", site: "Обновление данных сайта",
-  matcompare: "Сравнение материалов"};
+  matcompare: "Сравнение материалов", matshader: "Разбор материала", hotspots: "Почему тяжёлые шейдеры"};
 const STEP_TEXT = {frame: "Снимок кадра", cost: "Цена кадра", bench_run: "Замер функций", bench_site: "Сборка сайта"};
 const PHASE_TEXT = {
   rd_capture: ["Захват кадра в RenderDoc"], snapshot: ["Снимок кадра (Frame Debugger)", "событий"],
   rd_counters: ["Подсчёт пикселей (RenderDoc)"], materials: ["Материалы проекта"],
   fingerprints: ["Проверка изменений шейдеров"], compile: ["Компиляция шейдеров в Unity", "вариантов"],
   measure: ["Замеры malioc", "замеров"], loops: ["Циклы в шейдерах (malioc)", "замеров"],
-  report: ["Расчёт и отчёт"], bench_compile: ["Замеры malioc", "шейдеров"], run: ["Выполнение"],
+  report: ["Расчёт и отчёт"], ablation: ["Разбор по строкам (malioc)", "замеров"], bench_compile: ["Замеры malioc", "шейдеров"], run: ["Выполнение"],
 };
 const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
   "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
@@ -328,6 +344,7 @@ function tab(name) {
   if (name === "ref" && !$("#refFrame").src) $("#refFrame").src = "/site/reference.html";
   if (name === "reports") loadReports();
   if (name === "compare") cmpMode === "materials" ? loadMaterials() : loadCompare();
+  if (name === "mat") loadMs();
   store.set("tab", name);
 }
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
@@ -532,6 +549,7 @@ function resultHtml(j) {
     ${pixelsLine(s)}
     ${s.checked === false ? `<div class="warnline">⚠ Шейдеры не перекомпилировались (Unity был недоступен или выбран расчёт без компиляции): если шейдеры менялись после прошлого расчёта, цена может быть устаревшей.</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="open">Открыть полный отчёт</button>
+      <button class="btn" data-act="hotspots" title="Самые дорогие шейдеры кадра: их самые тяжёлые части и что в них">Почему тяжёлые</button>
       ${s.unpriced_draws ? `<button class="btn" data-act="retry">Повторить упавшие (${s.unpriced_draws})</button>` : ""}
       <button class="btn" data-act="folder">Папка</button></div></div>`;
 }
@@ -601,6 +619,7 @@ async function act(a, j) {
   if (a === "stop" && confirm("Остановить проверку? Текущий шаг прервётся.")) await api("/api/stop", {});
   if (a === "open") openReport({name: dir.split(/[\\/]/).pop(), report: j.report, path: dir});
   if (a === "folder") api("/api/reveal", {path: dir});
+  if (a === "hotspots") start("hotspots", {frame: dir});
   if (a === "compare" && j.summary && j.summary.prev) openCompare(j.summary.prev.run_a, j.summary.prev.run_b);
   if (a === "retry" && cs) start("cost", {...cs.values, retry_failed: true});
   if (a === "nocompile" && cs) start("cost", {...cs.values, no_compile: true});
@@ -846,6 +865,7 @@ for (const [inp, dl] of [["#matA", "#dl-matA"], ["#matB", "#dl-matB"]]) {
     const r = await api("/api/material_match", {project: matProject(), name: f.name, text: await f.text()});
     if (!r.paths || !r.paths.length) { matMsg(`Материал ${esc(f.name)} не найден в проекте ${esc(matProject())}.`); return; }
     el.value = r.paths[0];
+    if (!matOf(r.paths[0])) { forgetMats(matProject()); await loadMatList(); }
     el.oninput();
     if (r.paths.length > 1) matMsg(`В проекте несколько ${esc(f.name)}, выбран ${esc(r.paths[0])}. Другие — в списке поля.`);
   };
@@ -912,6 +932,113 @@ function matProgress() {
     <pre class="log">${esc(tail)}</pre><div class="small muted">Весь лог — во вкладке «Проверка кадра».</div>`);
 }
 
+/* ---------- one material ---------- */
+const MATS_OF = new Map();  // project -> its materials (for the pickers)
+async function materialsOf(project) {
+  if (!MATS_OF.has(project)) MATS_OF.set(project, (await api("/api/materials?project=" + encodeURIComponent(project))).materials || []);
+  return MATS_OF.get(project);
+}
+// a dropped material the cached list does not have (added by a branch switch): load the list again
+function forgetMats(project) {
+  MATS_OF.delete(project);
+  if (matsOf === project) matsOf = null;
+}
+let msJobId = null, msTimer = null;
+async function loadMs() {
+  if (!$("#msProject").options.length) {
+    const ps = OPT.unity_projects;
+    $("#msProject").innerHTML = ps.map(p => `<option value="${esc(p.path)}">${esc(p.title)}</option>`).join("");
+    const s = store.get("matshader") || {};
+    const saved = s.project || store.get("project");
+    if (ps.some(p => p.path === saved)) $("#msProject").value = saved;
+    else { const open = ps.find(p => p.open); if (open) $("#msProject").value = open.path; }
+    if (s.project === $("#msProject").value) $("#msMat").value = s.mat || "";
+  }
+  msSuggest();
+  await loadMsHist();
+}
+async function msSuggest() {
+  const list = await materialsOf($("#msProject").value);
+  const saved = MATS; MATS = list;  // suggest() reads MATS
+  suggest($("#msMat"), $("#dl-ms"));
+  MATS = saved;
+  const ok = list.some(m => m.path === $("#msMat").value.trim());
+  const busy = !!(job && job.status === "running");
+  $("#msRun").disabled = !ok || busy;
+  $("#msRun").title = busy ? "Уже идёт запуск" : ok ? "" : "Выберите материал из списка";
+  store.set("matshader", {project: $("#msProject").value, mat: $("#msMat").value.trim()});
+}
+$("#msMat").oninput = msSuggest;
+$("#msProject").onchange = () => { $("#msMat").value = ""; msSuggest(); };
+$("#msMat").ondragover = e => { e.preventDefault(); $("#msMat").classList.add("drop"); };
+$("#msMat").ondragleave = () => $("#msMat").classList.remove("drop");
+$("#msMat").ondrop = async e => {
+  e.preventDefault(); $("#msMat").classList.remove("drop");
+  const f = e.dataTransfer.files[0];
+  if (!f || !f.name.endsWith(".mat")) { msMsg(`Перетащите файл материала (.mat).`); return; }
+  const r = await api("/api/material_match", {project: $("#msProject").value, name: f.name, text: await f.text()});
+  if (!r.paths || !r.paths.length) { msMsg(`Материал ${esc(f.name)} не найден в проекте.`); return; }
+  $("#msMat").value = r.paths[0];
+  if (!(MATS_OF.get($("#msProject").value) || []).some(m => m.path === r.paths[0])) forgetMats($("#msProject").value);
+  msSuggest();
+};
+function msMsg(html) {
+  $("#msFrame").style.display = "none"; $("#msFrame").src = "about:blank"; $("#msFrame").dataset.q = "";
+  $("#msEmpty").style.display = "";
+  $("#msEmpty").innerHTML = `<div class="card" style="max-width:800px;margin:0 auto">${html}</div>`;
+}
+async function loadMsHist(select) {
+  const items = (await api("/api/matshaders")).items || [];
+  $("#msHist").innerHTML = (items.length ? "" : `<option value="">прошлых разборов нет</option>`) + items.map(x =>
+    `<option value="${esc(x.url)}">${when(x.computed_at)} · ${esc(x.m.material)}</option>`).join("");
+  const want = select || store.get("msHist");
+  if (items.some(x => x.url === want)) $("#msHist").value = want;
+  if (msJobId && job && job.id === msJobId && job.status === "running") return msProgress();
+  showMs();
+}
+function showMs() {
+  const url = $("#msHist").value;
+  $("#msOpen").style.visibility = url ? "" : "hidden";
+  if (!url) {
+    msMsg(`<h2>Разбор материала</h2><p class="muted">Выберите проект и материал вверху (поиск или перетащите .mat) и нажмите «Разобрать».
+      Нужен открытый редактор Unity. <a href="#" data-ref="usage" style="color:var(--accent)">Подробнее ↗</a></p>`);
+    return;
+  }
+  store.set("msHist", url);
+  $("#msEmpty").style.display = "none";
+  $("#msFrame").style.display = "";
+  if ($("#msFrame").dataset.q !== url) { $("#msFrame").src = url; $("#msFrame").dataset.q = url; }
+  $("#msOpen").href = url;
+}
+$("#msHist").onchange = showMs;
+$("#msRun").onclick = async () => {
+  const mat = $("#msMat").value.trim();
+  const r = await api("/api/run", {preset: "matshader", values: {project: $("#msProject").value, material: mat}});
+  if (r.error) { msMsg(`<div class="err">${esc(r.error)}</div>`); return; }
+  msJobId = r.id;
+  poll();
+  msProgress();
+};
+function msProgress() {
+  clearTimeout(msTimer);
+  if (!$("#tab-mat").classList.contains("on")) { msTimer = setTimeout(msProgress, 1500); return; }
+  const j = job && job.id === msJobId ? job : null;
+  if (!j || j.status === "running") {
+    const ph = j && flatPhases(j).find(x => x.status === "running");
+    const {pct: p} = j ? overall(j, j.now || Date.now() / 1000) : {pct: 0};
+    msMsg(`<h2>Разбираю материал <span class="spin"></span></h2>
+      <div class="now">${ph ? esc((PHASE_TEXT[ph.id] || [ph.id])[0]) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
+      <div class="bar"><i style="width:${p.toFixed(1)}%"></i></div><div class="small muted">Подробный ход и лог — во вкладке «Проверка кадра».</div>`);
+    msTimer = setTimeout(msProgress, 700);
+    return;
+  }
+  msJobId = null;
+  msSuggest();
+  if (j.status === "ok") return loadMsHist(j.report);
+  msMsg(`<h2 class="bad">Разбор не получился</h2>${j.hint ? `<div class="hint">${esc(j.hint.text || j.hint)}</div>` : ""}
+    <pre class="log">${esc((j.log || []).slice(-12).join("\n"))}</pre><div class="small muted">Весь лог — во вкладке «Проверка кадра».</div>`);
+}
+
 function openCompare(a, b) {
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x.dataset.tab === "compare"));
   document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id === "tab-compare"));
@@ -922,15 +1049,33 @@ function openCompare(a, b) {
   loadCompare(a, b);
 }
 
-function openReport(x) {
+function openReport(x, which) {
   curRep = x;
   tab("reports");
   $("#repList").style.display = "none";
   $("#repView").style.display = "flex";
   $("#repName").textContent = x.name;
-  $("#repFrame").src = x.report;
-  $("#repOpen").href = x.report;
+  showRep(which || (x.report && /hotspots\.html$/.test(x.report) ? "hotspots" : "report"));
 }
+// the snapshot's frame report or its "why heavy" analysis (made on demand: every line of the top shaders in malioc)
+function showRep(which) {
+  const x = curRep;
+  const hs = x.hotspots || (x.report && /hotspots\.html$/.test(x.report) ? x.report : null);
+  const fr = x.report && !/hotspots\.html$/.test(x.report) ? x.report : (x.frame_report || (hs && hs.replace(/hotspots\.html$/, "frame_report.html")));
+  document.querySelectorAll("#repWhich button").forEach(b => b.classList.toggle("on", b.dataset.w === which));
+  const url = which === "hotspots" ? hs : fr;
+  if (url) {
+    $("#repFrame").src = url;
+    $("#repOpen").href = url;
+    return;
+  }
+  if (which === "hotspots") {
+    if (confirm("Разобрать 10 самых дорогих шейдеров этого кадра по строкам?\n\nКаждая строка их кода — отдельный замер malioc; обычно до минуты. Ход будет виден на вкладке «Проверка кадра»."))
+      start("hotspots", {frame: x.path || (OPT.snapshots.find(s => s.name === x.name) || {}).path});
+    else showRep("report");
+  }
+}
+document.querySelectorAll("#repWhich button").forEach(b => b.onclick = () => curRep && showRep(b.dataset.w));
 $("#repBack").onclick = () => { $("#repView").style.display = "none"; $("#repList").style.display = ""; $("#repFrame").src = "about:blank"; loadReports(); };
 $("#repFolder").onclick = () => curRep && api("/api/reveal", curRep.path ? {path: curRep.path} : {name: curRep.name});
 $("#repRecalc").onclick = () => {

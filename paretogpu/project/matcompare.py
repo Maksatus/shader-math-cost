@@ -103,15 +103,17 @@ def _price_pass(k, state, cores, api, loop_data, ns):
     return {"files": files, "prices": out}, None
 
 
-def run(project, a, b, root, cores, platforms=("gles3", "vulkan"), api="vulkan", jobs=None, compile_missing=True,
-        recompile=False, ns=NS, snapshot_folders=(), progress=print):
+def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
+            recompile=False, snapshot_folders=(), progress=print):
+    """Materials -> their variants (passes, material and pipeline keywords) -> compiled and measured, with the
+    dynamic loops priced. Returns {"project", "mats", "keys" (per material, sorted by pass), "state", "snaps"}."""
     project = os.path.abspath(project)
     progress_ui.phase("materials")
     guids = materials.shader_guids(project)
-    mats = [resolve(project, a, guids), resolve(project, b, guids)]
-    for side, m in zip("AB", mats):
+    mats = [resolve(project, x, guids) for x in paths]
+    for side, m in zip("AB" if len(mats) > 1 else [""], mats):
         if m.get("error"):
-            raise ValueError(f"{side} {m['path']}: {m['error']}")
+            raise ValueError(f"{side + ' ' if side else ''}{m['path']}: {m['error']}")
     snaps = shaders.snapshots_of(project, list(snapshot_folders))
     info = shaders.snapshot_info(snaps)
     editor = None
@@ -139,44 +141,65 @@ def run(project, a, b, root, cores, platforms=("gles3", "vulkan"), api="vulkan",
     state = variants.run(shaders.pseudo_events(list(all_keys)), project, root, cores, platforms, jobs,
                          compile_missing=compile_missing, recompile=recompile, progress=progress)
     state["loops"] = loops.for_frame(state, root, cores, jobs, progress)
-    progress_ui.phase("report")
-    # prices of both APIs when both were compiled: the main one first
-    apis = [api] + [x for x in (variants.API[p] for p in platforms) if x != api]
-    out_sides = []
-    for m, keys in zip(mats, sides):
-        passes = []
-        for k in keys:
-            by_api, errors = {}, {}
-            for x in apis:
-                priced, errors[x] = _price_pass(k, state, cores, x, state["loops"], ns)
-                if priced:
-                    by_api[x] = priced
-            main = by_api.get(api) or {"files": {}, "prices": {}}
-            passes.append({"pass": k[3], "subshader": k[1], "pass_index": k[2], "keywords": list(k[4]),
-                           "global_keywords": sorted(set(k[4]) - set(m["keywords"])),
-                           "variant": variants.key_str(k), "error": errors[api], **main,
-                           "prices_by_api": {x: v["prices"] for x, v in by_api.items()},
-                           "errors_by_api": {x: e for x, e in errors.items() if e}})
-        out_sides.append({"material": m["name"], "path": m["path"], "shader": m["shader"], "keywords": m["keywords"],
-                          "disabled_passes": m["disabled_passes"], "passes": passes})
-    found = [c for c in cores if any(c in p["prices"] for s in out_sides for p in s["passes"])]
+    return {"project": project, "mats": mats, "keys": sides, "state": state, "snaps": snaps}
+
+
+def describe(m, keys, state, cores, apis, ns=NS):
+    """One material: its passes with the prices of every API (the first is the main one)."""
+    passes = []
+    for k in keys:
+        by_api, errors = {}, {}
+        for x in apis:
+            priced, errors[x] = _price_pass(k, state, cores, x, state["loops"], ns)
+            if priced:
+                by_api[x] = priced
+        main = by_api.get(apis[0]) or {"files": {}, "prices": {}}
+        passes.append({"pass": k[3], "subshader": k[1], "pass_index": k[2], "keywords": list(k[4]),
+                       "global_keywords": sorted(set(k[4]) - set(m["keywords"])),
+                       "variant": variants.key_str(k), "key": [k[0], k[1], k[2], k[3], list(k[4])],
+                       "error": errors[apis[0]], **main,
+                       "prices_by_api": {x: v["prices"] for x, v in by_api.items()},
+                       "files_by_api": {x: v["files"] for x, v in by_api.items()},
+                       "errors_by_api": {x: e for x, e in errors.items() if e}})
+    return {"material": m["name"], "path": m["path"], "shader": m["shader"], "keywords": m["keywords"],
+            "disabled_passes": m["disabled_passes"], "passes": passes}
+
+
+def common(prep, sides, cores, api, apis, ns=NS):
+    """The fields every result of materials has: cores found, malioc, warnings."""
+    state, snaps = prep["state"], prep["snaps"]
+    found = [c for c in cores if any(c in p["prices"] for s in sides for p in s["passes"])]
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
     warn = []
-    for side, s in zip("AB", out_sides):
+    for side, s in zip("AB" if len(sides) > 1 else [""], sides):
         for p in s["passes"]:
             if p["error"]:
-                warn.append(f"{side}, проход {p['pass']}: нет цены ({p['error']})")
+                warn.append(f"{side + ', ' if side else ''}проход {p['pass']}: нет цены ({p['error']})")
     if not state["checked"]:
         warn.append("Варианты не сверены с шейдерами (редактор не отвечал или --no-compile): цены могут быть устаревшими.")
     if not snaps:
         warn.append("В проекте нет снимков кадра: глобальные keywords пайплайна (свет, тени, Forward+) не добавлены, "
                     "а проходы взяты все, кроме служебных.")
-    return {"kind": "materials", "project": project, "api": api, "apis": apis, "cores": found,
+    return {"project": prep["project"], "api": api, "apis": apis, "cores": found,
             "main_core": "Mali-G78" if "Mali-G78" in found else (found[0] if found else None), "ns": list(ns),
-            "default_n": frame_cost.LOOP_ITERS, "a": out_sides[0], "b": out_sides[1],
-            "pairs": _pairs([p["pass"] for p in out_sides[0]["passes"]], [p["pass"] for p in out_sides[1]["passes"]]),
-            "malioc": ", ".join(sorted({r["malioc"] for r in recs})), "checked": state["checked"],
-            "snapshots": len(snaps), "warnings": warn, "computed_at": time.time()}
+            "default_n": frame_cost.LOOP_ITERS, "malioc": ", ".join(sorted({r["malioc"] for r in recs})),
+            "checked": state["checked"], "snapshots": len(snaps), "warnings": warn, "computed_at": time.time()}
+
+
+def apis_of(api, platforms):
+    """Prices of both APIs when both were compiled: the main one first."""
+    return [api] + [x for x in (variants.API[p] for p in platforms) if x != api]
+
+
+def run(project, a, b, root, cores, platforms=("gles3", "vulkan"), api="vulkan", jobs=None, compile_missing=True,
+        recompile=False, ns=NS, snapshot_folders=(), progress=print):
+    prep = prepare(project, [a, b], root, cores, platforms, jobs, compile_missing, recompile, snapshot_folders,
+                   progress)
+    progress_ui.phase("report")
+    apis = apis_of(api, platforms)
+    sides = [describe(m, keys, prep["state"], cores, apis, ns) for m, keys in zip(prep["mats"], prep["keys"])]
+    return {"kind": "materials", **common(prep, sides, cores, api, apis, ns), "a": sides[0], "b": sides[1],
+            "pairs": _pairs([p["pass"] for p in sides[0]["passes"]], [p["pass"] for p in sides[1]["passes"]])}
 
 
 def render_html(res):
