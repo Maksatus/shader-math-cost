@@ -1,70 +1,28 @@
-"""Frame events -> measured shader variants (plan item K1.4).
+"""Frame events -> compiled and measured shader variants (plan item K1.4).
 
 Every draw of a Frame Debugger snapshot (frame_events.json) names its exact variant: shader, subshader,
-pass index and the keywords it ran with. Those variants are compiled in the open editor
-(adapters/unity/variants.py) into the variants folder of the project (store/variant_store.py) and measured with
-malioc (features/measure.py) on the chosen cores. Variants already in the folder are not compiled again while they
-are current: every compiled variant keeps the fingerprint of its shader (Unity version, Android platform defines,
-color space, the asset's dependency hash: the file, its includes and subgraphs), and when the editor is open the
-current fingerprints are asked from it and a variant whose shader changed is compiled again (--recompile: all of the
-frame's variants). Without the editor (--no-compile) the files are used as they are and the result says they were
-not checked. malioc results come from its cache. A failed variant is not compiled again until its shader changes
-(or --retry-failed); a run that did not finish is not a failure.
-
-Compute dispatches are keyed per kernel but not compiled (COMPUTE_NOT_COMPILED): they are listed without a price.
-A Unity run that did not finish leaves its files in <variants>/_compiled; the next run places them (recover()).
+pass index and the keywords it ran with. Those variants are compiled in the open editor into the variants folder of
+the project and measured with malioc on the chosen cores; the dynamic loops of the files whose longest path is N/A
+are priced at n iterations. What is still valid is not built again (app/rules.py, app/engine.py): a compiled variant
+while its shader's fingerprint is the same, a malioc run of the same text from its cache.
 
 run() -> the state core/variants.match() reads: per draw event, the measurement records of its fragment and vertex
 shader (per compute event, of its kernel) on every core, or the reason there is none. loops_of() adds the prices of
 the dynamic loops (core/loops.py) of the files whose longest path is N/A.
 """
-import concurrent.futures as cf
 import os
 
-from paretogpu.adapters import malioc as mali
-from paretogpu.adapters.unity import cli as unity
-from paretogpu.adapters.unity import split as split_unity
 from paretogpu.adapters.unity import variants as unity_variants
+from paretogpu.app.engine import Engine
+from paretogpu.app.rules import CompileRule, LoopRule, MeasureRule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
-from paretogpu.app import measure
 from paretogpu.model.frame import Event
-from paretogpu.model.measurement import LoopProfile
-from paretogpu.model.variant import COMPUTE_NOT_COMPILED, NOT_FINISHED, VariantKey, VariantState
+from paretogpu.model.variant import VariantKey, VariantState
 from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
 
-
-def _es31(platform, data):
-    if platform != "gles3":
-        return data, None
-    text, patched = split_unity.es31(data.decode("utf-8", errors="replace"))
-    return text.encode(), patched
-
-
-def recover(root):
-    """A Unity run that did not finish (the editor crashed or the connection broke) leaves its compiled files in
-    <root>/_compiled without variants_result.json: place what is there. Returns {key: [errors]} or None."""
-    raw = store.raw_dir(root)
-    found = unity_variants.unfinished_run(raw)
-    if not found:
-        return None
-    keys, result = found
-    errors = store.place(root, raw, keys, result, _es31)
-    unity_variants.mark_recovered(raw, result)
-    return errors
-
-
-def compile_variants(project, keys, root, platforms, timeout=1800, rep=CONSOLE):
-    """Compile `keys` in the open editor; writes the files and manifests; returns {key: [errors]}."""
-    raw = store.raw_dir(root)
-    result = unity_variants.compile_variants(project, keys, raw, platforms, timeout,
-                                             on_start=lambda n: rep.phase("compile", n), on_step=rep.step)
-    return store.place(root, raw, keys, result, _es31)
-
-
-def current_fingerprints(project, shaders, root):
-    return unity_variants.current_fingerprints(project, shaders, store.raw_dir(root))
+NOT_COMPILED_YET = "not compiled yet (--no-compile)"
 
 
 def shader_query(project, entry, shaders, root):
@@ -80,93 +38,27 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
     root = os.path.abspath(root)
     project = project and os.path.abspath(project)
     keys = list(dict.fromkeys(VariantKey.of(e) for e in events if e["kind"] in ("draw", "compute")))
-    recovered = recover(root) or {}
-    if recovered:
-        rep.log(f"recovered {sum(1 for e in recovered.values() if not e)} variants of an unfinished Unity run")
-    stored = {}
-    have = store.load_manifests(root, stored, platforms)
-    index = store.load_index(root)  # every variant this folder has seen, of any frame: {key: entry}
-    draw_keys = [k for k in keys if not k.is_compute]  # compute kernels are not compiled: see COMPUTE_NOT_COMPILED
-
-    def complete(k):
-        return all((p, s) in have.get(k, {}) for p in platforms for s in k.stages)
-
-    current = None
-    if compile_missing and draw_keys:
-        if project and unity.editor_ready(project, allow_play=True):
-            rep.phase("fingerprints")
-            current = current_fingerprints(project, [k.shader for k in draw_keys], root)
-        else:
-            rep.skip("fingerprints", "the editor does not answer")
-            rep.log("the editor does not answer Unity CLI: compiled variants are used without checking "
-                     "their shaders for changes")
-
-    def failed_before(k):
-        """A variant that failed is not compiled again until its shader changes (or retry_failed)."""
-        errs = [e for e in (index.get(k) or {}).get("errors", []) if e != NOT_FINISHED]
-        if not errs or retry_failed or recompile:
-            return False
-        return current is None or (index.get(k) or {}).get("fingerprint") == current.get(k.shader)
-
-    stale = [k for k in draw_keys if complete(k) and current is not None
-             and (recompile or stored.get(k) is None or stored.get(k) != current.get(k.shader))]
-    missing = [k for k in draw_keys if (not complete(k) or k in stale) and not failed_before(k)]
-    errors = {k: [e for e in (index.get(k) or {}).get("errors", []) if e != NOT_FINISHED] for k in keys}
-    for k in keys:
-        if k.is_compute and not have.get(k):
-            errors[k] = [COMPUTE_NOT_COMPILED]
-    if missing and compile_missing:
-        if stale:
-            rep.log(f"{len(stale)} compiled variants are out of date (shader, includes, Unity or platform defines "
-                     f"changed{', --recompile' if recompile else ''}): compiling them again")
-        rep.log(f"compiling {len(missing)} of {len(keys)} variants in Unity ...")
-        errors.update(compile_variants(project, missing, root, platforms, rep=rep))
-        stored = {}
-        have = store.load_manifests(root, stored, platforms)
-    else:
-        rep.skip("compile", "nothing to compile" if compile_missing else "--no-compile")
-    pending = set() if compile_missing else {k for k in missing if not complete(k)}
-    if any(have.get(k) for k in keys):
+    engine = Engine(rep, jobs)
+    compiling = CompileRule(project, root, platforms, compile_missing, recompile, retry_failed, rep)
+    compiled = engine.get(compiling, keys)
+    files = sorted({fn for v in compiled.values() for fn in v["files"].values()})
+    measurements = {}
+    if files:
         rep.log(f"measuring {root} on {', '.join(cores)} ...")
-        records, failures = measure.run(root, cores, "gles", root, jobs, rep)
-        if failures:
-            rep.log(f"  malioc failed on {len(failures)} files")
-    for k in keys:
-        index[k] = {"key": k.to_list(),
-                    "files": {f"{p}/{s}": fn for (p, s), fn in sorted(have.get(k, {}).items())},
-                    "errors": [e for e in errors.get(k, []) if e != NOT_FINISHED],
-                    "fingerprint": stored.get(k) or (current or {}).get(k.shader)}
-    store.save_index(root, index)
-    # not compiled in this run: the reason is shown, not stored (the next run compiles them)
-    for k in pending:
-        errors[k] = errors[k] or ["not compiled yet (--no-compile)"]
-    return {"keys": keys, "files": {k: have.get(k, {}) for k in keys}, "errors": errors,
-            "measurements": store.load_measurements(root), "checked": current is not None}
-
-
-def parametric(forced, api, stage, core, cache=mali.CACHE) -> LoopProfile | None:
-    """{"c": [cycles at n = 0, 1, 2] (combined variants, longest path), "work_regs", "spilling"} of the forced
-    sources ([loops.force(src, n) for n in loops.NS]) on one core, or None (cannot be forced, malioc failed, still
-    N/A)."""
-    if any(f is None for f in forced):
-        return None
-    cs, regs, spill = [], 0, False
-    for f in forced:
-        r = mali.measure(f, core, api, stage, cache=cache)
-        if not r["ok"]:
-            return None
-        c = heavy.combined(r)["longest"]
-        if c is None:
-            return None
-        cs.append(c)
-        regs = max(regs, max((v["work_regs"] or 0) for v in r["variants"].values()))
-        spill = spill or mali.spills(r)
-    return {"c": cs, "work_regs": regs, "spilling": spill}
+        recs = engine.get(MeasureRule(root), [(fn, c) for fn in files for c in cores])
+        for (fn, c), r in recs.items():
+            measurements.setdefault(fn, {})[c] = {k: v for k, v in r.items() if k != "cached"}
+        failed = [k for k, r in recs.items() if not r["ok"]]
+        if failed:
+            rep.log(f"  malioc failed on {len(failed)} files")
+    errors = {k: v["errors"] or ([NOT_COMPILED_YET] if v.get("pending") else []) for k, v in compiled.items()}
+    return {"keys": keys, "files": {k: v["files"] for k, v in compiled.items()}, "errors": errors,
+            "measurements": measurements, "checked": compiling.checked}
 
 
 def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     """Loop prices of every measured file of the variants whose longest path is N/A on some core:
-    {relative file: {core: parametric()}}; files whose loops cannot be forced map to {}."""
+    {relative file: {core: LoopProfile}}; files whose loops cannot be forced map to {}."""
     files = sorted({fn for k in state["keys"] for fn in state["files"].get(k, {}).values()})
     dyn = [fn for fn in files
            if any(r.get("ok", True) and heavy.combined(r)["longest"] is None
@@ -175,29 +67,15 @@ def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
         rep.skip("loops")
         return {}
     rep.log(f"pricing dynamic loops of {len(dyn)} files at n = {', '.join(map(str, loops.NS))} ...")
-    rep.phase("loops", len(dyn) * len(cores))
-    forced = {}
-    for fn in dyn:
-        src = mali.read_source(os.path.join(root, fn))
-        forced[fn] = [loops.force(src, n) for n in loops.NS]
-    tasks = [(fn, c) for fn in dyn for c in cores]
-    tick = rep.counter(len(tasks))
-
-    def job(t):
-        fn, core = t
-        api = "vulkan" if fn.endswith(mali.SPIRV_EXT) else "gles"
-        r = parametric(forced[fn], api, mali.stage_of(fn), core)
-        tick()
-        return r
-
-    with cf.ThreadPoolExecutor(jobs or os.cpu_count()) as ex:
-        res = list(ex.map(job, tasks))
+    rule = LoopRule(root)
+    rule.force_files(dyn)
+    res = Engine(rep, jobs).get(rule, [(fn, c) for fn in dyn for c in cores])
     out = {fn: {} for fn in dyn}
-    for (fn, core), p in zip(tasks, res):
+    for (fn, core), p in res.items():
         if p:
             out[fn][core] = p
     bad = [fn for fn in dyn if len(out[fn]) < len(cores)]
     if bad:
         rep.log(f"  loops not forced in {len(bad)} files (priced by total): " + ", ".join(bad[:5])
-                 + (" ..." if len(bad) > 5 else ""))
+                + (" ..." if len(bad) > 5 else ""))
     return out

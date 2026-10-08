@@ -12,12 +12,13 @@ Output:
 Cycles per pipe on the longest / shortest path and in total; the longest path
 is empty when malioc reports N/A (dynamic loops).
 """
-import concurrent.futures as cf
 import csv
 import json
 import os
 
 from paretogpu.adapters import malioc as mali
+from paretogpu.app.engine import Engine
+from paretogpu.app.rules import MeasureRule
 from paretogpu.core import pricing as heavy
 from paretogpu.core import ranking
 from paretogpu.model.cores import MAIN_CORE
@@ -40,54 +41,31 @@ def find_shaders(folder):
     return sorted(out, key=lambda t: t[1])
 
 
-def api_of(path, api):
-    return "vulkan" if path.endswith(mali.SPIRV_EXT) else api
-
-
-def measure_one(path, core, api):
-    """mali.measure() of one file; an error (unreadable file, malioc not found) fails this file, not the run."""
-    try:
-        return mali.measure(mali.read_source(path), core, api_of(path, api), mali.stage_of(path))
-    except (OSError, mali.MaliocError) as e:
-        return {"ok": False, "error": str(e)}
-
-
 def run(folder, cores=(MAIN_CORE,), api="gles", out=None, jobs=None, rep=CONSOLE):
     """Measure the folder on every core; returns (records, failures). Writes the CSV and JSONL into out."""
     if isinstance(cores, str):
         cores = [cores]
     out = out or folder
     shaders = find_shaders(folder)
-    tasks = [(s, core) for s in shaders for core in cores]
-    rep.phase("measure", len(tasks))
-    tick = rep.counter(len(tasks))
-
-    def job(t):
-        r = measure_one(t[0][0], t[1], api)
-        tick()
-        return r
-
-    with cf.ThreadPoolExecutor(jobs or os.cpu_count()) as ex:
-        results = list(ex.map(job, tasks))
-
+    info = {rel: inf for _, rel, inf in shaders}
+    tasks = [(rel, core) for _, rel, _ in shaders for core in cores]
+    results = Engine(rep, jobs).get(MeasureRule(folder, api, info), tasks)
     records, failures = [], []
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "measurements.jsonl"), "w", encoding="utf-8", newline="\n") as fj, \
             open(os.path.join(out, "measurements.csv"), "w", encoding="utf-8", newline="") as fc:
         w = csv.DictWriter(fc, fieldnames=tables.COLUMNS)
         w.writeheader()
-        for ((path, rel, info), core), r in zip(tasks, results):
+        for rel, core in tasks:
+            r = results[(rel, core)]
             if not r["ok"]:
                 failures.append((f"{rel} [{core}]", r["error"]))
-                fj.write(json.dumps({"file": rel, "ok": False, "core": core, "api": api_of(path, api),
-                                     "error": r["error"]}, ensure_ascii=False) + "\n")
+                fj.write(json.dumps(r, ensure_ascii=False) + "\n")
                 continue
-            rec = {"file": rel, "root": os.path.abspath(folder),
-                   **{k: info[k] for k in ("shader", "pass", "keywords") if k in info},
-                   **{k: v for k, v in r.items() if k != "cached"}}
+            rec = {k: v for k, v in r.items() if k != "cached"}
             records.append((rec, r.get("cached", False)))
             fj.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            w.writerows(tables.csv_rows(rel, info, r))
+            w.writerows(tables.csv_rows(rel, info[rel], r))
     return records, failures
 
 

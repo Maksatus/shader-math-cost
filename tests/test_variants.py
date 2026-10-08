@@ -1,5 +1,5 @@
-"""app/variants.run(): which compiled variants are reused and which are compiled again (fingerprints, deleted
-files, failures), with Unity and malioc replaced by stubs; synthetic names, temporary folder.
+"""app/variants.run() (app/rules.CompileRule): which compiled variants are reused and which are compiled again
+(fingerprints, deleted files, failures), with Unity and malioc replaced by stubs; synthetic names, temporary folder.
 
 Run: python -m unittest discover tests   (from the repository root)
 """
@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from paretogpu.app import variants
-from paretogpu.model.variant import VariantKey
+from paretogpu.app import rules, variants
+from paretogpu.model.variant import NOT_FINISHED, VariantKey
 from paretogpu.store import variant_store
 from paretogpu.views.reporter import QUIET
 
@@ -48,10 +48,10 @@ class RunTest(unittest.TestCase):
         return variant_store.place(root, raw, keys, result)
 
     def run_once(self, editor=True, **kw):
-        with mock.patch.object(variants.unity, "editor_ready", return_value=editor), \
-                mock.patch.object(variants, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
-                mock.patch.object(variants, "compile_variants", side_effect=self.compile_stub), \
-                mock.patch.object(variants.measure, "run", return_value=([], [])):
+        with mock.patch.object(rules.unity, "editor_ready", return_value=editor), \
+                mock.patch.object(rules, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
+                mock.patch.object(rules, "compile_variants", side_effect=self.compile_stub), \
+                mock.patch.object(rules.mali, "measure", return_value={"ok": False, "error": "stub"}):
             return variants.run([EV], "project", self.root, ["Mali-G78"], ["vulkan"], rep=QUIET, **kw)
 
     def test_current_variant_is_reused(self):
@@ -98,7 +98,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(self.compiled), 3)
 
     def test_unfinished_run_is_not_a_failure(self):
-        self.result = {KEY: [variants.NOT_FINISHED]}
+        self.result = {KEY: [NOT_FINISHED]}
         self.run_once()
         self.run_once()
         self.assertEqual(len(self.compiled), 2)

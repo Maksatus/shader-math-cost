@@ -12,7 +12,7 @@ from unittest import mock
 
 from paretogpu.adapters import malioc as mali
 from paretogpu.adapters.unity import split as split_unity
-from paretogpu.app import measure
+from paretogpu.app.rules import MeasureRule
 from paretogpu.core import events as renderdoc
 from paretogpu.core import ranking as report
 
@@ -71,8 +71,8 @@ class MaliocTest(unittest.TestCase):
         with self.assertRaises(mali.MaliocError):
             mali.run_malioc("void main(){}", "Mali-G78", "gles", malioc=r"C:\nope\malioc.exe")
         with mock.patch.object(mali, "measure", side_effect=mali.MaliocError("not found")):
-            r = measure.measure_one(os.path.join(SYNTH, "sin_x4.frag"), "Mali-G78", "gles")
-        self.assertEqual(r, {"ok": False, "error": "not found"})
+            r = MeasureRule(SYNTH).build_one(("sin_x4.frag", "Mali-G78"))
+        self.assertEqual(r, {"file": "sin_x4.frag", "ok": False, "core": "Mali-G78", "api": "gles", "error": "not found"})
 
     def test_empty_core_list(self):
         with self.assertRaises(ValueError):

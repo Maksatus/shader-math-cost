@@ -91,16 +91,3 @@ def load_index(root):
 def save_index(root, index):
     with open(os.path.join(root, INDEX), "w", encoding="utf-8", newline="\n") as f:
         json.dump({"variants": list(index.values())}, f, indent=1, ensure_ascii=False)
-
-
-def load_measurements(root):
-    """{relative file: {core: record}} from <root>/measurements.jsonl (failed runs keep their error)."""
-    out = {}
-    path = os.path.join(root, "measurements.jsonl")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    r = json.loads(line)
-                    out.setdefault(r["file"], {})[r["core"]] = r
-    return out

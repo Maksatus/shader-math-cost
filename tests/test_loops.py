@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 from paretogpu.adapters import malioc as mali
-from paretogpu.app import variants
+from paretogpu.app import rules
 from paretogpu.core import loops
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -73,7 +73,7 @@ class SpirvTest(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(mali.MALIOC), "malioc not installed")
     def test_price_is_linear_in_n(self):
         src = read(SPV, True)
-        p = variants.parametric([loops.force(src, n) for n in loops.NS], "vulkan", "fragment", "Mali-G78")
+        p = rules.parametric([loops.force(src, n) for n in loops.NS], "vulkan", "fragment", "Mali-G78")
         self.assertIsNotNone(p)
         c0, c1, c2 = (c["sfu"] for c in p["c"])
         self.assertLess(c0, c1)
