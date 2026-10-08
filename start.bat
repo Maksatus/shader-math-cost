@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
-title shaderopt ui
+title ParetoGPU
 
 rem Python 3.10+: the py launcher, else python / python3 (the Microsoft Store stub fails the version check)
 set "PY="
@@ -13,7 +13,7 @@ for %%C in ("py -3" "python" "python3") do (
 )
 if not defined PY goto :nopython
 
-%PY% -m shaderopt.doctor
+%PY% -m paretogpu.doctor
 if errorlevel 2 (
     echo.
     pause
@@ -21,8 +21,8 @@ if errorlevel 2 (
 )
 
 echo.
-echo Запуск интерфейса...  ^(Ctrl+C - остановить^)
-%PY% -m shaderopt ui %*
+echo Запуск интерфейса...  ^(закройте окно или Ctrl+C - остановить^)
+%PY% -m paretogpu ui %*
 if errorlevel 1 pause
 exit /b
 

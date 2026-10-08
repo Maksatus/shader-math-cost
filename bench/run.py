@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from shadergen import build
 from functions import FUNCS, HLSL_EXPR, glsl_type, glsl_expr, hlsl_type, prelude
-from shaderopt import mali
-from shaderopt import progress
+from paretogpu import mali
+from paretogpu import progress
 
 MALIOC_NEW = mali.MALIOC
 MALIOC_VERSION = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"

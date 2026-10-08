@@ -8,10 +8,10 @@ __pycache__/
 Instruction Cycles*
 bench/errors.txt
 
-# shaderopt: only the code goes to git. Exports, measurements, reports and frame
+# paretogpu: only the code goes to git. Exports, measurements, reports and frame
 # snapshots contain project shaders and assets and must never reach this public repository.
-shaderopt/corpus/real/
-shaderopt/out/
+paretogpu/corpus/real/
+paretogpu/out/
 **/_compiled/
 measurements.csv
 measurements.jsonl

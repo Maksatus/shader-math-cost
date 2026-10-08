@@ -4,28 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mali Shader Math Cost</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #667080; --line: #e3e6ea;
-  --accent: #2f6fde; --chip: #eef1f5; --hover: #f0f4fb;
-  --cheap: #1f9d55; --medium: #c98a00; --heavy: #d0402b;
-  --heat-l: 50%; --heat-a: .22;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
-    --accent: #6a9cff; --chip: #232932; --hover: #20262f;
-    --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55; --heat-a: .30;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #111418; --panel: #191d23; --text: #e6e9ee; --muted: #8b95a5; --line: #2a3039;
-  --accent: #6a9cff; --chip: #232932; --hover: #20262f;
-  --cheap: #3ccf7f; --medium: #e8b030; --heavy: #ff6b55; --heat-a: .30;
+  color-scheme: dark;
+  --bg: #121417; --panel: #1a1e23; --text: #eceef0; --muted: #8b939c; --line: #2a3038;
+  --accent: #34d399; --on-accent: #062a1d; --chip: #232830; --hover: #20252b;
+  --cheap: #8bd99b; --medium: #e8c27a; --heavy: #f2877b; --info: #7fb2e5; --bar: #55606c;
+  --heat-l: 62%; --heat-a: .26;
+  --sans: Manrope, system-ui, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
 header { padding: 20px 24px 6px; max-width: 1800px; margin: 0 auto; }
 h1 { font-size: 22px; margin: 0 0 4px; }
 .sub { color: var(--muted); margin: 0; }
@@ -38,7 +32,7 @@ main { max-width: 1800px; margin: 0 auto; padding: 0 24px 40px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .seg button { border: 0; background: transparent; color: var(--text); padding: 5px 11px; cursor: pointer; font: inherit; }
 .seg button + button { border-left: 1px solid var(--line); }
-.seg button.on { background: var(--accent); color: #fff; }
+.seg button.on { background: var(--accent); color: var(--on-accent); }
 input[type=search] { background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 8px; padding: 5px 9px; font: inherit; width: 200px; }
 .btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px;
@@ -66,7 +60,7 @@ tbody tr { cursor: pointer; }
 tbody tr:hover td { background: var(--hover); }
 tr.cat td { background: var(--chip) !important; font-weight: 600; text-align: left; cursor: default; color: var(--muted);
   font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-.code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--muted); }
+.code { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 td.fn .code { font-weight: 400; white-space: normal; max-width: 260px; }
 td.note { color: var(--muted); font-size: 12px; white-space: normal; text-align: left; }
 td.note, th.note { width: 300px; min-width: 300px; max-width: 300px; border-left: 1px solid var(--line); line-height: 1.35; white-space: normal; }
@@ -78,9 +72,9 @@ th.gpu small { display: block; font-weight: 400; color: var(--muted); font-size:
 th.grp { text-align: center; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; border-left: 2px solid var(--line); }
 th.grp span { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
 .gl { border-left: 2px solid var(--line); }
-.g-new { color: var(--cheap); } .g-cur { color: var(--accent); } .g-old { color: var(--medium); }
+.g-new { color: var(--info); } .g-cur { color: var(--text); } .g-old { color: var(--muted); }
 .range { display: inline-block; width: 70px; height: 6px; background: var(--chip); border-radius: 3px; position: relative; vertical-align: middle; }
-.range i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; opacity: .7; }
+.range i { position: absolute; top: 0; bottom: 0; background: var(--bar); border-radius: 3px; }
 details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
 details summary { cursor: pointer; font-weight: 600; }
 details p, details li { color: var(--muted); max-width: 1000px; }
@@ -91,7 +85,7 @@ details p, details li { color: var(--muted); max-width: 1000px; }
 .drawer .x { float: right; }
 .drawer table { margin-top: 10px; width: 100%; }
 .drawer td, .drawer th { font-size: 12px; position: static; }
-.bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--accent); opacity: .7; vertical-align: middle; }
+.bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--bar); vertical-align: middle; }
 .kpis { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .kpi { background: var(--chip); border-radius: 8px; padding: 8px 12px; min-width: 100px; }
 .kpi .v { font-size: 20px; font-weight: 700; }
@@ -107,7 +101,7 @@ details p, details li { color: var(--muted); max-width: 1000px; }
 .badge.ok { color: var(--cheap); background: color-mix(in srgb, var(--cheap) 14%, transparent); }
 .badge.no { color: var(--muted); background: var(--chip); }
 .badge.bad { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 14%, transparent); }
-pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; overflow: auto; font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; margin: 8px 0; position: relative; }
+pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; overflow: auto; font: 12px/1.5 var(--mono); margin: 8px 0; position: relative; }
 .copy { float: right; font-size: 11px; padding: 1px 8px; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 10px 0; }
 .fact { background: var(--chip); border-radius: 8px; padding: 7px 10px; }
@@ -142,7 +136,6 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
     <div class="group" style="margin-left:auto">
       <button class="btn" id="load">Загрузить CSV</button>
       <input type="file" id="file" accept=".csv" hidden>
-      <button class="btn" id="theme" title="Тема">◐</button>
     </div>
   </div>
   <div class="legend">
@@ -280,7 +273,7 @@ const TIER_RU = { cheap: "дешёвая", medium: "средняя", heavy: "т�
 function heat(v) {
   if (v == null) return "";
   const t = Math.min(1, Math.log2(1 + v) / Math.log2(1 + 64));
-  return `background: hsla(${(145 - 145 * t).toFixed(0)}, 75%, var(--heat-l), calc(var(--heat-a) * ${(0.35 + 0.65 * t).toFixed(2)}))`;
+  return `background: hsla(${(145 - 145 * t).toFixed(0)}, 55%, var(--heat-l), calc(var(--heat-a) * ${(0.35 + 0.65 * t).toFixed(2)}))`;
 }
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const short = n => n.replace("Mali-", "").replace("Mali ", "").replace("Immortalis-", "Imm-");
@@ -526,13 +519,7 @@ function restore() {
   try { const o = JSON.parse(localStorage.getItem("maliCost2") || "null"); if (o) Object.assign(S, o); } catch (e) {}
   if (!VARIANTS.includes(S.variant)) S.variant = "float";
   if (!Array.isArray(S.cols)) S.cols = ["Arm 5th Generation", "Valhall", "Bifrost"];
-  try { const t = localStorage.getItem("maliTheme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 }
-document.getElementById("theme").onclick = () => {
-  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  const nx = cur === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = nx; try { localStorage.setItem("maliTheme", nx); } catch (e) {}
-};
 document.getElementById("q").oninput = e => { S.q = e.target.value; render(); };
 document.getElementById("load").onclick = () => document.getElementById("file").click();
 document.getElementById("file").onchange = e => { const f = e.target.files[0]; if (f) f.text().then(ingest); };

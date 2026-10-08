@@ -1,0 +1,950 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParetoGPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #121417; --panel: #1a1e23; --text: #eceef0; --muted: #8b939c; --line: #2a3038;
+  --accent: #34d399; --on-accent: #062a1d; --chip: #232830; --hover: #20252b;
+  --cheap: #8bd99b; --medium: #e8c27a; --heavy: #f2877b; --info: #7fb2e5; --bar: #55606c;
+  --part-px: #7fb2e5; --part-vx: #b9a3e0; --part-cs: #6cc4c4;
+  --sans: Manrope, system-ui, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+  font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
+.top { display: flex; align-items: center; gap: 18px; padding: 8px 16px; background: var(--panel);
+  border-bottom: 1px solid var(--line); flex: none; flex-wrap: wrap; }
+.brand { font-weight: 800; font-size: 15px; white-space: nowrap; }
+.brand b { color: var(--accent); font-weight: inherit; }
+.brand span { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+nav { display: flex; gap: 4px; overflow-x: auto; }
+nav button { border: 0; background: transparent; color: var(--muted); padding: 7px 12px; border-radius: 8px;
+  font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+nav button:hover { background: var(--hover); color: var(--text); }
+nav button.on { background: var(--chip); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.env { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.envc { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--chip); color: var(--muted); cursor: help; white-space: nowrap; }
+.envc.ok::before { content: "● "; color: var(--cheap); }
+.envc.warn::before { content: "● "; color: var(--medium); }
+.envc.fail::before { content: "● "; color: var(--heavy); }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 999px; margin-left: 6px; vertical-align: 1px; }
+.pill.run { color: var(--on-accent); background: var(--accent); }
+.pill.ok { color: var(--cheap); background: color-mix(in srgb, var(--cheap) 15%, transparent); }
+.pill.bad { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 15%, transparent); }
+section { display: none; flex: 1; min-height: 0; }
+section.on { display: flex; flex-direction: column; }
+iframe { border: 0; width: 100%; flex: 1; background: var(--bg); }
+.page { overflow: auto; flex: 1; padding: 16px; }
+.cols { display: grid; grid-template-columns: minmax(360px, 520px) minmax(0, 1fr); gap: 16px; align-items: start;
+  max-width: 1500px; margin: 0 auto; }
+@media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+.card h2 { font-size: 17px; margin: 0 0 6px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.howto { background: var(--chip); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; color: var(--muted); margin: 6px 0 12px; }
+.howto ol { margin: 0; padding-left: 18px; }
+.field { margin: 14px 0; }
+.field > .lbl { display: block; font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+select, input[type=text] { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 10px; font: inherit; }
+select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+.opts { display: grid; gap: 6px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px; cursor: pointer; }
+.opt:hover { background: var(--hover); }
+.opt input { margin-top: 3px; accent-color: var(--accent); }
+.opt b { display: block; font-size: 13px; }
+.opt span { display: block; font-size: 12px; color: var(--muted); line-height: 1.35; }
+.opt:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.opt input[type=text] { margin-top: 6px; }
+.status { font-size: 12.5px; margin-top: 6px; }
+.status.ok { color: var(--cheap); } .status.bad { color: var(--heavy); } .status.wait { color: var(--muted); }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; font: inherit; white-space: nowrap; text-decoration: none; display: inline-block; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn.big { width: 100%; padding: 12px; font-size: 16px; font-weight: 700; margin-top: 6px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.danger { color: var(--heavy); }
+.btn.sm { padding: 2px 8px; font-size: 12px; }
+.why { font-size: 12.5px; color: var(--muted); margin-top: 6px; text-align: center; }
+details.more { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+details.more > summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: 13px; }
+.adv .row2 { margin: 10px 0; }
+.adv label { font-weight: 600; font-size: 12.5px; display: block; }
+.adv label code { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 4px; }
+.adv .help { font-size: 11px; color: var(--muted); }
+.adv .chk { display: flex; gap: 8px; align-items: baseline; }
+.banner { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;
+  display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.err { color: var(--heavy); margin-top: 8px; white-space: pre-wrap; font-size: 13px; }
+/* run panel */
+.jobhead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.jobhead h2 { margin: 0; }
+.now { margin: 14px 0 4px; font-size: 15px; font-weight: 600; }
+.now .muted { font-weight: 400; font-size: 13px; }
+.bar { height: 10px; background: var(--chip); border-radius: 5px; overflow: hidden; position: relative; margin: 6px 0; }
+.bar.thin { height: 6px; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 5px; transition: width .4s; }
+.bar.indet i { width: 30% !important; animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { left: -30%; } 100% { left: 100%; } }
+.bar.ok i { background: var(--cheap); } .bar.bad i { background: var(--heavy); }
+.meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meta b { color: var(--text); }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.badge.ok { color: var(--cheap); background: color-mix(in srgb, var(--cheap) 14%, transparent); }
+.badge.failed, .badge.stopped { color: var(--heavy); background: color-mix(in srgb, var(--heavy) 14%, transparent); }
+.badge.running { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.hint { border-left: 3px solid var(--heavy); background: color-mix(in srgb, var(--heavy) 8%, transparent); padding: 10px 12px; border-radius: 6px; margin: 12px 0; }
+.hint .btn { margin-top: 8px; }
+.result { margin-top: 14px; }
+.total { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--chip); margin: 6px 0 2px; }
+.split i { display: block; height: 100%; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.top5 { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.top5 td { padding: 5px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.top5 td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; }
+.top5 .sb { height: 6px; background: var(--bar); border-radius: 3px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.warnline { font-size: 12.5px; color: var(--medium); margin-top: 8px; }
+.phase { display: grid; grid-template-columns: 20px minmax(140px, 240px) 1fr; gap: 4px 10px; align-items: center; padding: 4px 0;
+  border-bottom: 1px dashed var(--line); font-size: 13px; }
+.phase .ic { text-align: center; font-weight: 700; }
+.phase .info { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.phase.pending, .phase.cancelled { opacity: .6; }
+.phase.skipped .nm { text-decoration: line-through; color: var(--muted); }
+.ic.done { color: var(--cheap); } .ic.failed, .ic.stopped { color: var(--heavy); } .ic.running { color: var(--accent); }
+.stept { font-weight: 700; margin: 10px 0 2px; font-size: 13px; }
+.spin { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--accent); border-right-color: transparent;
+  border-radius: 50%; animation: rot .8s linear infinite; vertical-align: -1px; }
+@keyframes rot { to { transform: rotate(360deg); } }
+pre.log { background: var(--chip); border-radius: 8px; padding: 10px 12px; max-height: 340px; overflow: auto; margin: 8px 0 0;
+  font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all; }
+pre.log .cmd { color: var(--accent); } pre.log .fail { color: var(--heavy); } pre.log .arrow { color: var(--cheap); }
+.hist { width: 100%; border-collapse: collapse; }
+.hist td { padding: 6px 6px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.hist tr.click { cursor: pointer; } .hist tr.click:hover td { background: var(--hover); }
+.empty { padding: 30px; text-align: center; color: var(--muted); }
+/* reports */
+table.rep { width: 100%; border-collapse: collapse; }
+table.rep th, table.rep td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.rep th { font-size: 12px; color: var(--muted); font-weight: 600; }
+table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.cmpbar select { width: auto; min-width: 260px; max-width: 420px; }
+.cmpbar .ab { font-weight: 800; color: var(--muted); }
+.cmpbar input[type=text] { width: 300px; }
+.cmpbar input.drop { outline: 2px dashed var(--accent); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
+.seg button { border: 0; background: transparent; color: var(--muted); padding: 4px 11px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--chip); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.mt { display: none; } .matmode .mt { display: revert; } .matmode .fr { display: none; }
+.matinfo { display: grid; grid-template-columns: 24px 1fr; gap: 4px 8px; font-size: 13px; margin: 10px 0; text-align: left; }
+.prev { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); padding: 10px 12px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
+.prev .d { font-size: 18px; font-weight: 800; }
+.good { color: var(--cheap); } .bad { color: var(--heavy); }
+.selbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; font-size: 13px; }
+.bar2 { display: flex; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">Pareto<b>GPU</b><span>профилировщик шейдеров Mali</span></div>
+  <nav id="tabs">
+    <button data-tab="run">Проверка кадра<span id="tabPill"></span></button>
+    <button data-tab="reports">Отчёты</button>
+    <button data-tab="compare">Сравнение</button>
+    <button data-tab="site">Цена функций</button>
+  </nav>
+  <div class="env" id="env"></div>
+</div>
+
+<section id="tab-run"><div class="page"><div class="cols">
+  <div>
+    <div class="card" id="formCard">
+      <div class="banner" id="recalcBanner" style="display:none"></div>
+      <h2 id="formTitle">Новая проверка</h2>
+      <div class="howto" id="howto"><ol>
+        <li>Откройте проект в Unity, загрузите RenderDoc (вкладка Game → правой кнопкой → Load RenderDoc) и выставьте в окне Game нужный кадр в Play Mode.</li>
+        <li>Выберите проект ниже и нажмите «Проверить кадр».</li>
+        <li>Через несколько минут здесь появится цена кадра и самые дорогие шейдеры на Mali.</li>
+      </ol></div>
+      <div class="field" id="projField">
+        <span class="lbl">Проект</span>
+        <select id="project"></select>
+        <input type="text" id="projectPath" placeholder="Папка Unity-проекта, например D:\client" style="display:none;margin-top:6px">
+        <div class="status wait" id="edStatus"></div>
+      </div>
+      <div class="field">
+        <span class="lbl">Устройства</span>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="devices" value="mobile" checked><div><b>Типичные Mali</b><span>G52, G57, G78, G715, G720: от слабых до новых. Главное в отчёте — G78 (Galaxy S21).</span></div></label>
+          <label class="opt"><input type="radio" name="devices" value="g78"><div><b>Только Mali-G78</b><span>Galaxy S21 (Exynos). Быстрее, если нужен один телефон.</span></div></label>
+          <label class="opt"><input type="radio" name="devices" value="custom"><div style="flex:1"><b>Свои</b><span>Ядра Mali через запятую.</span>
+            <input type="text" id="customCores" list="dl-cores" placeholder="Mali-G57,Mali-G710"></div></label>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Что считать</span>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="scope" value="frame" checked><div><b>Только этот кадр</b><span>Шейдеры, которые есть в кадре.</span></div></label>
+          <label class="opt"><input type="radio" name="scope" value="materials"><div><b>Кадр и все материалы проекта</b><span>Ещё и цена шейдеров всех материалов проекта, даже тех, что не попали в кадр. Дольше.</span></div></label>
+        </div>
+      </div>
+      <button class="btn primary big" id="runBtn">▶ Проверить кадр</button>
+      <div class="why" id="runWhy"></div>
+      <div class="err" id="formErr"></div>
+      <details class="more" id="advBox"><summary>Дополнительно (для опытных)</summary><div class="adv" id="adv"></div></details>
+    </div>
+  </div>
+  <div>
+    <div class="card" id="jobCard"><div class="empty">Здесь будет ход проверки: какой шаг идёт, сколько осталось, а в конце — цена кадра и самые дорогие шейдеры.</div></div>
+    <div class="card">
+      <h2>Прошлые запуски</h2>
+      <table class="hist" id="hist"></table>
+    </div>
+  </div>
+</div></div></section>
+
+<section id="tab-reports">
+  <div class="page" id="repList"></div>
+  <div class="viewer" id="repView" style="display:none">
+    <div class="bar2">
+      <button class="btn" id="repBack">← К списку</button>
+      <b id="repName"></b>
+      <span style="flex:1"></span>
+      <button class="btn" id="repRecalc">Пересчитать</button>
+      <button class="btn" id="repFolder">Открыть папку</button>
+      <a class="btn" id="repOpen" target="_blank">В браузере</a>
+    </div>
+    <iframe id="repFrame" title="Отчёт"></iframe>
+  </div>
+</section>
+
+<section id="tab-compare">
+  <div class="bar2 cmpbar">
+    <div class="seg" id="cmpMode"><button data-m="frames">Кадры</button><button data-m="materials">Материалы</button></div>
+    <span class="ab fr">A</span><select id="cmpA" class="fr" title="Было"></select>
+    <button class="btn sm fr" id="cmpSwap" title="Поменять местами">⇄</button>
+    <span class="ab fr">B</span><select id="cmpB" class="fr" title="Стало"></select>
+    <select id="matProject" class="mt" title="Unity-проект" style="width:auto;max-width:220px"></select>
+    <span class="ab mt">A</span><input type="text" id="matA" class="mt" list="dl-matA" placeholder="Материал A: имя или путь, или перетащите .mat">
+    <button class="btn sm mt" id="matSwap" title="Поменять местами">⇄</button>
+    <span class="ab mt">B</span><input type="text" id="matB" class="mt" list="dl-matB" placeholder="Материал B">
+    <button class="btn sm primary mt" id="matRun">Сравнить</button>
+    <span style="flex:1"></span>
+    <select id="matHist" class="mt" title="Прошлые сравнения материалов" style="width:auto;max-width:360px"></select>
+    <a class="btn sm fr" id="cmpSave">Сохранить HTML</a>
+    <a class="btn sm" id="cmpOpen" target="_blank">В браузере</a>
+  </div>
+  <div class="page" id="cmpEmpty" style="display:none"></div>
+  <iframe id="cmpFrame" title="Сравнение"></iframe>
+</section>
+
+<section id="tab-site">
+  <div class="bar2"><span class="muted small" id="siteInfo"></span><span style="flex:1"></span>
+    <button class="btn sm" id="siteUpdate">Обновить данные…</button></div>
+  <iframe id="siteFrame" title="Цена функций"></iframe>
+</section>
+
+<datalist id="dl-cores"></datalist>
+<datalist id="dl-matA"></datalist>
+<datalist id="dl-matB"></datalist>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", body: JSON.stringify(body),
+    headers: {"Content-Type": "application/json", "X-ParetoGPU": "1"}});
+  const d = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+  if (!r.ok && !d.error) d.error = `HTTP ${r.status}`;
+  return d;
+};
+// the server stops when every window is closed (python -m paretogpu ui without --stay)
+const WINDOW_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+const alive = () => fetch("/api/alive?id=" + WINDOW_ID).catch(() => {});
+alive(); setInterval(alive, 20000);
+addEventListener("pagehide", e => { if (!e.persisted) navigator.sendBeacon("/api/bye", WINDOW_ID); });
+const store = {get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+               set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }};
+
+function dur(s) {
+  if (s == null) return "—";
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return `${s} с`;
+  if (s < 3600) return `${Math.floor(s / 60)} мин ${String(s % 60).padStart(2, "0")} с`;
+  return `${Math.floor(s / 3600)} ч ${String(Math.floor(s / 60) % 60).padStart(2, "0")} мин`;
+}
+const approx = s => s == null ? "?" : s < 5 ? "несколько секунд" : "≈ " + dur(s);
+const when = t => new Date(t * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+const M = x => x == null ? "—" : (x / 1e6).toFixed(1);
+const pct = x => x == null ? "—" : (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
+
+const PRESET_TEXT = {frame_cost: "Проверка кадра", cost: "Пересчёт снимка", site: "Обновление данных сайта",
+  matcompare: "Сравнение материалов"};
+const STEP_TEXT = {frame: "Снимок кадра", cost: "Цена кадра", bench_run: "Замер функций", bench_site: "Сборка сайта"};
+const PHASE_TEXT = {
+  rd_capture: ["Захват кадра в RenderDoc"], snapshot: ["Снимок кадра (Frame Debugger)", "событий"],
+  rd_counters: ["Подсчёт пикселей (RenderDoc)"], materials: ["Материалы проекта"],
+  fingerprints: ["Проверка изменений шейдеров"], compile: ["Компиляция шейдеров в Unity", "вариантов"],
+  measure: ["Замеры malioc", "замеров"], loops: ["Циклы в шейдерах (malioc)", "замеров"],
+  report: ["Расчёт и отчёт"], bench_compile: ["Замеры malioc", "шейдеров"], run: ["Выполнение"],
+};
+const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
+  "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
+// settings of the simple form; the rest of the flags are in "Дополнительно"
+const SIMPLE = new Set(["project", "frame", "out", "renderdoc", "cores", "core", "materials"]);
+const ADV_LABEL = {
+  variants: "Папка скомпилированных вариантов", main_core: "Основное ядро", api: "API цен", vulkan_only: "Только Vulkan",
+  no_compile: "Не компилировать", recompile: "Скомпилировать всё заново", retry_failed: "Повторить упавшие варианты",
+  loop_iters: "Итераций динамических циклов", loop_iters_shader: "Итерации по шейдерам (NAME=N через «;»)",
+  jobs: "Потоков malioc", timeout: "Таймаут снимка, с", max_events: "Не больше событий",
+};
+
+let SCHEMA, OPT, recalc = null, edReady = null;
+
+/* ---------- tabs ---------- */
+function tab(name) {
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === "tab-" + name));
+  if (name === "site" && !$("#siteFrame").src) $("#siteFrame").src = "/site/index.html";
+  if (name === "reports") loadReports();
+  if (name === "compare") cmpMode === "materials" ? loadMaterials() : loadCompare();
+  store.set("tab", name);
+}
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
+
+/* ---------- environment ---------- */
+async function loadEnv() {
+  const d = await api("/api/doctor");
+  const short = {"malioc (Arm Performance Studio)": "malioc", "RenderDoc": "RenderDoc", "Unity CLI (unity)": "Unity CLI",
+                 "Unity Editor (Hub)": "Unity"};
+  $("#env").innerHTML = d.checks.map(c => `<span class="envc ${c.status}" title="${esc(c.what + ": " + c.detail)}">${esc(short[c.what] || c.what)}</span>`).join("");
+  $("#siteInfo").textContent = d.site.updated ? `Данные замерены ${when(d.site.updated)} · таблица та же, что на сайте` : "";
+}
+
+/* ---------- form ---------- */
+function projects() {
+  const open = OPT.unity_projects.filter(p => p.open), rest = OPT.unity_projects.filter(p => !p.open);
+  const o = p => `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · снимков: ${p.snapshots}` : ""}</option>`;
+  $("#project").innerHTML = (open.length ? `<optgroup label="Открыты в Unity">${open.map(o).join("")}</optgroup>` : "") +
+    (rest.length ? `<optgroup label="Остальные проекты (Unity Hub)">${rest.map(o).join("")}</optgroup>` : "") +
+    `<option value="__other">Другая папка…</option>`;
+  const saved = store.get("project");
+  if (saved && OPT.unity_projects.some(p => p.path === saved)) $("#project").value = saved;
+  else if (saved) { $("#project").value = "__other"; $("#projectPath").value = saved; }
+  else if (open.length) $("#project").value = open[0].path;
+  $("#projectPath").style.display = $("#project").value === "__other" ? "" : "none";
+}
+const projectValue = () => recalc ? recalc.project : ($("#project").value === "__other" ? $("#projectPath").value.trim() : $("#project").value);
+
+$("#project").onchange = () => {
+  $("#projectPath").style.display = $("#project").value === "__other" ? "" : "none";
+  if ($("#project").value !== "__other") store.set("project", $("#project").value);
+  checkEditor();
+};
+$("#projectPath").onchange = () => { store.set("project", $("#projectPath").value.trim()); checkEditor(); };
+
+let edSeq = 0;
+async function checkEditor(quiet) {
+  const el = $("#edStatus"), v = projectValue();
+  if (recalc) { edReady = true; updateRun(); return; }
+  if (!v) { el.textContent = ""; edReady = false; updateRun(); return; }
+  const seq = ++edSeq;
+  if (!quiet) { el.className = "status wait"; el.textContent = "проверяю Unity…"; }
+  const s = await api("/api/editor?project=" + encodeURIComponent(v));
+  if (seq !== edSeq) return;
+  edReady = !!s.ready;
+  if (!s.project) { el.className = "status bad"; el.textContent = "В этой папке нет Unity-проекта."; }
+  else if (s.ready) { el.className = "status ok"; el.textContent = `✓ Unity ${s.version || ""} открыт и готов`; }
+  else if (!s.open) { el.className = "status bad"; el.textContent = `Проект не открыт. Откройте его в Unity ${s.version || ""} — кадр снимается из открытого редактора.`; }
+  else if (!s.cli) { el.className = "status bad"; el.textContent = "Не найден Unity CLI (команда unity): запустите start.bat, он покажет, что поставить."; }
+  else { el.className = "status bad"; el.textContent = "Unity открыт, но занят (компиляция, импорт) или Unity CLI не отвечает. Подождите — статус обновится сам."; }
+  updateRun();
+}
+setInterval(() => { if (document.visibilityState === "visible" && $("#tab-run").classList.contains("on") && !running()) checkEditor(true); }, 8000);
+
+const radio = n => document.querySelector(`input[name=${n}]:checked`).value;
+document.querySelectorAll("input[type=radio]").forEach(r => r.addEventListener("change", saveSimple));
+$("#customCores").addEventListener("focus", () => { document.querySelector("input[name=devices][value=custom]").checked = true; });
+$("#customCores").addEventListener("change", saveSimple);
+function saveSimple() { store.set("simple", {devices: radio("devices"), scope: radio("scope"), cores: $("#customCores").value}); }
+function loadSimple() {
+  const s = store.get("simple") || {};
+  for (const n of ["devices", "scope"]) {
+    const el = s[n] && document.querySelector(`input[name=${n}][value=${s[n]}]`);
+    if (el) el.checked = true;
+  }
+  $("#customCores").value = s.cores || "";
+}
+
+function advFields() {
+  const out = [], seen = new Set();
+  for (const cmd of ["frame", "cost"]) for (const a of SCHEMA[cmd].args) {
+    if (SIMPLE.has(a.dest) || seen.has(a.dest)) continue;
+    if (recalc && cmd === "frame") continue;
+    seen.add(a.dest); out.push(a);
+  }
+  return out;
+}
+function renderAdv() {
+  $("#adv").innerHTML = `<p class="muted small">Обычно не нужны: значения по умолчанию подобраны под проверку кадра.</p>` + advFields().map(a => {
+    const id = "a-" + a.dest, lbl = esc(ADV_LABEL[a.dest] || a.flag);
+    if (a.kind === "flag") return `<div class="row2"><label class="chk"><input type="checkbox" id="${id}"> ${lbl}<code>${esc(a.flag)}</code></label><div class="help">${esc(a.help)}</div></div>`;
+    const ph = a.dest === "variants" ? "своя папка на проект (paretogpu/out/variants_<проект>)" : a.default != null && a.default !== "" ? `по умолчанию: ${a.default}` : "";
+    const ctl = a.choices ? `<select id="${id}"><option value="">по умолчанию (${esc(a.default)})</option>${a.choices.map(c => `<option>${esc(c)}</option>`).join("")}</select>`
+      : `<input type="text" id="${id}" placeholder="${esc(ph)}">`;
+    return `<div class="row2"><label for="${id}">${lbl}<code>${esc(a.flag)}</code></label>${ctl}<div class="help">${esc(a.help)}</div></div>`;
+  }).join("");
+}
+
+function values() {
+  const v = {};
+  const p = projectValue();
+  if (p) v.project = p;
+  const dev = radio("devices");
+  v.cores = dev === "mobile" ? "preset:mobile" : dev === "g78" ? "Mali-G78" : $("#customCores").value.trim();
+  if (radio("scope") === "materials") v.materials = true;
+  for (const a of advFields()) {
+    const el = $("#a-" + a.dest);
+    if (!el) continue;
+    if (a.kind === "flag") { if (el.checked) v[a.dest] = true; }
+    else if (a.kind === "list") { const l = el.value.split(";").map(s => s.trim()).filter(Boolean); if (l.length) v[a.dest] = l; }
+    else if (el.value.trim()) v[a.dest] = el.value.trim();
+  }
+  if (recalc) v.frame = recalc.path;
+  return v;
+}
+
+function updateRun() {
+  const b = $("#runBtn"), why = $("#runWhy");
+  b.textContent = recalc ? "▶ Пересчитать снимок" : "▶ Проверить кадр";
+  if (running()) { b.disabled = true; why.textContent = "Идёт проверка — новую можно начать после неё."; return; }
+  if (!recalc && !projectValue()) { b.disabled = true; why.textContent = "Выберите проект."; return; }
+  if (!recalc && edReady === false) { b.disabled = true; why.textContent = "Кнопка станет активной, когда Unity с проектом откроется и будет готов."; return; }
+  if (radio("devices") === "custom" && !$("#customCores").value.trim()) { b.disabled = true; why.textContent = "Впишите ядра Mali или выберите вариант выше."; return; }
+  b.disabled = false; why.textContent = recalc ? "Unity нужен, только если шейдеры поменялись с прошлого расчёта." : "";
+}
+document.querySelectorAll("input[name=devices]").forEach(r => r.addEventListener("change", updateRun));
+$("#customCores").addEventListener("input", updateRun);
+
+async function start(preset, vals) {
+  $("#formErr").textContent = "";
+  const r = await api("/api/run", {preset, values: vals});
+  if (r.error) { $("#formErr").textContent = r.error; tab("run"); return false; }
+  viewId = null; job = null; logNext = 0; logEl = null; detailsOpen = null;
+  if ($("#backCur")) $("#backCur").remove();
+  tab("run");
+  poll();
+  return true;
+}
+$("#runBtn").onclick = async () => { if (await start(recalc ? "cost" : "frame_cost", values())) setRecalc(null); };
+
+function setRecalc(x) {
+  recalc = x;
+  $("#recalcBanner").style.display = x ? "" : "none";
+  if (x) $("#recalcBanner").innerHTML = `<div style="flex:1">Пересчёт снимка <b>${esc(x.name)}</b>${x.project ? ` (${esc(x.project)})` : ""}: кадр не снимается заново, только цена. Поправили шейдер — пересчитайте и сразу увидите разницу с прошлым расчётом.</div><button class="btn sm" id="recalcCancel">Отмена</button>`;
+  if (x) $("#recalcCancel").onclick = () => setRecalc(null);
+  $("#formTitle").textContent = x ? "Пересчёт снимка" : "Новая проверка";
+  for (const id of ["#howto", "#projField"]) $(id).style.display = x ? "none" : "";
+  renderAdv(); checkEditor(); updateRun();
+}
+
+/* ---------- run panel ---------- */
+let viewId = null, logNext = 0, logEl = null, job = null, timer = null, detailsOpen = null;
+const running = () => !!(job && job.status === "running" && !viewId);
+
+function flatPhases(j) { return j.steps.flatMap(s => s.phases.map(p => ({...p, cmd: s.cmd}))); }
+
+function overall(j, now) {
+  const el = (j.finished || now) - j.started;
+  if (j.status !== "running") return {el, pct: 100};
+  if (j.eta != null && !j.eta_partial && el + j.eta > 0) return {el, pct: 100 * el / (el + j.eta)};
+  const ps = flatPhases(j).filter(p => p.status !== "skipped");
+  let d = 0;
+  for (const p of ps) d += p.status === "done" ? 1 : p.status === "running" && p.total ? (p.done || 0) / p.total : 0;
+  return {el, pct: ps.length ? 100 * d / ps.length : 0};
+}
+
+function phaseInfo(p, now) {
+  const unit = (PHASE_TEXT[p.id] || [])[1] || "";
+  const note = p.note ? (NOTE_TEXT[p.note] || p.note) : "";
+  if (p.status === "running") {
+    const el = p.elapsed ?? (now - p.started);
+    if (p.total) {
+      const rate = p.done && el > 1 ? p.done / el : null;
+      return `${p.done || 0} / ${p.total} ${unit}` + (rate ? ` · ${rate >= 1 ? rate.toFixed(rate >= 10 ? 0 : 1) + "/с" : (rate * 60).toFixed(1) + "/мин"}` : "") +
+        (p.eta != null ? ` · осталось ${approx(p.eta)}` : "") + (note ? ` · ${note}` : "");
+    }
+    return `идёт ${dur(el)}` + (p.typical ? (el > p.typical * 1.2 ? ` · дольше обычного (обычно ${approx(p.typical)})` : ` · обычно ${approx(p.typical)}`) : "") + (note ? ` · ${note}` : "");
+  }
+  if (p.status === "done") return (p.total ? `${p.done ?? p.total} ${unit} · ` : "") + dur(p.seconds);
+  if (p.status === "pending") return p.typical != null ? `впереди · обычно ${approx(p.typical)}` : "впереди";
+  if (p.status === "skipped") return "не понадобилось" + (note ? `: ${note}` : "");
+  return {failed: "ошибка — см. лог", stopped: "остановлено", cancelled: "не выполнялось"}[p.status] || "";
+}
+
+function phaseRow(p, now) {
+  const ic = {done: "✓", running: '<span class="spin"></span>', pending: "○", skipped: "–", failed: "✕", stopped: "■", cancelled: "·"}[p.status] || "?";
+  return `<div class="phase ${p.status}"><div class="ic ${p.status}">${ic}</div><div class="nm">${esc((PHASE_TEXT[p.id] || [p.id])[0])}</div><div class="info">${esc(phaseInfo(p, now))}</div></div>`;
+}
+
+function resultHtml(j) {
+  const s = j.summary;
+  if (!s) return j.report ? `<div class="actions"><button class="btn primary" data-act="open">Открыть отчёт</button></div>` : "";
+  const t = s.total || 0, f = t ? s.fragment / t : 0, v = t ? s.vertex / t : 0, c = t ? s.compute / t : 0;
+  const top = s.shaders.map(x => `<tr><td>${esc(x.key)}</td><td style="width:35%"><div class="sb" style="width:${(100 * x.share / (s.shaders[0].share || 1)).toFixed(1)}%"></div></td><td class="n">${pct(x.share)}</td></tr>`).join("");
+  return `<div class="result">${prevHtml(s.prev)}
+    <div class="muted small" style="margin-top:12px">Цена кадра на ${esc(s.main_core)} (${esc(s.api)})</div>
+    <div class="total">${M(t)} млн циклов</div>
+    <div class="split"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i><i style="width:${100 * c}%;background:var(--part-cs)"></i></div>
+    <div class="legend"><span><i style="background:var(--part-px)"></i>пиксели ${pct(f)}</span><span><i style="background:var(--part-vx)"></i>вершины ${pct(v)}</span><span><i style="background:var(--part-cs)"></i>compute ${pct(c)}</span></div>
+    <div class="muted small" style="margin-top:12px">Самые дорогие шейдеры (доля кадра)</div>
+    <table class="top5">${top}</table>
+    ${s.unpriced_draws ? `<div class="warnline">⚠ ${s.unpriced_draws} draw без цены: шейдер не скомпилировался или замер упал. Их стоимость не входит в итог.</div>` : ""}
+    ${s.unpriced_compute ? `<div class="muted small" style="margin-top:6px">Compute-шейдеры без цены (${s.unpriced_compute}): их компиляция из скрипта роняет Unity 6000.3.</div>` : ""}
+    ${pixelsLine(s)}
+    ${s.checked === false ? `<div class="warnline">⚠ Шейдеры не перекомпилировались (Unity был недоступен или выбран расчёт без компиляции): если шейдеры менялись после прошлого расчёта, цена может быть устаревшей.</div>` : ""}
+    <div class="actions"><button class="btn primary" data-act="open">Открыть полный отчёт</button>
+      ${s.unpriced_draws ? `<button class="btn" data-act="retry">Повторить упавшие (${s.unpriced_draws})</button>` : ""}
+      <button class="btn" data-act="folder">Папка</button></div></div>`;
+}
+
+function prevHtml(p) {
+  if (!p || p.delta == null) return "";
+  const c = p.delta < 0 ? "good" : p.delta > 0 ? "bad" : "";
+  const sg = x => (x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x));
+  const pc = p.pct == null ? "" : ` (${p.pct > 0 ? "+" : p.pct < 0 ? "−" : "±"}${Math.abs(100 * p.pct).toFixed(1)}%)`;
+  return `<div class="prev"><div class="muted small">К прошлому расчёту этого снимка (${when(p.a_time)}), ${esc(p.core)}</div>
+    <div class="d ${c}">${sg(p.delta)} млн${pc}</div>
+    <div class="small">цена шейдеров <b>${sg(p.price)}</b> · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
+    ${p.shaders && p.shaders.length ? `<div class="small" style="margin-top:4px">${p.shaders.map(x => `${esc(x.shader)} <b class="${x.delta < 0 ? "good" : "bad"}">${sg(x.delta)}</b>`).join(" · ")}</div>` : ""}
+    <div style="margin-top:8px"><button class="btn sm" data-act="compare">Подробное сравнение</button></div></div>`;
+}
+
+function pixelsLine(s) {
+  // where the pixel counts came from: renderdoc is exact, diff an estimate (see the report's "Как читать")
+  const pm = s.pixel_methods || {};
+  const name = {renderdoc: "RenderDoc (точно)", fullscreen: "полноэкранные проходы", diff: "Frame Debugger diff (оценка)", none: "нет"};
+  const txt = Object.entries(pm).map(([k, n]) => `${name[k] || k}: ${n}`).join(" · ");
+  if (Object.keys(pm).some(k => k !== "renderdoc"))
+    return `<div class="warnline">⚠ Не у всех draw пиксели из RenderDoc: ${esc(txt)}. Снимите кадр заново.</div>`;
+  return txt ? `<div class="muted small" style="margin-top:6px">Пиксели draw: ${esc(txt)}</div>` : "";
+}
+
+function costStep(j) { return j.steps.find(s => s.cmd === "cost"); }
+
+function renderJob(j) {
+  const now = j.now || Date.now() / 1000;
+  const {el, pct: p} = overall(j, now);
+  const st = {running: "идёт", ok: "готово", failed: "ошибка", stopped: "остановлено"}[j.status];
+  const ps = flatPhases(j).filter(x => x.status !== "skipped");
+  const cur = ps.findIndex(x => x.status === "running");
+  let now_ = "";
+  if (j.status === "running") {
+    const ph = cur >= 0 ? ps[cur] : null;
+    now_ = ph ? `<div class="now">Шаг ${cur + 1} из ${ps.length}: ${esc((PHASE_TEXT[ph.id] || [ph.id])[0])} <span class="muted">· ${esc(phaseInfo(ph, now))}</span></div>
+      <div class="bar thin ${ph.total ? "" : "indet"}"><i style="width:${ph.total ? (100 * (ph.done || 0) / ph.total).toFixed(1) : 0}%"></i></div>`
+      : `<div class="now">Подготовка…</div>`;
+  }
+  const etaTxt = j.eta_partial ? (j.eta ? `не меньше ${dur(j.eta)}` : "оценка появится после первой проверки") : approx(j.eta);
+  const head = `<div class="jobhead"><h2>${esc(PRESET_TEXT[j.preset] || j.preset)}</h2><span class="badge ${j.status}">${st}</span>
+      <span class="muted small">${when(j.started)}</span><span style="flex:1"></span>
+      ${j.status === "running" && !viewId ? `<button class="btn danger" data-act="stop">Остановить</button>` : ""}</div>
+    ${now_}
+    <div class="bar ${j.status === "ok" ? "ok" : j.status === "running" ? "" : "bad"}"><i style="width:${p.toFixed(1)}%"></i></div>
+    <div class="meta">${j.status === "running" ? `<span>готово <b>${p.toFixed(0)}%</b></span><span>прошло <b>${dur(el)}</b></span><span>осталось <b>${esc(etaTxt)}</b></span>`
+      : `<span>заняло <b>${dur(el)}</b></span>`}</div>`;
+  const hint = j.status === "failed" && j.hint ? `<div class="hint">${esc(j.hint.text)}
+      ${j.hint.action === "no_compile" ? `<div><button class="btn" data-act="nocompile">Посчитать по уже скомпилированным вариантам</button></div>` : ""}</div>` : "";
+  const res = j.status === "ok" ? resultHtml(j) : "";
+  const steps = j.steps.map(s => (j.steps.length > 1 ? `<div class="stept">${esc(STEP_TEXT[s.cmd] || s.cmd)}</div>` : "") + s.phases.map(x => phaseRow(x, now)).join("")).join("");
+  if (detailsOpen === null) detailsOpen = j.status === "failed";
+  const card = $("#jobCard");
+  const keepLog = logEl && card.contains(logEl) ? logEl : null;
+  card.innerHTML = head + hint + res + `<details class="more" id="detBox" ${detailsOpen ? "open" : ""}><summary>Подробнее: все шаги и лог</summary>${steps}<pre class="log" id="log"></pre></details>`;
+  if (keepLog) $("#log").replaceWith(keepLog);
+  logEl = $("#log");
+  $("#detBox").addEventListener("toggle", e => { detailsOpen = e.target.open; });
+  card.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act(b.dataset.act, j));
+}
+
+async function act(a, j) {
+  const dir = j.report_path ? j.report_path.replace(/[\\/][^\\/]+$/, "") : j.frame_dir;
+  const cs = costStep(j);
+  if (a === "stop" && confirm("Остановить проверку? Текущий шаг прервётся.")) await api("/api/stop", {});
+  if (a === "open") openReport({name: dir.split(/[\\/]/).pop(), report: j.report, path: dir});
+  if (a === "folder") api("/api/reveal", {path: dir});
+  if (a === "compare" && j.summary && j.summary.prev) openCompare(j.summary.prev.run_a, j.summary.prev.run_b);
+  if (a === "retry" && cs) start("cost", {...cs.values, retry_failed: true});
+  if (a === "nocompile" && cs) start("cost", {...cs.values, no_compile: true});
+}
+
+function appendLog(lines) {
+  if (!logEl || !lines.length) return;
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
+  logEl.insertAdjacentHTML("beforeend", lines.map(l => {
+    const c = l.startsWith("$ ") ? "cmd" : /^(FAIL|Traceback|.*Error\b|.*failed:)/.test(l) ? "fail" : l.startsWith("-> ") ? "arrow" : "";
+    return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
+  }).join("\n") + "\n");
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function pill(j) {
+  const el = $("#tabPill");
+  if (j && j.status === "running") {
+    const {pct: p} = overall(j, j.now);
+    el.innerHTML = `<span class="pill run">${p.toFixed(0)}%</span>`;
+    document.title = `${p.toFixed(0)}% · ParetoGPU`;
+  } else {
+    el.innerHTML = !j || j.status === "stopped" ? "" : j.status === "ok" ? `<span class="pill ok">✓</span>` : `<span class="pill bad">✕</span>`;
+    document.title = "ParetoGPU";
+  }
+}
+
+async function poll() {
+  clearTimeout(timer);
+  try {
+    const q = viewId ? `id=${encodeURIComponent(viewId)}&since=${logNext}` : `since=${logNext}`;
+    const j = (await api("/api/job?" + q)).job;
+    if (j) {
+      if (job && job.id !== j.id) { job = null; logNext = 0; logEl = null; detailsOpen = null; return poll(); }
+      const finished = job && job.status === "running" && j.status !== "running";
+      if (finished && j.status === "failed") detailsOpen = true;  // the log is what explains a failure
+      job = j;
+      renderJob(j);
+      appendLog(j.log);
+      logNext = j.log_next;
+      if (!viewId) pill(j);
+      if (finished) { loadHistory(); OPT = await api("/api/options"); }
+    }
+    updateRun();
+  } catch (e) { /* the server restarts: try again */ }
+  timer = setTimeout(poll, job && job.status === "running" ? 700 : 3000);
+}
+
+async function loadHistory() {
+  const r = await api("/api/jobs");
+  const rows = r.jobs.filter(x => x.status !== "running");
+  const name = {ok: "готово", failed: "ошибка", stopped: "остановлено"};
+  $("#hist").innerHTML = rows.length ? rows.slice(0, 15).map(x => `<tr class="click" data-id="${esc(x.id)}"><td>${when(x.started)}</td>
+    <td>${esc(PRESET_TEXT[x.preset] || x.preset)}</td><td><span class="badge ${x.status}">${name[x.status] || x.status}</span></td>
+    <td class="muted">${x.finished ? dur(x.finished - x.started) : ""}</td></tr>`).join("")
+    : `<tr><td class="muted">Проверок ещё не было</td></tr>`;
+  document.querySelectorAll("#hist tr.click").forEach(tr => tr.onclick = () => {
+    viewId = tr.dataset.id; logNext = 0; logEl = null; job = null; detailsOpen = null; $("#jobCard").innerHTML = ""; poll();
+    if (!$("#backCur")) $("#jobCard").insertAdjacentHTML("beforebegin", `<button class="btn" id="backCur" style="margin-bottom:8px">← К текущей проверке</button>`);
+    $("#backCur").onclick = () => { viewId = null; logNext = 0; logEl = null; job = null; detailsOpen = null; $("#backCur").remove(); poll(); };
+  });
+}
+
+/* ---------- reports ---------- */
+let curRep = null;
+async function loadReports() {
+  const reps = (await api("/api/reports")).reports;
+  if (!reps.length) { $("#repList").innerHTML = `<div class="card empty">Снимков ещё нет. Откройте «Проверка кадра» и нажмите «Проверить кадр».</div>`; return; }
+  $("#repList").innerHTML = `<div class="card" style="max-width:1500px;margin:0 auto"><h2>Проверенные кадры</h2>
+    <p class="muted small">Хранятся только на этом компьютере (${esc(OPT.out)}), в git и на сайт не попадают. Отметьте два снимка, чтобы сравнить их.</p>
+    <div class="selbar" id="selBar"></div>
+    <table class="rep"><tr><th></th><th>Когда</th><th>Проект</th><th class="n">Draw</th><th class="n">Кадр, млн циклов</th><th>Пиксели / вершины</th><th></th></tr>` +
+    reps.map((x, i) => {
+      const t = x.total || 0, f = t ? x.fragment / t : 0, v = t ? x.vertex / t : 0;
+      return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></td>
+      <td>${esc(x.project || "—")}</td><td class="n">${x.draws}</td>
+      <td class="n">${x.total ? `<b>${M(x.total)}</b><div class="muted small">${esc(x.main_core)}</div>` : `<span class="muted">не посчитан</span>`}</td>
+      <td>${x.total ? `<div class="split" style="width:140px"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i></div><span class="muted small">${pct(f)} / ${pct(v)}</span>` : ""}</td>
+      <td style="white-space:nowrap;text-align:right">${x.report ? `<button class="btn sm primary" data-a="open" data-i="${i}">Открыть</button> ` : ""}
+        <button class="btn sm" data-a="recalc" data-i="${i}">${x.report ? "Пересчитать" : "Посчитать"}</button>
+        ${x.runs.length ? `<button class="btn sm" data-a="cmp" data-i="${i}">Сравнить</button>` : ""}
+        <button class="btn sm" data-a="folder" data-i="${i}">Папка</button>
+        <button class="btn sm danger" data-a="del" data-i="${i}" title="Удалить">✕</button></td></tr>`;
+    }).join("") + `</table></div>`;
+  document.querySelectorAll("#repList [data-a]").forEach(b => b.onclick = async () => {
+    const x = reps[+b.dataset.i];
+    if (b.dataset.a === "open") openReport(x);
+    if (b.dataset.a === "recalc") { setRecalc(x); tab("run"); }
+    if (b.dataset.a === "cmp") compareSnapshot(x, reps);
+    if (b.dataset.a === "folder") api("/api/reveal", {name: x.name});
+    if (b.dataset.a === "del" && confirm(`Удалить снимок ${x.name} со всеми файлами (отчёт, захват RenderDoc)?`)) {
+      const d = await api("/api/delete", {name: x.name});
+      if (d.error) alert(d.error);
+      OPT = await api("/api/options"); loadReports();
+    }
+  });
+  const picks = () => [...document.querySelectorAll(".pick:checked")].map(c => reps[+c.dataset.i]);
+  const sel = () => {
+    const p = picks();
+    $("#selBar").innerHTML = p.length === 2
+      ? `<button class="btn primary sm" id="cmpPicked">Сравнить выбранные</button><span class="muted">A — более ранний снимок, B — более поздний (последние расчёты)</span>`
+      : p.length ? `<span class="muted">Отметьте ещё один снимок.</span>` : "";
+    if (p.length === 2) $("#cmpPicked").onclick = () => {
+      const [a, b] = p.sort((u, v) => u.time - v.time);
+      openCompare(`${a.name}/${a.runs.at(-1)}`, `${b.name}/${b.runs.at(-1)}`);
+    };
+  };
+  document.querySelectorAll(".pick").forEach(c => c.onchange = () => {
+    const p = picks();
+    if (p.length > 2) c.checked = false;
+    sel();
+  });
+}
+
+function compareSnapshot(x, reps) {
+  // the snapshot priced again: its last two runs; else its last run against the previous snapshot of the project
+  const b = `${x.name}/${x.runs.at(-1)}`;
+  if (x.runs.length > 1) return openCompare(`${x.name}/${x.runs.at(-2)}`, b);
+  const prev = reps.filter(r => r.runs.length && r.name !== x.name && r.time < x.time && (!x.project || r.project === x.project))
+    .sort((u, v) => v.time - u.time)[0];
+  if (prev) return openCompare(`${prev.name}/${prev.runs.at(-1)}`, b);
+  openCompare(null, b);
+}
+
+/* ---------- compare ---------- */
+let RUNS = [];
+async function loadCompare(a, b) {
+  RUNS = (await api("/api/costs")).runs;
+  const groups = {};
+  for (const r of RUNS) (groups[r.snapshot] = groups[r.snapshot] || []).push(r);
+  const opts = Object.entries(groups).map(([snap, rs]) => `<optgroup label="${esc(snap)}${rs[0].project ? " · " + esc(rs[0].project) : ""}">` +
+    rs.map(r => `<option value="${esc(r.id)}">${when(r.computed_at)} · ${M(r.total)} млн · ${esc(r.main_core || "")}${r.api ? " · " + esc(r.api) : ""}</option>`).join("") + `</optgroup>`).join("");
+  $("#cmpA").innerHTML = `<option value="">— выберите —</option>` + opts;
+  $("#cmpB").innerHTML = `<option value="">— выберите —</option>` + opts;
+  const saved = store.get("compare") || {};
+  a = a !== undefined ? a : saved.a; b = b !== undefined ? b : saved.b;
+  const has = id => id && RUNS.some(r => r.id === id);
+  if (!has(b)) b = RUNS[0] && RUNS[0].id;
+  if (!has(a) || a === b) {
+    const rb = RUNS.find(r => r.id === b);
+    const same = rb && RUNS.filter(r => r.snapshot === rb.snapshot && r.id !== b && r.computed_at < rb.computed_at)[0];
+    const proj = rb && RUNS.filter(r => r.snapshot !== rb.snapshot && r.project === rb.project && r.snapshot_time < rb.snapshot_time)[0];
+    a = (same || proj || RUNS.find(r => r.id !== b) || {}).id;
+  }
+  $("#cmpA").value = a || ""; $("#cmpB").value = b || "";
+  document.querySelectorAll("#cmpMode button").forEach(x => x.classList.toggle("on", x.dataset.m === "frames"));
+  $("#tab-compare").classList.remove("matmode");
+  showCompare();
+}
+function showCompare() {
+  const a = $("#cmpA").value, b = $("#cmpB").value;
+  store.set("compare", {a, b});
+  const ok = a && b;
+  $("#cmpEmpty").style.display = ok ? "none" : "";
+  $("#cmpFrame").style.display = ok ? "" : "none";
+  for (const id of ["#cmpSave", "#cmpOpen"]) $(id).style.visibility = ok ? "" : "hidden";
+  if (!ok) {
+    $("#cmpEmpty").innerHTML = `<div class="card empty" style="max-width:800px;margin:0 auto">${RUNS.length < 2
+      ? "Для сравнения нужно хотя бы два расчёта.<br><br>Поправили шейдер — откройте «Отчёты» и нажмите «Пересчитать» у снимка: тот же кадр посчитается с новыми ценами, и разница будет только от шейдеров.<br>Или снимите новый кадр во вкладке «Проверка кадра»."
+      : "Выберите расчёты A (было) и B (стало) вверху."}</div>`;
+    $("#cmpFrame").src = "about:blank";
+    return;
+  }
+  const q = `a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`;
+  if ($("#cmpFrame").dataset.q !== q) { $("#cmpFrame").src = "/compare?" + q; $("#cmpFrame").dataset.q = q; }
+  $("#cmpSave").href = "/compare?" + q + "&download=1";
+  $("#cmpOpen").href = "/compare?" + q;
+}
+$("#cmpA").onchange = showCompare;
+$("#cmpB").onchange = showCompare;
+$("#cmpSwap").onclick = () => { const a = $("#cmpA").value; $("#cmpA").value = $("#cmpB").value; $("#cmpB").value = a; showCompare(); };
+/* ---------- compare: two materials ---------- */
+let cmpMode = store.get("compareMode") === "materials" ? "materials" : "frames";
+let MATS = [], matsOf = null, matJobId = null, matTimer = null;
+function setMode(m) {
+  cmpMode = m;
+  store.set("compareMode", m);
+  document.querySelectorAll("#cmpMode button").forEach(b => b.classList.toggle("on", b.dataset.m === m));
+  $("#tab-compare").classList.toggle("matmode", m === "materials");
+  $("#cmpFrame").dataset.q = "";
+  m === "materials" ? loadMaterials() : loadCompare();
+}
+document.querySelectorAll("#cmpMode button").forEach(b => b.onclick = () => setMode(b.dataset.m));
+const matProject = () => $("#matProject").value;
+async function loadMaterials() {
+  document.querySelectorAll("#cmpMode button").forEach(b => b.classList.toggle("on", b.dataset.m === "materials"));
+  $("#tab-compare").classList.add("matmode");
+  if (!$("#matProject").options.length) {
+    const ps = OPT.unity_projects;
+    $("#matProject").innerHTML = ps.map(p => `<option value="${esc(p.path)}">${esc(p.title)}</option>`).join("");
+    const saved = (store.get("matcompare") || {}).project || store.get("project");
+    if (ps.some(p => p.path === saved)) $("#matProject").value = saved;
+    else { const open = ps.find(p => p.open); if (open) $("#matProject").value = open.path; }
+    const s = store.get("matcompare") || {};
+    if (s.project === matProject()) { $("#matA").value = s.a || ""; $("#matB").value = s.b || ""; }
+  }
+  await Promise.all([loadMatList(), loadMatHist()]);
+}
+async function loadMatList() {
+  const pr = matProject();
+  if (!pr || matsOf === pr) return;
+  matsOf = pr; MATS = [];
+  const d = await api("/api/materials?project=" + encodeURIComponent(pr));
+  if (matsOf !== pr) return;
+  MATS = d.materials || [];
+  suggest($("#matA"), $("#dl-matA")); suggest($("#matB"), $("#dl-matB"));
+  matStatus();
+}
+function suggest(inp, dl) {
+  // the datalist holds the 60 best matches of what is typed: thousands of options make the browser slow
+  const q = inp.value.trim().toLowerCase();
+  const hits = [];
+  for (const m of MATS) {
+    if (m.error) continue;
+    const name = m.name.toLowerCase(), path = m.path.toLowerCase();
+    const rank = !q ? 2 : name === q ? 0 : name.startsWith(q) ? 1 : path.includes(q) || (m.shader || "").toLowerCase().includes(q) ? 2 : -1;
+    if (rank >= 0) hits.push([rank, m]);
+    if (!q && hits.length >= 60) break;
+  }
+  hits.sort((x, y) => x[0] - y[0]);
+  dl.innerHTML = hits.slice(0, 60).map(([, m]) => `<option value="${esc(m.path)}">${esc(m.name)} · ${esc(m.shader || "")}</option>`).join("");
+}
+const matOf = v => MATS.find(m => m.path === v.trim());
+function matStatus() {
+  const a = matOf($("#matA").value), b = matOf($("#matB").value);
+  store.set("matcompare", {project: matProject(), a: $("#matA").value.trim(), b: $("#matB").value.trim()});
+  const busy = !!(job && job.status === "running");
+  $("#matRun").disabled = !(a && b) || busy;
+  $("#matRun").title = busy ? "Уже идёт запуск" : !(a && b) ? "Выберите оба материала из списка" : "";
+  return {a, b};
+}
+for (const [inp, dl] of [["#matA", "#dl-matA"], ["#matB", "#dl-matB"]]) {
+  const el = $(inp);
+  el.oninput = () => { suggest(el, $(dl)); matStatus(); };
+  el.ondragover = e => { e.preventDefault(); el.classList.add("drop"); };
+  el.ondragleave = () => el.classList.remove("drop");
+  el.ondrop = async e => {
+    e.preventDefault(); el.classList.remove("drop");
+    const f = e.dataTransfer.files[0];
+    const text = e.dataTransfer.getData("text/plain");
+    if (!f) { if (text) { el.value = text.replace(/\\/g, "/").replace(/^.*?(?=Assets\/)/, ""); el.oninput(); } return; }
+    if (!f.name.endsWith(".mat")) { matMsg(`${esc(f.name)}: это не материал (.mat).`); return; }
+    const r = await api("/api/material_match", {project: matProject(), name: f.name, text: await f.text()});
+    if (!r.paths || !r.paths.length) { matMsg(`Материал ${esc(f.name)} не найден в проекте ${esc(matProject())}.`); return; }
+    el.value = r.paths[0];
+    el.oninput();
+    if (r.paths.length > 1) matMsg(`В проекте несколько ${esc(f.name)}, выбран ${esc(r.paths[0])}. Другие — в списке поля.`);
+  };
+}
+$("#matProject").onchange = () => { $("#matA").value = ""; $("#matB").value = ""; loadMatList(); matStatus(); };
+$("#matSwap").onclick = () => { const a = $("#matA").value; $("#matA").value = $("#matB").value; $("#matB").value = a; matStatus(); };
+function matMsg(html) {
+  $("#cmpFrame").style.display = "none"; $("#cmpFrame").src = "about:blank"; $("#cmpFrame").dataset.q = "";
+  $("#cmpEmpty").style.display = "";
+  $("#cmpEmpty").innerHTML = `<div class="card" style="max-width:800px;margin:0 auto">${html}</div>`;
+}
+async function loadMatHist(select) {
+  const items = (await api("/api/matcompares")).items || [];
+  $("#matHist").innerHTML = (items.length ? "" : `<option value="">прошлых сравнений нет</option>`) + items.map(x =>
+    `<option value="${esc(x.url)}">${when(x.computed_at)} · ${esc(x.a.material)} → ${esc(x.b.material)}</option>`).join("");
+  const want = select || store.get("matHist");
+  if (items.some(x => x.url === want)) $("#matHist").value = want;
+  if (matJobId && job && job.id === matJobId && job.status === "running") return matProgress();
+  showMat();
+}
+function showMat() {
+  const url = $("#matHist").value;
+  $("#cmpOpen").style.visibility = url ? "" : "hidden";
+  if (!url) {
+    matMsg(`<h2>Сравнение двух материалов</h2><div class="howto"><ol>
+      <li>Выберите проект и материалы A и B: начните вводить имя, путь или шейдер, или перетащите .mat из проводника в поле.</li>
+      <li>Нажмите «Сравнить». Unity (редактор проекта должен быть открыт) скомпилирует варианты шейдеров с keywords этих материалов, malioc их замерит.</li>
+      <li>Будет цена пикселя и вершины на каждом Mali, в том числе при разном числе итераций циклов света n = 0…8.</li></ol></div>`);
+    return;
+  }
+  store.set("matHist", url);
+  $("#cmpEmpty").style.display = "none";
+  $("#cmpFrame").style.display = "";
+  if ($("#cmpFrame").dataset.q !== url) { $("#cmpFrame").src = url; $("#cmpFrame").dataset.q = url; }
+  $("#cmpOpen").href = url;
+}
+$("#matHist").onchange = showMat;
+$("#matRun").onclick = async () => {
+  const {a, b} = matStatus();
+  if (!a || !b) return;
+  const r = await api("/api/run", {preset: "matcompare", values: {project: matProject(), a: a.path, b: b.path}});
+  if (r.error) { matMsg(`<div class="err">${esc(r.error)}</div>`); return; }
+  matJobId = r.id;
+  poll();
+  matProgress();
+};
+function matProgress() {
+  clearTimeout(matTimer);
+  if (cmpMode !== "materials") return;
+  const j = job && job.id === matJobId ? job : null;
+  if (!j || j.status === "running") {
+    const ph = j && flatPhases(j).find(x => x.status === "running");
+    const {pct: p} = j ? overall(j, j.now || Date.now() / 1000) : {pct: 0};
+    matMsg(`<h2>Сравниваю материалы <span class="spin"></span></h2>
+      <div class="now">${ph ? esc((PHASE_TEXT[ph.id] || [ph.id])[0]) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
+      <div class="bar"><i style="width:${p.toFixed(1)}%"></i></div><div class="small muted">Подробный ход и лог — во вкладке «Проверка кадра».</div>`);
+    matStatus();
+    matTimer = setTimeout(matProgress, 700);
+    return;
+  }
+  matJobId = null;
+  matStatus();
+  if (j.status === "ok") return loadMatHist(j.report);
+  const tail = (j.log || []).slice(-12).join("\n");
+  matMsg(`<h2 class="bad">Сравнение не получилось</h2>${j.hint ? `<div class="hint">${esc(j.hint.text || j.hint)}</div>` : ""}
+    <pre class="log">${esc(tail)}</pre><div class="small muted">Весь лог — во вкладке «Проверка кадра».</div>`);
+}
+
+function openCompare(a, b) {
+  document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x.dataset.tab === "compare"));
+  document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id === "tab-compare"));
+  store.set("tab", "compare");
+  cmpMode = "frames"; store.set("compareMode", "frames");
+  document.querySelectorAll("#cmpMode button").forEach(b => b.classList.toggle("on", b.dataset.m === "frames"));
+  $("#tab-compare").classList.remove("matmode");
+  loadCompare(a, b);
+}
+
+function openReport(x) {
+  curRep = x;
+  tab("reports");
+  $("#repList").style.display = "none";
+  $("#repView").style.display = "flex";
+  $("#repName").textContent = x.name;
+  $("#repFrame").src = x.report;
+  $("#repOpen").href = x.report;
+}
+$("#repBack").onclick = () => { $("#repView").style.display = "none"; $("#repList").style.display = ""; $("#repFrame").src = "about:blank"; loadReports(); };
+$("#repFolder").onclick = () => curRep && api("/api/reveal", curRep.path ? {path: curRep.path} : {name: curRep.name});
+$("#repRecalc").onclick = () => {
+  if (!curRep) return;
+  const s = OPT.snapshots.find(x => x.name === curRep.name) || {};
+  setRecalc({name: curRep.name, path: curRep.path || s.path, project: curRep.project || s.project});
+  tab("run");
+};
+
+/* ---------- site ---------- */
+$("#siteUpdate").onclick = () => {
+  if (!confirm("Заново замерить все функции на всех Mali и пересобрать таблицу?\n\nЭто долго (десятки минут) и нужно только после обновления malioc или добавления функций в bench/functions.py. Ход будет виден на вкладке «Проверка кадра»."))
+    return;
+  start("site", {});
+};
+
+/* ---------- start ---------- */
+(async () => {
+  SCHEMA = (await api("/api/schema")).commands;
+  OPT = await api("/api/options");
+  $("#dl-cores").innerHTML = OPT.cores.filter(c => !c.startsWith("preset:")).map(c => `<option value="${esc(c)}">`).join("");
+  projects(); loadSimple(); renderAdv(); checkEditor(); loadHistory(); poll(); loadEnv();
+  tab(store.get("tab") || "run");
+})();
+</script>
+</body>
+</html>
