@@ -13,8 +13,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
-from paretogpu import mali
-from paretogpu.profile.score import score
+from paretogpu.adapters import malioc as mali
+from paretogpu.core.pricing import score
 
 PIPES = ("fma", "cvt", "sfu", "ls", "v", "t", "arith")
 

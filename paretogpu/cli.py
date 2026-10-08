@@ -21,31 +21,21 @@
 """
 import argparse
 import os
-import re
 import sys
 
-from paretogpu import mali
 from paretogpu import progress
-from paretogpu.profile import cores as core_presets
-from paretogpu.profile import measure, report
-
-MAIN_CORE = "Mali-G78"  # decision D-17
-REAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus", "real")
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
+from paretogpu.adapters import malioc as mali
+from paretogpu.app import measure
+from paretogpu.model import cores as core_presets
+from paretogpu.model.cores import MAIN_CORE
+from paretogpu.store.workspace import OUT, REAL, frame_dir_name, time_id
 
 
 def parse_cores(args):
     try:
-        return core_presets.parse(args.core or args.cores)
+        return mali.parse_cores(args.core or args.cores)
     except (ValueError, mali.MaliocError) as e:
         sys.exit(str(e))
-
-
-def frame_dir_name(project, stamp, suffix=None):
-    """frame_<project>_<time>[_<suffix>]: the suffix keeps latin letters, digits, '-' and '_' only."""
-    name = f"frame_{os.path.basename(os.path.abspath(project))}_{stamp}"
-    suffix = re.sub(r"[^\w-]+", "_", (suffix or "").strip(), flags=re.ASCII).strip("_")
-    return f"{name}_{suffix}" if suffix else name
 
 
 def positive_int(v):
@@ -56,7 +46,7 @@ def positive_int(v):
 
 
 def make_report(folder, out, args):
-    rows, cores, _ = report.run(folder, out, args.fp16_threshold)
+    rows, cores, _ = measure.report(folder, out, args.fp16_threshold)
     out = out or folder
     for stage in ("fragment", "vertex"):
         top = [r for r in rows if r["stage"] == stage][:3]
@@ -105,11 +95,12 @@ def cmd_report(args):
 def cmd_frame(args):
     import time
     from collections import Counter
-    from paretogpu.frame import snapshot
+    from paretogpu.adapters.renderdoc import RenderDocError
+    from paretogpu.features import frame as snapshot
     out = args.out or os.path.join(OUT, frame_dir_name(args.project, time.strftime('%Y%m%d_%H%M%S'), args.suffix))
     try:
         meta, events = snapshot.run(args.project, out, args.timeout, args.max_events)
-    except (snapshot.SnapshotError, snapshot.rdoc.RenderDocError) as e:
+    except (snapshot.SnapshotError, RenderDocError) as e:
         sys.exit(f"snapshot failed: {e}")
     draws = [e for e in events if e["kind"] == "draw"]
     print(f"Unity {meta['unity']} ({meta['graphics_api']}, quality {meta['quality']}, "
@@ -141,12 +132,13 @@ def cmd_frame(args):
 def cmd_cost(args):
     import json
     import time
-    from paretogpu.frame import compare
-    from paretogpu.frame import cost as frame_cost
-    from paretogpu.frame import loops
-    from paretogpu.frame import report as frame_report
-    from paretogpu.frame import variants
-    from paretogpu.project import shaders
+    from paretogpu.adapters.unity.variants import VariantsError
+    from paretogpu.app import variants
+    from paretogpu.core import frame_cost
+    from paretogpu.core import materials as shaders
+    from paretogpu.store import cost_runs
+    from paretogpu.views import html as frame_report
+    from paretogpu.views import tables
     path = os.path.join(args.frame, "frame_events.json")
     if not os.path.exists(path):
         sys.exit(f"no frame_events.json in {args.frame}: run `frame` first")
@@ -176,9 +168,9 @@ def cmd_cost(args):
         state = variants.run(events + (shaders.pseudo_events(mat_keys) if mat_keys else []), project, root, cores,
                              platforms, args.jobs, compile_missing=not args.no_compile,
                              recompile=args.recompile, retry_failed=args.retry_failed)
-    except variants.VariantsError as e:
+    except VariantsError as e:
         sys.exit(f"variants failed: {e}")
-    state["loops"] = loops.for_frame(state, root, cores, args.jobs)
+    state["loops"] = variants.loops_of(state, root, cores, args.jobs)
     progress.phase("report")
     c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
                            loop_iters=args.loop_iters, loop_overrides=overrides)
@@ -192,9 +184,9 @@ def cmd_cost(args):
     c["computed_at"] = time.time()
     out = args.out or args.frame
     os.makedirs(out, exist_ok=True)
-    frame_cost.write(c, out)
-    run_id = compare.archive(c, out)  # every run is kept: a snapshot priced again is compared with its earlier runs
-    frame_report.write(c, os.path.join(out, "frame_report.html"),
+    tables.write_frame_cost(c, out)
+    run_id = cost_runs.archive(c, out)  # every run is kept: a snapshot priced again is compared with its earlier runs
+    frame_report.write_frame_report(c, os.path.join(out, "frame_report.html"),
                        f"Стоимость кадра {os.path.basename(os.path.abspath(args.frame))}")
 
     cov, t = c["coverage"], c["totals"].get(c["main_core"])
@@ -237,15 +229,17 @@ def cmd_cost(args):
             why[x["reason"].split(" (")[0]] = why.get(x["reason"].split(" (")[0], 0) + 1
         for r, n in sorted(why.items(), key=lambda kv: -kv[1]):
             print(f"  skipped {n}: {r}")
-    for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json", f"{compare.COSTS}/{run_id}.json"):
+    for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json", f"{cost_runs.COSTS}/{run_id}.json"):
         print(f"-> {os.path.abspath(os.path.join(out, name))}")
     return 0
 
 
 def cmd_compare(args):
-    from paretogpu.frame import compare
+    from paretogpu.core import compare
+    from paretogpu.store import cost_runs
+    from paretogpu.views import html
     try:
-        a, b = compare.load(args.a), compare.load(args.b)
+        a, b = cost_runs.load(args.a), cost_runs.load(args.b)
     except (OSError, ValueError) as e:
         sys.exit(f"cannot read a cost run: {e}")
     cmp = compare.compare(a, b)
@@ -263,13 +257,13 @@ def cmd_compare(args):
             print(f"  {s['delta'] / 1e6:+8.2f} M  {s['shader'][:50]:50s} price {s['price'] / 1e6:+.2f}, "
                   f"work {s['work'] / 1e6:+.2f}, mix {s['mix'] / 1e6:+.2f}" + (f"  [{s['status']}]" if s["status"] != "both" else ""))
     out = args.out or (args.b if os.path.isdir(args.b) else os.path.dirname(os.path.abspath(args.b)))
-    print(f"-> {os.path.abspath(compare.write(cmp, out))}")
+    print(f"-> {os.path.abspath(html.write_result(cmp, out, 'compare'))}")
     return 0
 
 
 def cmd_matcompare(args):
-    from paretogpu.frame import variants
-    from paretogpu.project import matcompare
+    from paretogpu.adapters.unity.variants import VariantsError
+    from paretogpu.features import matcompare
     cores = parse_cores(args)
     project = os.path.abspath(args.project)
     name = os.path.basename(project)
@@ -279,7 +273,7 @@ def cmd_matcompare(args):
         res = matcompare.run(project, args.a, args.b, root, cores,
                              ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"], args.api, args.jobs,
                              compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[OUT])
-    except (ValueError, variants.VariantsError) as e:
+    except (ValueError, VariantsError) as e:
         sys.exit(f"matcompare: {e}")
     for w in res["warnings"]:
         print(f"  ! {w}")
@@ -295,8 +289,8 @@ def cmd_matcompare(args):
 
 
 def cmd_matshader(args):
-    from paretogpu.frame import variants
-    from paretogpu.project import matshader
+    from paretogpu.adapters.unity.variants import VariantsError
+    from paretogpu.features import matshader
     cores = parse_cores(args)
     ablate = [c.strip() for c in args.ablate_cores.split(",")] if args.ablate_cores else [
         MAIN_CORE if MAIN_CORE in cores else cores[0]]
@@ -310,7 +304,7 @@ def cmd_matshader(args):
         res = matshader.run(project, args.material, root, cores, ["gles3", "vulkan"], args.api, args.jobs,
                             compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[OUT],
                             ablate_cores=ablate, n=args.n)
-    except (ValueError, variants.VariantsError) as e:
+    except (ValueError, VariantsError) as e:
         sys.exit(f"matshader: {e}")
     for w in res["warnings"]:
         print(f"  ! {w}")
@@ -336,7 +330,7 @@ def cmd_matshader(args):
 
 
 def cmd_hotspots(args):
-    from paretogpu.project import hotspots
+    from paretogpu.features import hotspots
     try:
         res = hotspots.run(args.frame, args.top, args.core, args.jobs)
     except ValueError as e:
@@ -363,28 +357,26 @@ def cmd_hotspots(args):
     return 0
 
 
-def time_id():
-    import time
-    return time.strftime("%Y%m%d_%H%M%S")
-
-
 def project_variants(project, events, args, root):
-    """Variants of the project's materials (project/shaders.py): passes and global keywords from every snapshot of
+    """Variants of the project's materials (core/materials.py): passes and global keywords from every snapshot of
     the project (this one, its sibling folders and paretogpu/out), the shaders' passes from the open editor."""
-    from paretogpu.frame import variants
-    from paretogpu.project import materials, shaders
+    from paretogpu.adapters.unity import assets as materials
+    from paretogpu.adapters.unity.variants import VariantsError
+    from paretogpu.app import variants
+    from paretogpu.core import materials as shaders
+    from paretogpu.store import workspace
     mats = materials.scan(project)
     folders = [os.path.dirname(os.path.abspath(args.frame)), OUT]
-    snaps = [events] + shaders.snapshots_of(project, folders)
+    snaps = [events] + workspace.snapshots_of(project, folders)
     info = shaders.snapshot_info(snaps)
     names = shaders.material_shaders(mats)
     editor = None
     if names and not args.no_compile:
-        from paretogpu.unity import export as unity
+        from paretogpu.adapters.unity import cli as unity
         if unity.editor_ready(project, allow_play=True):
             try:
                 editor = variants.shader_query(project, "Passes", names, root)
-            except variants.VariantsError as e:
+            except VariantsError as e:
                 print(f"passes of the materials' shaders: {e}")
     if editor is None:
         print("passes of the materials' shaders are taken from the snapshots only "
@@ -395,13 +387,14 @@ def project_variants(project, events, args, root):
 
 
 def cmd_export(args):
-    from paretogpu.unity import export
+    from paretogpu.adapters.unity import export
+    from paretogpu.adapters.unity.cli import UnityError
     cores = parse_cores(args) if args.measure else None
     out = args.out or os.path.join(REAL, os.path.basename(os.path.abspath(args.project)))
     try:
         progress.phase("unity_export")
         res = export.export(args.project, args.shaders, out, args.platforms.split(","), args.mode, args.timeout)
-    except export.ExportError as e:
+    except UnityError as e:
         sys.exit(f"export failed: {e}")
     print(f"Unity {res.get('unity')} ({res['mode']}, {res['seconds']} s)")
     bad = len(res.get("errors", []))
@@ -425,8 +418,8 @@ def cmd_export(args):
 
 
 def frame_cost_defaults():
-    from paretogpu.frame import cost as frame_cost
-    return frame_cost.LOOP_ITERS, frame_cost.LOOP_NS
+    from paretogpu.core import pricing
+    return pricing.LOOP_ITERS, pricing.LOOP_NS
 
 
 def add_report_args(p):

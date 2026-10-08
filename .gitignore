@@ -25,3 +25,5 @@ frame_cost.csv
 frame_report.html
 compare.html
 compare.json
+# page templates of the tool (named like the reports they render)
+!paretogpu/views/templates/*.html

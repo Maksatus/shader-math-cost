@@ -32,13 +32,16 @@ import webbrowser
 
 from paretogpu import cli
 from paretogpu import progress
-from paretogpu.frame import compare
+from paretogpu.core import compare
+from paretogpu.store import cost_runs as runs_store
+from paretogpu.store import workspace
+from paretogpu.views import html
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 DOCS = os.path.join(ROOT, "docs")
-OUT = cli.OUT
-REAL = cli.REAL
+OUT = workspace.OUT
+REAL = workspace.REAL
 STATE = os.path.join(OUT, "_ui")
 MATCMP = os.path.join(OUT, "_matcompare")  # results of `matcompare` started from the UI
 MATSH = os.path.join(OUT, "_matshader")  # results of `matshader` started from the UI
@@ -241,7 +244,7 @@ class Runner:
         if preset_id == "frame_cost":
             if not values.get("project"):
                 raise ValueError("укажите Unity-проект")
-            frame_dir = os.path.join(OUT, cli.frame_dir_name(values["project"], time.strftime('%Y%m%d_%H%M%S'),
+            frame_dir = os.path.join(OUT, workspace.frame_dir_name(values["project"], time.strftime('%Y%m%d_%H%M%S'),
                                                              values.get("suffix")))
         if preset_id == "matcompare":
             values["out"] = os.path.join(MATCMP, time.strftime("%Y%m%d_%H%M%S"))
@@ -472,11 +475,11 @@ def cost_summary(folder):
     missing = c.get("missing") or []
     failed = [m for m in missing if m.get("kind") == "draw"]
     prev = None
-    rs = compare.runs(folder)
+    rs = runs_store.runs(folder)
     if len(rs) >= 2:
         try:
-            cmp = compare.compare(compare.load(compare.run_path(folder, rs[-2]["id"])),
-                                  compare.load(compare.run_path(folder, rs[-1]["id"])))
+            cmp = compare.compare(runs_store.load(runs_store.run_path(folder, rs[-2]["id"])),
+                                  runs_store.load(runs_store.run_path(folder, rs[-1]["id"])))
             name = os.path.basename(folder.rstrip("\\/"))
             prev = {**(compare.brief(cmp) or {}), "run_a": f"{name}/{rs[-2]['id']}", "run_b": f"{name}/{rs[-1]['id']}",
                     "a_time": rs[-2].get("computed_at"), "warnings": cmp["warnings"]}
@@ -564,7 +567,7 @@ def snapshots():
                "unity": meta.get("unity"), "api": meta.get("graphics_api"), "play_mode": meta.get("play_mode"),
                "events": len(events), "draws": sum(1 for e in events if e.get("kind") == "draw"),
                "renderdoc": bool(meta.get("renderdoc")), "report": None, "cost_time": None}
-        rs = compare.runs(d)
+        rs = runs_store.runs(d)
         row["runs"] = [m["id"] for m in rs]
         rp = os.path.join(d, "frame_report.html")
         if os.path.exists(rp):
@@ -590,7 +593,7 @@ def cost_runs():
     """Every kept cost run of the snapshots in paretogpu/out, newest first: what the comparison picks from."""
     rows = []
     for snap in snapshots():
-        for m in compare.runs(snap["path"]):
+        for m in runs_store.runs(snap["path"]):
             rows.append({"id": f"{snap['name']}/{m['id']}", "snapshot": snap["name"], "project": snap["project"],
                          "snapshot_time": snap["time"], "computed_at": m.get("computed_at"), "api": m.get("api"),
                          "main_core": m.get("main_core"), "total": (m.get("totals") or {}).get(m.get("main_core")),
@@ -604,7 +607,7 @@ def run_file(rid):
     folder = snapshot_dir(name)
     if not folder or not RUN_ID.fullmatch(run):
         return None
-    path = compare.run_path(folder, run)
+    path = runs_store.run_path(folder, run)
     return path if os.path.isfile(path) else None
 
 
@@ -640,7 +643,7 @@ _materials = {}  # project -> (time, rows)
 
 def project_materials(project, fresh=False):
     """Materials of a Unity project for the pickers: path, name, shader (scanned once a minute at most, unless fresh)."""
-    from paretogpu.project import materials
+    from paretogpu.adapters.unity import assets as materials
     key = os.path.normcase(os.path.abspath(project))
     hit = _materials.get(key)
     if hit and not fresh and time.time() - hit[0] < 60:
@@ -677,7 +680,7 @@ def hub_projects():
 
 
 def options():
-    from paretogpu.unity import export
+    from paretogpu.adapters.unity import cli as export
     snaps = snapshots()
     settings = _load(os.path.join(STATE, "settings.json"), {})
     hub = {os.path.normcase(os.path.abspath(v["path"])): v for v in hub_projects()}
@@ -700,7 +703,7 @@ def options():
     variants = [os.path.join(OUT, n) for n in sorted(os.listdir(OUT))
                 if n.startswith("variants") and os.path.isdir(os.path.join(OUT, n))] if os.path.isdir(OUT) else []
     folders = variants + ([os.path.join(REAL, n) for n in sorted(os.listdir(REAL))] if os.path.isdir(REAL) else [])
-    from paretogpu.profile import cores
+    from paretogpu.model import cores
     return {"projects": projects, "unity_projects": unity, "snapshots": [{"path": s["path"], "name": s["name"], "project": s["project"]}
                                                 for s in snaps],
             "variants": variants, "folders": folders, "measured": [f for f in folders
@@ -739,7 +742,7 @@ def site_info():
 
 
 def editor_status(project):
-    from paretogpu.unity import export
+    from paretogpu.adapters.unity import cli as export
     project = os.path.abspath(project)
     if not os.path.exists(os.path.join(project, "ProjectSettings", "ProjectVersion.txt")):
         return {"project": False}
@@ -901,8 +904,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 fa, fb = run_file(q.get("a")), run_file(q.get("b"))
                 if not fa or not fb:
                     return self.send_error(404, "no such cost run")
-                cmp = compare.compare(compare.load(fa), compare.load(fb))
-                body = compare.render_html(cmp, f"Сравнение {q['a']} → {q['b']}").encode("utf-8")
+                cmp = compare.compare(runs_store.load(fa), runs_store.load(fb))
+                body = html.render_result(cmp, f"Сравнение {q['a']} → {q['b']}").encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))

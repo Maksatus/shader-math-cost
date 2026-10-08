@@ -1,0 +1,93 @@
+"""Frame snapshot (plan items K1.1, K1.3): `python -m paretogpu frame`.
+
+The open editor's frame is captured with RenderDoc (adapters/renderdoc), its events are read with the Frame Debugger
+(adapters/unity/frame.py: <out>/frame.json) and turned into <out>/frame_events.json (core/events.py): one record per
+event with the shader variant, vertices, render target, frame stage and the pixels of its RenderDoc calls.
+
+The frame is whatever the Game view shows: its resolution and the current quality level.
+"""
+import json
+import os
+import shutil
+
+from paretogpu import progress as progress_ui
+from paretogpu.adapters import renderdoc as rdoc
+from paretogpu.adapters.unity import frame as unity_frame
+from paretogpu.adapters.unity.frame import SnapshotError
+from paretogpu.core.events import match, normalize, pixel_count
+
+
+RD_MIN_MATCHED = 0.5  # share of the draws and dispatches a RenderDoc capture must hold to be the game frame
+# A capture of the Game view that holds only the editor UI (the repaint did not render the cameras: see
+# ParetoGpuRenderDoc.cs, state 1) is a few MB, the game frame hundreds: a small one is taken again at once, a big
+# one is checked by matching its calls. Since the capture waits for renderViewCallNeededInOnGUI this is a safety net.
+RD_ATTEMPTS = 5
+RD_UI_ONLY_BYTES = 20e6
+
+
+def renderdoc_pixels(project, out, rd, events, progress=print):
+    """Counters of the RenderDoc capture -> ev["rd"] and the pixels of every event. A capture without the game
+    frame is taken again (Play Mode is still paused: the same frame); if none of RD_ATTEMPTS is the frame,
+    SnapshotError: the snapshot was asked to be exact and must not fall back to diff pixels silently."""
+    want = sum(1 for e in events if e["kind"] in ("draw", "compute"))
+    rdc = os.path.join(out, "frame.rdc")
+    for attempt in range(1, RD_ATTEMPTS + 1):
+        size = os.path.getsize(rd["capture"])
+        if size < RD_UI_ONLY_BYTES and want:
+            why = f"the RenderDoc capture is not the game frame ({size / 1e6:.1f} MB: only the editor UI)"
+        else:
+            progress_ui.phase("rd_counters")
+            progress("  renderdoc counters")
+            if os.path.exists(rdc):
+                os.remove(rdc)
+            try:
+                shutil.move(rd["capture"], rdc)  # keep the capture next to the snapshot (not in git)
+                path = rdc
+            except OSError:
+                path = rd["capture"]
+            acts = rdoc.counters(path, os.path.join(out, "rd_actions.json"))
+            matched, missing, mismatched = match(events, acts["actions"], acts.get("counters"))
+            if not want or matched >= RD_MIN_MATCHED * want:
+                break
+            calls = sum(1 for a in acts["actions"] if "draw" in a["kinds"] or "dispatch" in a["kinds"])
+            why = (f"the RenderDoc capture is not the game frame: {matched} of {want} events found in it "
+                   f"({calls} calls, mostly the editor UI)")
+        if os.path.exists(rd["capture"]) and os.path.abspath(rd["capture"]) != rdc:
+            os.remove(rd["capture"])
+        if attempt == RD_ATTEMPTS:
+            raise SnapshotError(f"{why}, {RD_ATTEMPTS} attempts. Make the Game view visible (not hidden behind "
+                                "another tab or a minimized window) and take the snapshot again")
+        progress(f"  {why}: capturing again ({attempt + 1}/{RD_ATTEMPTS})")
+        progress_ui.phase("rd_capture")
+        rd = rdoc.capture(project, out)
+    for ev in events:
+        ev["pixel_count"], ev["pixel_method"] = pixel_count(ev)
+    return {"capture": path, "matched": matched, "missing": missing, "mismatched": mismatched,
+            "counters": acts["counters"], "attempts": attempt}
+
+
+def run(project, out, timeout=1800, max_events=0, progress=print, renderdoc=True):
+    """Snapshot the frame: capture it with RenderDoc, read its events with the Frame Debugger (Play Mode is paused
+    for both and set back after) and take the pixels of every event from its PSInvocations. renderdoc=False only
+    for tests: the events then have no pixels."""
+    out = os.path.abspath(out)
+    rd = None
+    if renderdoc:
+        progress_ui.phase("rd_capture")
+        progress("  renderdoc capture")
+        rd = rdoc.capture(project, out)
+    was_paused = (rd or {}).get("was_paused", False)
+    try:
+        progress_ui.phase("snapshot")
+        raw = unity_frame.capture(project, out, timeout, max_events, progress, progress_ui.step)
+        events = normalize(raw)
+        meta = {k: v for k, v in raw.items() if k != "events"}
+        if rd:
+            # Play Mode stays paused until the capture is checked: a capture again is of the same frame
+            meta["renderdoc"] = renderdoc_pixels(project, out, rd, events, progress)
+    finally:
+        if rd:
+            rdoc.resume(project, was_paused)
+    with open(os.path.join(out, "frame_events.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump({**meta, "events": events}, f, indent=1, ensure_ascii=False)
+    return meta, events

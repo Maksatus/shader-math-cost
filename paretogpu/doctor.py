@@ -38,7 +38,7 @@ def check_files():
 
 
 def check_malioc():
-    from paretogpu import mali
+    from paretogpu.adapters import malioc as mali
     try:
         ver = mali.version()
     except mali.MaliocError:
@@ -52,7 +52,7 @@ def check_malioc():
 
 
 def check_renderdoc():
-    from paretogpu.frame import renderdoc
+    from paretogpu.adapters import renderdoc
     try:
         report(OK, "RenderDoc", renderdoc.qrenderdoc())
     except renderdoc.RenderDocError:
@@ -61,7 +61,7 @@ def check_renderdoc():
 
 
 def check_unity():
-    from paretogpu.unity import export
+    from paretogpu.adapters.unity import cli as export
     cli = export.unity_cli()
     if cli:
         report(OK, "Unity CLI (unity)", cli)
