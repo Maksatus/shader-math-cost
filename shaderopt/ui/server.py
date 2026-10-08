@@ -17,6 +17,7 @@ import http.server
 import json
 import mimetypes
 import os
+import re
 import shutil
 import socket
 import statistics
@@ -31,6 +32,7 @@ import webbrowser
 
 from shaderopt import cli
 from shaderopt import progress
+from shaderopt.frame import compare
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -59,14 +61,11 @@ def phases_of(cmd, v):
     return []
 
 
-# a preset is what one button runs: its steps; `hide`: arguments the server fills in (the chain's own folders)
+# a preset is what one button runs: its steps; `hide`: arguments the server fills in (the chain's own folders).
+# export, measure and report stay in the console: the UI is for checking a frame without knowing the CLI
 PRESETS = [
     {"id": "frame_cost", "steps": [{"cmd": "frame", "hide": ["out"]}, {"cmd": "cost", "hide": ["frame", "out", "project"]}]},
-    {"id": "frame", "steps": [{"cmd": "frame"}]},
     {"id": "cost", "steps": [{"cmd": "cost"}]},
-    {"id": "export", "steps": [{"cmd": "export"}]},
-    {"id": "measure", "steps": [{"cmd": "measure"}]},
-    {"id": "report", "steps": [{"cmd": "report"}]},
     {"id": "site", "steps": [{"cmd": "bench_run"}, {"cmd": "bench_site"}]},
 ]
 BENCH = {  # bench scripts are not shaderopt commands: their arguments by hand
@@ -234,6 +233,12 @@ class Runner:
                 raise ValueError("укажите Unity-проект")
             name = os.path.basename(os.path.abspath(values["project"]))
             frame_dir = os.path.join(OUT, f"frame_{name}_{time.strftime('%Y%m%d_%H%M%S')}")
+        if preset_id in ("frame_cost", "cost") and not values.get("variants"):
+            # one variants folder per project: a variant is compiled once and priced in every frame of the project
+            project = values.get("project") or (_cached_json(os.path.join(values.get("frame") or "",
+                                                                          "frame_events.json")) or {}).get("project")
+            if project:
+                values["variants"] = os.path.join(OUT, f"variants_{os.path.basename(os.path.abspath(project))}")
         for st in preset["steps"]:
             cmd = st["cmd"]
             mine = {a["dest"] for a in sch[cmd]["args"]}
@@ -258,7 +263,8 @@ class Runner:
         now = time.time()
         job = {"id": time.strftime("%Y%m%d_%H%M%S", time.localtime(now)), "preset": preset_id, "title": preset_id,
                "status": "running", "started": now, "finished": None, "steps": steps, "log": [], "log_start": 0,
-               "report_path": report, "report": None, "error": None, "frame_dir": frame_dir}
+               "report_path": report, "report": None, "error": None, "frame_dir": frame_dir,
+               "summary": None, "hint": None}
         os.makedirs(JOBS, exist_ok=True)
         with self.lock:
             self.job = job
@@ -304,6 +310,9 @@ class Runner:
                 rp = job.get("report_path")
                 if rp and os.path.exists(rp) and job["status"] == "ok":
                     job["report"] = out_url(rp) or f"/jobreport/{job['id']}"  # --out outside shaderopt/out
+                    job["summary"] = cost_summary(os.path.dirname(rp))
+                if job["status"] == "failed":
+                    job["hint"] = hint_of(job)
                 self._log(job, f"--- {job['status']} за {fmt_time(job['finished'] - job['started'])}", f)
                 _save(os.path.join(STATE, "history.json"), self.history)
                 _save(os.path.join(JOBS, job["id"] + ".json"), job)
@@ -432,6 +441,59 @@ class Runner:
             return json.loads(json.dumps(v))
 
 
+def cost_summary(folder):
+    """What the run panel shows after a cost: the frame on the main core, the costliest shaders, what has no price."""
+    c = _load(os.path.join(folder, "frame_cost.json"), None)
+    if not c:
+        return None
+    mc = c.get("main_core")
+    t = (c.get("totals") or {}).get(mc) or {}
+    groups = (c.get("groups") or {}).get(mc) or {}
+    missing = c.get("missing") or []
+    failed = [m for m in missing if m.get("kind") == "draw"]
+    prev = None
+    rs = compare.runs(folder)
+    if len(rs) >= 2:
+        try:
+            cmp = compare.compare(compare.load(compare.run_path(folder, rs[-2]["id"])),
+                                  compare.load(compare.run_path(folder, rs[-1]["id"])))
+            name = os.path.basename(folder.rstrip("\\/"))
+            prev = {**(compare.brief(cmp) or {}), "run_a": f"{name}/{rs[-2]['id']}", "run_b": f"{name}/{rs[-1]['id']}",
+                    "a_time": rs[-2].get("computed_at"), "warnings": cmp["warnings"]}
+        except (OSError, ValueError):
+            prev = None
+    return {"prev": prev, "main_core": mc, "api": c.get("api"), "total": t.get("total"), "fragment": t.get("fragment"),
+            "vertex": t.get("vertex"), "compute": t.get("compute"), "coverage": c.get("coverage"),
+            "shaders": [{"key": g.get("key"), "share": g.get("share"), "total": g.get("total")}
+                        for g in (groups.get("shader") or [])[:5]],
+            "unpriced_draws": len(failed), "unpriced_compute": len(missing) - len(failed),
+            "failed_reasons": sorted({(m.get("reason") or "")[:200] for m in failed})[:5],
+            "checked": c.get("variants_checked")}
+
+
+# known failures -> what to do, in words for someone who has not seen the CLI; `action`: a button the panel offers
+HINTS = [
+    ("No Pipeline instance found", "Unity CLI в редакторе отключился. Включите его в Unity заново "
+     "(пакет com.unity.pipeline) и запустите ещё раз: ожидание не поможет.", None),
+    ("does not answer Unity CLI or is busy", "Unity не отвечает: откройте проект в Unity и дождитесь конца "
+     "компиляции и импорта (полоса прогресса внизу редактора), затем запустите ещё раз.", "no_compile"),
+    ("renderdoc", "Не получилось снять кадр через RenderDoc. В Unity на вкладке Game нажмите правой кнопкой "
+     "мыши → Load RenderDoc, либо выберите «Пиксели: быстро».", None),
+    ("malioc", "Не найден или упал malioc (Arm Performance Studio). Запустите start.bat: он покажет, чего не "
+     "хватает.", None),
+    ("no frame_events.json", "Снимок не найден или не дописан: снимите кадр заново.", None),
+]
+
+
+def hint_of(job):
+    text = ("\n".join(job["log"][-400:]) + "\n" + (job.get("error") or "")).lower()
+    for needle, hint, action in HINTS:
+        if needle.lower() in text:
+            return {"text": hint, "action": action if any(s["cmd"] == "cost" for s in job["steps"]) else None}
+    return {"text": "Что-то пошло не так, подробности в логе ниже. Если непонятно, пришлите лог тому, "
+                    "кто поддерживает shaderopt.", "action": None}
+
+
 def fmt_time(s):
     s = int(s)
     return f"{s // 60} мин {s % 60} с" if s >= 60 else f"{s} с"
@@ -479,6 +541,8 @@ def snapshots():
                "unity": meta.get("unity"), "api": meta.get("graphics_api"), "play_mode": meta.get("play_mode"),
                "events": len(events), "draws": sum(1 for e in events if e.get("kind") == "draw"),
                "renderdoc": bool(meta.get("renderdoc")), "report": None, "cost_time": None}
+        rs = compare.runs(d)
+        row["runs"] = [m["id"] for m in rs]
         rp = os.path.join(d, "frame_report.html")
         if os.path.exists(rp):
             row["report"] = out_url(rp)
@@ -494,15 +558,64 @@ def snapshots():
     return sorted(rows, key=lambda r: -r["time"])
 
 
+RUN_ID = re.compile(r"\d{8}_\d{6}b*")
+
+
+def cost_runs():
+    """Every kept cost run of the snapshots in shaderopt/out, newest first: what the comparison picks from."""
+    rows = []
+    for snap in snapshots():
+        for m in compare.runs(snap["path"]):
+            rows.append({"id": f"{snap['name']}/{m['id']}", "snapshot": snap["name"], "project": snap["project"],
+                         "snapshot_time": snap["time"], "computed_at": m.get("computed_at"), "api": m.get("api"),
+                         "main_core": m.get("main_core"), "total": (m.get("totals") or {}).get(m.get("main_core")),
+                         "cores": m.get("cores"), "malioc": m.get("malioc"), "checked": m.get("checked")})
+    return sorted(rows, key=lambda r: -(r["computed_at"] or 0))
+
+
+def run_file(rid):
+    """<snapshot>/<run> -> the run's file in shaderopt/out (nothing else is read by id)."""
+    name, _, run = (rid or "").partition("/")
+    folder = snapshot_dir(name)
+    if not folder or not RUN_ID.fullmatch(run):
+        return None
+    path = compare.run_path(folder, run)
+    return path if os.path.isfile(path) else None
+
+
+def hub_projects():
+    """Unity Hub's project list (path, title, version), most recently opened first."""
+    d = _load(os.path.join(os.environ.get("APPDATA", ""), "UnityHub", "projects-v1.json"), {})
+    rows = [v for v in (d.get("data") or {}).values() if isinstance(v, dict) and v.get("path")]
+    return sorted(rows, key=lambda v: -(v.get("lastModified") or 0))
+
+
 def options():
+    from shaderopt.unity import export
     snaps = snapshots()
     settings = _load(os.path.join(STATE, "settings.json"), {})
-    projects = list(dict.fromkeys(list(settings.get("projects", [])) + [s["project"] for s in snaps if s["project"]]))
+    hub = {os.path.normcase(os.path.abspath(v["path"])): v for v in hub_projects()}
+    paths = list(dict.fromkeys(list(settings.get("projects", [])) + [v["path"] for v in hub.values()]
+                               + [s["project"] for s in snaps if s["project"]]))
+    unity = []
+    for path in paths:
+        if not os.path.exists(os.path.join(path, "ProjectSettings", "ProjectVersion.txt")):
+            continue
+        h = hub.get(os.path.normcase(os.path.abspath(path))) or {}
+        try:
+            ver = h.get("version") or export.editor_version(path)
+        except Exception:
+            ver = None
+        unity.append({"path": path, "title": h.get("title") or os.path.basename(os.path.abspath(path)),
+                      "version": ver, "open": export.project_open(path),
+                      "snapshots": sum(1 for x in snaps if x["project"]
+                                       and os.path.normcase(x["project"]) == os.path.normcase(path))})
+    projects = [p["path"] for p in unity]
     variants = [os.path.join(OUT, n) for n in sorted(os.listdir(OUT))
                 if n.startswith("variants") and os.path.isdir(os.path.join(OUT, n))] if os.path.isdir(OUT) else []
     folders = variants + ([os.path.join(REAL, n) for n in sorted(os.listdir(REAL))] if os.path.isdir(REAL) else [])
     from shaderopt.profile import cores
-    return {"projects": projects, "snapshots": [{"path": s["path"], "name": s["name"], "project": s["project"]}
+    return {"projects": projects, "unity_projects": unity, "snapshots": [{"path": s["path"], "name": s["name"], "project": s["project"]}
                                                 for s in snaps],
             "variants": variants, "folders": folders, "measured": [f for f in folders
                                                                     if os.path.exists(os.path.join(f, "measurements.jsonl"))],
@@ -517,6 +630,26 @@ def remember_values(preset, values):
     if values.get("project"):
         s["projects"] = list(dict.fromkeys([values["project"]] + s.get("projects", [])))[:10]
     _save(path, s)
+
+
+def doctor_checks():
+    """shaderopt/doctor.py checks as [{status, what, detail}] for the status bar of the window."""
+    import contextlib
+    import io
+    from shaderopt import doctor
+    doctor.results.clear()
+    with contextlib.redirect_stdout(io.StringIO()):
+        for check in (doctor.check_malioc, doctor.check_renderdoc, doctor.check_unity):
+            try:
+                check()
+            except Exception as e:
+                doctor.report(doctor.WARN, check.__name__[len("check_"):], f"проверка упала: {e!r}")
+    return [{"status": st, "what": what, "detail": detail} for st, what, detail in doctor.results]
+
+
+def site_info():
+    path = os.path.join(DOCS, "mali_math_cost.csv")
+    return {"updated": os.path.getmtime(path) if os.path.exists(path) else None}
 
 
 def editor_status(project):
@@ -611,6 +744,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"jobs": past, "current": cur})
             if p == "/api/reports":
                 return self._json({"reports": snapshots()})
+            if p == "/api/costs":
+                return self._json({"runs": cost_runs()})
+            if p == "/compare":
+                fa, fb = run_file(q.get("a")), run_file(q.get("b"))
+                if not fa or not fb:
+                    return self.send_error(404, "no such cost run")
+                cmp = compare.compare(compare.load(fa), compare.load(fb))
+                body = compare.render_html(cmp, f"Сравнение {q['a']} → {q['b']}").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                if q.get("download"):
+                    fn = f"compare_{q['a'].replace('/', '_')}__{q['b'].replace('/', '_')}.html"
+                    self.send_header("Content-Disposition", f'attachment; filename="{fn}"')
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if p == "/api/doctor":
+                return self._json({"checks": doctor_checks(), "site": site_info()})
             if p == "/api/editor":
                 return self._json(editor_status(q.get("project", "")))
             return self.send_error(404)

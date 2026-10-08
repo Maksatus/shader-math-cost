@@ -23,3 +23,5 @@ unity_batch.log
 *.egg-info/
 frame_cost.csv
 frame_report.html
+compare.html
+compare.json

@@ -8,6 +8,8 @@
   python -m shaderopt cost <frame folder> [--project <Unity>] [--cores preset:mobile]
                            [--main-core Mali-G78] [--api vulkan|gles] [--variants DIR] [--no-compile]
                            [--recompile] [--retry-failed] [--loop-iters 2] [--loop-iters-shader NAME=N ...] [--materials]
+  python -m shaderopt compare <A> <B> [--out DIR]   A, B: snapshot folder (its latest cost), frame_cost.json or
+                                                   <snapshot>/costs/<time>.json -> compare.html, compare.json
   python -m shaderopt ui [--port 8765] [--no-window]   local web UI: the function cost site, runs with progress, reports
 """
 import argparse
@@ -124,6 +126,8 @@ def cmd_frame(args):
 
 def cmd_cost(args):
     import json
+    import time
+    from shaderopt.frame import compare
     from shaderopt.frame import cost as frame_cost
     from shaderopt.frame import loops
     from shaderopt.frame import report as frame_report
@@ -171,9 +175,11 @@ def cmd_cost(args):
     c["malioc"] = ", ".join(sorted({r["malioc"] for r in recs}))
     c["frame_dir"] = os.path.abspath(args.frame)
     c["variants_dir"] = os.path.abspath(root)
+    c["computed_at"] = time.time()
     out = args.out or args.frame
     os.makedirs(out, exist_ok=True)
     frame_cost.write(c, out)
+    run_id = compare.archive(c, out)  # every run is kept: a snapshot priced again is compared with its earlier runs
     frame_report.write(c, os.path.join(out, "frame_report.html"),
                        f"Стоимость кадра {os.path.basename(os.path.abspath(args.frame))}")
 
@@ -217,8 +223,33 @@ def cmd_cost(args):
             why[x["reason"].split(" (")[0]] = why.get(x["reason"].split(" (")[0], 0) + 1
         for r, n in sorted(why.items(), key=lambda kv: -kv[1]):
             print(f"  skipped {n}: {r}")
-    for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json"):
+    for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json", f"{compare.COSTS}/{run_id}.json"):
         print(f"-> {os.path.abspath(os.path.join(out, name))}")
+    return 0
+
+
+def cmd_compare(args):
+    from shaderopt.frame import compare
+    try:
+        a, b = compare.load(args.a), compare.load(args.b)
+    except (OSError, ValueError) as e:
+        sys.exit(f"cannot read a cost run: {e}")
+    cmp = compare.compare(a, b)
+    for w in cmp["warnings"]:
+        print(f"  ! {w}")
+    x = cmp["by_core"].get(cmp["main_core"])
+    if x:
+        pct = f" ({100 * x['delta'] / x['a']:+.1f}%)" if x["a"] else ""
+        print(f"{x['core']}: {x['a'] / 1e6:.1f} -> {x['b'] / 1e6:.1f} M cycles, {x['delta'] / 1e6:+.2f} M{pct}: "
+              f"price {x['price'] / 1e6:+.2f}, work {x['work'] / 1e6:+.2f}, mix {x['mix'] / 1e6:+.2f}"
+              + ("  (the same snapshot: only prices differ)" if cmp["same_frame"] else ""))
+        for s in x["shaders"][:10]:
+            if abs(s["delta"]) < 1:
+                break
+            print(f"  {s['delta'] / 1e6:+8.2f} M  {s['shader'][:50]:50s} price {s['price'] / 1e6:+.2f}, "
+                  f"work {s['work'] / 1e6:+.2f}, mix {s['mix'] / 1e6:+.2f}" + (f"  [{s['status']}]" if s["status"] != "both" else ""))
+    out = args.out or (args.b if os.path.isdir(args.b) else os.path.dirname(os.path.abspath(args.b)))
+    print(f"-> {os.path.abspath(compare.write(cmp, out))}")
     return 0
 
 
@@ -379,6 +410,13 @@ def build_parser():
     c.add_argument("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
     c.add_argument("--out", help="output folder (default: the snapshot folder)")
     c.set_defaults(func=cmd_cost)
+
+    k = sub.add_parser("compare", help="compare two cost runs: the frame, its stages and shaders, every change "
+                                       "split into price (the shaders), work (pixels, vertices) and mix (variants)")
+    k.add_argument("a", help="before: snapshot folder (its latest cost), frame_cost.json or <snapshot>/costs/<time>.json")
+    k.add_argument("b", help="after: the same kinds")
+    k.add_argument("--out", help="folder for compare.html and compare.json (default: B's folder)")
+    k.set_defaults(func=cmd_compare)
 
     u = sub.add_parser("ui", help="local web UI (127.0.0.1): the function cost site, the commands with their "
                                   "progress, the reports of the snapshots")
