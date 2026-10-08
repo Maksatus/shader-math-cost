@@ -22,6 +22,11 @@ body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
 header { padding: 20px 24px 6px; max-width: 1800px; margin: 0 auto; }
 h1 { font-size: 22px; margin: 0 0 4px; }
+.sitenav { display: flex; gap: 4px; margin-bottom: 12px; }
+.sitenav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px; padding: 6px 12px; border-radius: 8px; }
+.sitenav a:hover { background: var(--hover); color: var(--text); }
+.tip { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.sitenav a.on { background: var(--chip); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
 .sub { color: var(--muted); margin: 0; }
 main { max-width: 1800px; margin: 0 auto; padding: 0 24px 40px; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
@@ -124,6 +129,7 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
 </head>
 <body>
 <header>
+  <nav class="sitenav"><a href="index.html" class="on">Цена функций</a><a href="reference.html">Справочник</a></nav>
   <h1>Стоимость математических функций в шейдерах на Mali</h1>
   <p class="sub" id="sub">Mali Offline Compiler · фрагментный шейдер · OpenGL ES и Vulkan</p>
 </header>
@@ -139,34 +145,17 @@ pre.hlsl { background: var(--chip); border-radius: 8px; padding: 10px 12px; over
     </div>
   </div>
   <div class="legend">
-    <span>Числа — стоимость в <b>FMA</b> (одно умножение-сложение): «sin = 8» значит, что sin стоит как 8 обычных операций.</span>
-    <span><span class="tier cheap">дешёвая</span> ≤ 1.5</span>
-    <span><span class="tier medium">средняя</span> ≤ 10</span>
-    <span><span class="tier heavy">тяжёлая</span> &gt; 10</span>
-    <span><b>Клик по строке</b> — стоимость на каждом из GPU.</span>
-    <span><span class="apx" style="cursor:default">Аппроксимация ×N</span> — есть более дешёвая формула, N — во сколько раз быстрее (медиана по GPU).</span>
+    <span>Цена в <b class="tip" title="Стоимость в одной скалярной FMA (a*b+c) на том же GPU: «sin = 8» — sin стоит как 8 умножений-сложений">FMA</b></span>
+    <span><span class="tier cheap" title="до 1.5 FMA">дешёвая</span> ≤ 1.5</span>
+    <span><span class="tier medium" title="1.5–10 FMA">средняя</span> ≤ 10</span>
+    <span><span class="tier heavy" title="больше 10 FMA">тяжёлая</span> &gt; 10</span>
+    <span><span class="apx" style="cursor:help" title="Есть более дешёвая формула с близкой точностью; N — во сколько раз быстрее (медиана по GPU). Клик — сравнение">Аппроксимация ×N</span></span>
+    <span class="muted">клик по строке — цена на каждом GPU</span>
+    <span style="margin-left:auto"><a href="reference.html#functions">Как измерялось и как читать ↗</a></span>
   </div>
   <div class="wrap" id="wrap"><div class="empty">Загрузка данных…</div></div>
 
-  <details>
-    <summary>Как измерялось и как читать</summary>
-    <ul>
-      <li><b>Единица «FMA»</b> — стоимость одной скалярной highp FMA (<span class="code">a*b+c</span>) на том же GPU. У разных GPU такты в разном масштабе, а в FMA видно, сколько «обычных операций» стоит функция. Сырые такты есть в подробностях (клик по строке).</li>
-      <li><b>Почему на новых GPU функции «дорожают».</b> Они не стали медленнее: например, <span class="code">sqrt</span> на ядре G78 занимает 0.25 такта, на G715 — 0.125, на Mali G2 — 0.0625. Но в G715 и 5th Gen блоки FMA удвоили, а блок спецфункций (SFU) — нет, поэтому относительно обычной арифметики <span class="code">sqrt</span>, деление, <span class="code">sin</span>, <span class="code">exp</span> подорожали вдвое. На таких GPU выгоднее экономить именно на этих функциях. На старых Bifrost, наоборот, сама FMA медленная, поэтому спецфункции там выглядят дешёвыми.</li>
-      <li>Цифры относятся только к Mali (Android на MediaTek, старых Exynos, Kirin, Google Tensor G1–G4). У Adreno (Snapdragon), Apple GPU и Xclipse (Exynos 2022+) они другие.</li>
-      <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <span class="code">x = f(x, a) + w</span> во фрагментном шейдере (если не хватает регистров — 8 и 16 или 4 и 8). Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
-      <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому умножение в конце функции сливается со следующим сложением в FMA: <span class="code">pow(x, 2)</span> и <span class="code">radians</span> стоят ≈0, а <span class="code">log10</span> — как <span class="code">log2</span>. Исключение — строки <span class="code">add</span>, <span class="code">mul</span> и <span class="code">mad</span>: это сами базовые операции, они меряются цепочкой без <span class="code">+ w</span> (<span class="code">x = x * a</span>), поэтому <span class="code">mul</span> = 1. <span class="code">abs</span>, <span class="code">saturate</span> и <span class="code">f16tof32</span> часто бесплатны, потому что это модификаторы операндов.</li>
-      <li><b>Блок</b> (в подробностях) — где внутри GPU считается функция. На Valhall и 5th Gen их три, и работают они параллельно:
-        <b>FMA</b> — умножение и сложение (<span class="code">+ * mad lerp dot</span>), на G615/G715 и 5th Gen также округления и <span class="code">(int)x</span>;
-        <b>CVT</b> — сравнения и выбор (<span class="code">min max clamp step sign ?:</span>) и целочисленное сложение, на G57–G710 также округления и <span class="code">(int)x</span>, на G615/G715 и 5th Gen — сдвиги и побитовые операции;
-        <b>SFU</b> — специальные функции (<span class="code">rcp sqrt exp2 log2 sin cos</span>), деление и целочисленное умножение, на G57–G710 также сдвиги и побитовые операции.
-        Функция в CVT или SFU в шейдере, где в основном умножения и сложения, может оказаться частично бесплатной, а много SFU-функций подряд упрутся в SFU. У Bifrost блок один — «ALU». «—» — бесплатно.</li>
-      <li>Колонки <b>float/half</b>: векторные функции (dot, length, normalize…) меряются на float3, матрицы — на float3x3. <b>float4/half4</b> — на float4 и float4x4. Хелперы Unity — всегда на своём типе.</li>
-      <li><b>half</b> = <span class="code">mediump</span>. Целочисленные операции меряются только в 32 битах, mediump int (min16int) ведёт себя нестабильно.</li>
-      <li>Тест написан на GLSL. Unity (без <span class="code">#pragma use_dxc</span>) переводит HLSL через FXC и HLSLcc, и часть функций там разворачивается иначе: например, <span class="code">atan2</span>, <span class="code">asin</span> и <span class="code">acos</span> FXC раскладывает в полиномы сам, а <span class="code">sign</span> в HLSL возвращает int. Для таких функций цена в Unity может отличаться.</li>
-      <li>Это статическая оценка компилятора, а не замер на устройстве: она хороша для сравнения функций между собой.</li>
-    </ul>
-  </details>
+
 </main>
 
 <aside class="drawer" id="drawer"></aside>
@@ -246,10 +235,17 @@ function ingest(text) {
   buildControls(); render();
 }
 
+// tooltips of the switches (the reference has more)
+const SEG_TIPS = {
+  GLES: "Цены в OpenGL ES (GLSL)", Vulkan: "Цены в Vulkan (SPIR-V)",
+  float: "float (highp): векторы — float3, матрицы — float3x3", half: "half (mediump): векторы — half3, матрицы — half3x3",
+  float4: "float на 4 компонентах: float4 и float4x4", half4: "half на 4 компонентах: half4 и half4x4",
+};
 function seg(id, opts, key) {
   const el = document.getElementById(id); el.innerHTML = "";
   for (const [v, label] of opts) {
     const b = document.createElement("button"); b.textContent = label; b.className = S[key] === v ? "on" : "";
+    if (SEG_TIPS[v]) b.title = SEG_TIPS[v];
     b.onclick = () => { S[key] = v; save(); buildControls(); render(); };
     el.appendChild(b);
   }
@@ -340,13 +336,13 @@ function render() {
   const arrow = k => S.sort && S.sort.key === k ? (S.sort.dir > 0 ? " ▲" : " ▼") : "";
   const ncol = 7 + archs.length;
   let h = `<table class="main"><thead><tr class="n">` +
-    `<th class="l fn sortable" data-k="fn">Функция${arrow("fn")}</th><th class="l">Тип</th><th class="l">Уровень</th>` +
-    `<th class="sortable" data-k="med" title="Медиана по всем GPU">Медиана${arrow("med")}</th><th class="l">Разброс по GPU</th>`;
+    `<th class="l fn sortable" data-k="fn">Функция${arrow("fn")}</th><th class="l" title="float/half: векторы на float3, матрицы 3x3; float4/half4 — на 4. half = mediump">Тип</th><th class="l" title="дешёвая ≤ 1.5 FMA, средняя ≤ 10, тяжёлая > 10">Уровень</th>` +
+    `<th class="sortable" data-k="med" title="Медиана по всем GPU">Медиана${arrow("med")}</th><th class="l" title="От самого дешёвого до самого дорогого GPU">Разброс по GPU</th>`;
   archs.forEach((a, i) => {
     const G = GROUPS[a];
     h += `<th class="grpc sortable ${G.cls} ${i === 0 ? "gl" : ""}" data-k="${a}" title="Медиана по GPU группы: ${G.years}">${G.name}${arrow(a)}<small>${G.years}</small></th>`;
   });
-  h += `<th class="l gl">Аппроксимация</th><th class="l note">Заметка</th></tr></thead><tbody>`;
+  h += `<th class="l gl" title="Более дешёвая формула с близкой точностью: ×N — во сколько раз быстрее">Аппроксимация</th><th class="l note" title="Особенности замера этой функции">Заметка</th></tr></thead><tbody>`;
 
   let lastCat = null;
   for (const f of order) {
@@ -362,7 +358,7 @@ function render() {
     const axBest = ax.map(a => ({ a, k: apxSpeed(a).all || 0 })).sort((p, q) => q.k - p.k)[0];
     const axBtn = axBest ? `<button class="apx" data-apx="${f.id}" title="${ax.length} вар.: ${esc(ax.map(a => a.name).join(", "))}. Лучший — ${esc(axBest.a.name)}">Аппроксимация${axBest.k ? ` ×${fmt(axBest.k)}` : ""}</button>` : "";
     h += `<tr data-f="${f.id}"><td class="l fn">${esc(f.hlsl)}<div class="code">${esc(s.hexpr)}</div></td>` +
-      `<td class="l code">${esc(s.typ)}</td><td class="l">${t ? `<span class="tier ${t}">${TIER_RU[t]}</span>` : ""}</td>` +
+      `<td class="l code">${esc(s.typ)}</td><td class="l">${t ? `<span class="tier ${t}" title="${{cheap: "до 1.5 FMA", medium: "1.5–10 FMA", heavy: "больше 10 FMA"}[t] || ""}">${TIER_RU[t]}</span>` : ""}</td>` +
       `<td class="heat big" style="${heat(s.med)}">${fmt(s.med)}</td>` +
       `<td class="l"><span class="range"><i style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i></span> <span class="code">${fmt(s.min)}–${fmt(s.max)}</span></td>`;
     archs.forEach((a, i) => { const v = s.grp[a]; h += `<td class="heat ${i === 0 ? "gl" : ""}" style="${heat(v)}">${fmt(v)}</td>`; });
@@ -451,7 +447,7 @@ function openApprox(fid) {
       </div>`;
     for (const r of a.verified)
       h += `<div class="verify">✓ ${esc(r.device)} (${esc(r.gpu)}): ${r.calls} вызовов ${esc(f.hlsl)} на пиксель, ${esc(r.res)} — ${r.builtin_ms.toFixed(1)} → ${r.approx_ms.toFixed(1)} мс, <span class="win">×${(r.builtin_ms / r.approx_ms).toFixed(1)}</span></div>`;
-    h += `<div class="tscroll"><table><thead><tr><th class="l">Архитектура</th><th>${esc(f.hlsl)}</th><th>${esc(a.name)}</th><th>выигрыш</th></tr></thead><tbody>`;
+    h += `<div class="tscroll"><table><thead><tr><th class="l" title="Медиана по GPU одной архитектуры">Архитектура</th><th>${esc(f.hlsl)}</th><th>${esc(a.name)}</th><th title="Во сколько раз аппроксимация быстрее — для функции отдельно: если шейдер и так упирается в FMA, выигрыш меньше">выигрыш</th></tr></thead><tbody>`;
     for (const ar of ARCH_ORDER) {
       const d = sp.by[ar]; if (!d) continue;
       const k = median(d.k), G = GROUPS[ar], cls = k >= 1.15 ? "win" : k <= 0.87 ? "lose" : "tie";
@@ -459,12 +455,11 @@ function openApprox(fid) {
     }
     h += `</tbody></table></div>`;
     const c = valChart(a); charts.push([a, c]); h += c.html;
-    h += `<details><summary>По каждому GPU</summary><div class="tscroll"><table><thead><tr><th class="l">GPU</th><th>${esc(f.hlsl)}</th><th>${esc(a.name)}</th><th>выигрыш</th></tr></thead><tbody>` +
+    h += `<details><summary>По каждому GPU</summary><div class="tscroll"><table><thead><tr><th class="l">GPU</th><th>${esc(f.hlsl)}</th><th>${esc(a.name)}</th><th title="Во сколько раз аппроксимация быстрее на этом GPU">выигрыш</th></tr></thead><tbody>` +
       D.gpus.filter(g => a.cost[g.name]?.[v]).map(g => { const [b, x] = a.cost[g.name][v], k = b / x;
         return `<tr title="${esc(gpuTitle(g))}"><td class="l">${g.name}</td><td>${fmt(b)}</td><td>${fmt(x)}</td><td class="${k >= 1.15 ? "win" : k <= 0.87 ? "lose" : "tie"}">×${fmt(k)}</td></tr>`; }).join("") +
       `</tbody></table></div></details></div>`;
   }
-  h += `<p class="sub">Цифры — для функции отдельно. Если шейдер и так упирается в FMA, выигрыш меньше.</p>`;
   const dr = document.getElementById("drawer"); dr.innerHTML = h; dr.classList.add("open"); dr.scrollTop = 0;
   for (const [a, c] of charts) bindChart(dr.querySelector(`[data-apx-chart="${a.id}"]`), a, c);
   dr.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
@@ -491,9 +486,9 @@ function openDrawer(fid) {
     <p class="sub">${esc(f.category)}${f.note ? " · " + esc(f.note) : ""}</p>
     ${apxFor(fid).length ? `<p><button class="apx" onclick="openApprox('${fid}')">Аппроксимация</button></p>` : ""}
     <div class="kpis">${byVar.map(([v, m, t]) => `<div class="kpi" style="${heat(m)}"><div class="k">${v}${t && t !== v ? ` (${t})` : ""}</div><div class="v">${fmt(m)}</div><div class="k">медиана, FMA</div></div>`).join("")}</div>
-    <p class="sub">Блок, где считается функция: <b>${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b> — ${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}. Блоки FMA, CVT и SFU работают параллельно: если шейдер в основном умножает и складывает, функция в CVT/SFU частично «прячется» за ними.</p>
+    <p class="sub">Блок: <b class="tip" title="${esc(BOUND_HELP[s.med === 0 ? "—" : s.bound] || "")}">${esc(s.med === 0 ? "—" : (BOUND_RU[s.bound] || s.bound))}</b></p>
     <p class="sub">OpenGL ES и Vulkan: ${diff ? `отличаются в ${diff} из ${tot} случаев (колонка «Разница»)` : "одинаково на всех GPU"}.</p>
-    <table><thead><tr><th class="l">GPU</th><th class="l">Год</th><th class="l">Класс</th><th>FMA</th><th></th>${isTex(f) ? "<th>× tex2D</th><th>коорд., FMA</th>" : ""}${s.anyShort ? `<th>${isBranch(f) ? "ветка пропущена" : "короткий путь"}</th>` : ""}<th>такты</th><th>FMA-блок</th><th>CVT</th><th>SFU</th><th class="l">Блок</th><th>Рег.</th><th class="l">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
+    <table><thead><tr><th class="l">GPU</th><th class="l" title="Год выхода GPU">Год</th><th class="l" title="Класс устройств: флагман, средний, бюджетный">Класс</th><th title="Цена в FMA на этом GPU">FMA</th><th></th>${isTex(f) ? "<th title=\"Во сколько выборок tex2D обходится функция\">× tex2D</th><th title=\"Цена вычисления координат, FMA\">коорд., FMA</th>" : ""}${s.anyShort ? `<th title="Цена, если ветвление идёт дешёвой стороной">${isBranch(f) ? "ветка пропущена" : "короткий путь"}</th>` : ""}<th title="Сырые такты malioc на один вызов">такты</th><th title="Такты блока FMA (умножение и сложение) на вызов">FMA-блок</th><th title="Такты блока CVT (сравнения, выбор, типы) на вызов">CVT</th><th title="Такты блока SFU (спецфункции, деление) на вызов">SFU</th><th class="l" title="Самый загруженный блок: где считается функция">Блок</th><th title="Рабочие регистры шейдера с одним вызовом">Рег.</th><th class="l" title="Длины цепочек вызовов, между которыми снят замер; ⚠ — регистры вытесняются в память">Цепочка</th><th title="Насколько функция дороже (+) или дешевле (−) в другом API на этом GPU, в FMA">Разница с ${S.api === "GLES" ? "Vulkan" : "OpenGL ES"}</th></tr></thead><tbody>`;
   let prev = null;
   const vmax = Math.max(0, ...D.gpus.map(g => get(fid, g.name)?.rel_fma || 0));
   for (const g of D.gpus) {
@@ -508,7 +503,7 @@ function openDrawer(fid) {
       <td class="l code">${r.chain || "–"}${r.spill === "True" ? " ⚠" : ""}</td>
       <td class="code">${d == null ? "–" : Math.abs(d) < 1e-3 ? "так же" : (d > 0 ? "+" : "") + d.toFixed(2)}</td></tr>`;
   }
-  h += `</tbody></table><p class="sub">Тип ${S.variant}, ${S.api === "GLES" ? "OpenGL ES" : "Vulkan"}. «FMA» — стоимость в FMA; «такты», «FMA-блок», «CVT», «SFU» — сырые такты malioc на один вызов (у Bifrost один общий ALU). «Рег.» — регистры шейдера с одним вызовом. «Цепочка» — длины цепочек, между которыми снят замер (⚠ — регистры вытесняются в память).</p>`;
+  h += `</tbody></table><p class="sub">Тип ${S.variant}, ${S.api === "GLES" ? "OpenGL ES" : "Vulkan"} · <a href="reference.html#fn-columns">что значат колонки ↗</a></p>`;
   const dr = document.getElementById("drawer"); dr.innerHTML = h; dr.classList.add("open");
 }
 function closeDrawer() { document.getElementById("drawer").classList.remove("open"); }

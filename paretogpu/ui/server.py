@@ -234,8 +234,8 @@ class Runner:
         if preset_id == "frame_cost":
             if not values.get("project"):
                 raise ValueError("укажите Unity-проект")
-            name = os.path.basename(os.path.abspath(values["project"]))
-            frame_dir = os.path.join(OUT, f"frame_{name}_{time.strftime('%Y%m%d_%H%M%S')}")
+            frame_dir = os.path.join(OUT, cli.frame_dir_name(values["project"], time.strftime('%Y%m%d_%H%M%S'),
+                                                             values.get("suffix")))
         if preset_id == "matcompare":
             values["out"] = os.path.join(MATCMP, time.strftime("%Y%m%d_%H%M%S"))
         if preset_id in ("frame_cost", "cost", "matcompare") and not values.get("variants"):

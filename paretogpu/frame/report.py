@@ -26,6 +26,10 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 16px; margin: 22px 0 6px; }
 h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }
 .sub { color: var(--muted); margin: 0 0 4px; }
+.bnd { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 0 7px; border-radius: 999px; background: var(--chip, #232830); cursor: help; white-space: nowrap; }
+.bnd i { font-style: normal; font-weight: 400; color: var(--muted); }
+.costhelp { color: var(--accent, #34d399); font-size: 12px; text-decoration: none; }
+.costhelp:hover { text-decoration: underline; }
 details.help { color: var(--muted); font-size: 13px; margin: 6px 0; }
 details.help summary { cursor: pointer; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
@@ -148,15 +152,7 @@ td.bar { min-width: 120px; }
 <header>
   <h1 id="title"></h1>
   <p class="sub" id="meta"></p>
-  <details class="help"><summary>Как читать</summary>
-    <p><b>Итог</b> = пиксели × цена пикселя + вершины × цена вершины, млн циклов на выбранном ядре.
-    <b>Цена</b> — циклы шейдера на один пиксель или вершину по malioc.</p>
-    <p><b>Пиксели</b> и <b>вершины</b> — сколько раз реально выполнились пиксельный и вершинный шейдер (счётчики RenderDoc).</p>
-    <p><b>↻ цикл n</b> — у шейдера цикл неизвестной длины (свет, шаги луча); цена посчитана для n итераций,
-    таблица «Кадр при n итераций» показывает, как от n зависит итог.</p>
-    <p>Наведите на метку или число — появится подсказка. Это оценка malioc, а не замер на устройстве:
-    сравнивайте доли и порядок, а не циклы разных поколений GPU.</p>
-  </details>
+  <p class="sub"><a class="costhelp" id="costLink" target="_blank">Как читать отчёт — справочник ↗</a></p>
 </header>
 <main>
   <div class="tabs" id="tabs"></div>
@@ -221,6 +217,23 @@ function match(r) {
   if (!st.q) return true;
   return [r.object, r.shader, r.pass, (r.keywords || []).join(" "), r.rt, r.variant, r.path].join(" ").toLowerCase().includes(st.q);
 }
+// the pipes of a Mali shader core (malioc): the bound is the busiest one, its cycles are the price
+const PIPE = {
+  arith: ["A", "арифметика", "Арифметика: FMA, CVT и SFU вместе"],
+  fma: ["FMA", "умножение/сложение", "FMA — умножение и сложение (+ * mad lerp dot). Упор: меньше математики, half вместо float"],
+  cvt: ["CVT", "сравнения/типы", "CVT — сравнения, выбор и преобразования типов (min max clamp step ?:, half↔float). Упор: меньше сравнений и преобразований"],
+  sfu: ["SFU", "спецфункции", "SFU — спецфункции (rcp sqrt exp log sin cos) и деление. Упор: заменить их приближениями"],
+  ls: ["LS", "память", "LS — load/store: чтение буферов (свет Forward+, константы), спилл регистров, атомики. Упор: убрать спилл, меньше чтений буферов в циклах"],
+  v: ["V", "varyings", "V — интерполяция varyings из вершинного шейдера. Упор: меньше varyings, передавать в half"],
+  t: ["T", "текстуры", "T — выборки и фильтрация текстур. Упор: меньше выборок, ASTC, mip-map, проще фильтрация"],
+};
+const SITE_REF = location.protocol.startsWith("http") && /^(127\.0\.0\.1|localhost)$/.test(location.hostname)
+  ? "/site/reference.html" : "https://maksatus.github.io/shader-math-cost/reference.html";
+const SITE_COST = SITE_REF + "#cost";
+const boundTag = b => b && b.length ? b.map(x => { const p = PIPE[x] || [x, "", ""];
+  return `<span class="bnd" title="${esc(p[2] + " · клик — справочник")}" onclick="window.open(SITE_REF + '#fix', '_blank')">${esc(p[0])}${p[1] ? ` <i>${esc(p[1])}</i>` : ""}</span>`; }).join(" + ") : "—";
+const costHelp = `<a href="${SITE_COST}" target="_blank" class="costhelp">как считается цена — справочник ↗</a>`;
+document.getElementById("costLink").href = SITE_REF + "#report";
 const pathNote = p => p === "total" ? " · total" : String(p || "").startsWith("loop") ? " · цикл " + esc(p.slice(5)) : "";
 // a dynamic loop (lights per pixel, ray steps): its price at 0, 1, 2, 4, 8 repeats; the used one is in px_path "loop n=2"
 const loopN = c => (String(c.px_path || "").match(/n=(\d+)/) || [])[1];
@@ -281,9 +294,20 @@ function groupRows() {
   }
   return [...m.values()];
 }
+// tooltips of the column headers (the reference explains them in full)
+const HEAD_TIPS = {
+  share: "Доля в цене кадра на выбранном ядре", events: "Сколько событий (draw / dispatch) в группе",
+  pixels: "Сколько раз выполнился фрагментный шейдер (метка рядом — откуда число)",
+  price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
+  px_price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
+  total: "Пиксели × цена пикселя + вершины × цена вершины, млн циклов",
+  px: "Цена одного пикселя на основном ядре", vtx: "Цена одной вершины (Position + Varying)",
+  mats: "Сколько материалов проекта дают этот скомпилированный шейдер", regs: "Рабочие регистры: больше 32 — вдвое меньше потоков",
+  frame: "Доля кадра, которую дают события с тем же скомпилированным кодом",
+};
 function th(k, label, cls = "", small = "") {
   const [sk, sd] = st.sort;
-  return `<th class="${cls} ${sk === k ? "sorted" : ""}" data-k="${k}">${label}${sk === k ? (sd < 0 ? " ↓" : " ↑") : ""}${small ? `<small>${small}</small>` : ""}</th>`;
+  return `<th class="${cls} ${sk === k ? "sorted" : ""}" data-k="${k}"${HEAD_TIPS[k] ? ` title="${esc(HEAD_TIPS[k])}"` : ""}>${label}${sk === k ? (sd < 0 ? " ↓" : " ↑") : ""}${small ? `<small>${small}</small>` : ""}</th>`;
 }
 function sortRows(rows, get) {
   const [k, d] = st.sort;
@@ -315,11 +339,11 @@ function detailRow(r, c, cum) {
   const range = r.pixels_low != null || r.pixels_high != null ? ` (${int(r.pixels_low)} … ${int(r.pixels_high)})` : "";
   const items = r.kind === "compute"
     ? [item("Потоки", `${int(r.threads)} ${methodTag(r.thread_method)}`),
-       item("Цикл / поток", `${cyc(c.cs_price)} · ${esc(c.cs_bound.join("+"))}${pathNote(c.cs_path)}`)]
+       item("Цикл / поток", `${cyc(c.cs_price)} · ${boundTag(c.cs_bound)}${pathNote(c.cs_path)}`)]
     : [item("Пиксели", `${int(r.pixels)} ${methodTag(r.pixel_method)}${range}`),
-       item("Цикл / пиксель", `${cyc(c.px_price)} · ${esc(c.px_bound.join("+"))}${pathNote(c.px_path)}`),
+       item("Цикл / пиксель", `${cyc(c.px_price)} · ${boundTag(c.px_bound)}${pathNote(c.px_path)}`),
        item("Вершины", `${int(r.vertices)} ${methodTag(r.vertex_method)}`),
-       item("Цикл / вершина", `${cyc(c.vtx_price)} · ${esc(c.vtx_bound.join("+"))}`),
+       item("Цикл / вершина", `${cyc(c.vtx_price)} · ${boundTag(c.vtx_bound)}`),
        item("Итог: пиксели / вершины", `${mc(c.fragment)} / ${mc(c.vertex)} млн`)];
   items.push(item("Регистры", `${c.px_regs ?? "—"}${c.vtx_regs != null ? " / " + c.vtx_regs : ""}${c.px_fp16 != null ? ` · fp16 ${c.px_fp16}%` : ""}`));
   if (cum != null) items.push(item(`<span title="${CUM_HINT}">Накоплено</span>`, pc(cum)));
@@ -447,7 +471,7 @@ function projectTable() {
   rows.sort((a, b) => { const x = get(a, sk), y = get(b, sk); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
   const shown = st.all ? rows : rows.slice(0, TOP);
   const others = D.cores.filter(c => c.name !== main);
-  const pth = (k, label, cls = "") => `<th class="${cls} ${sk === k ? "sorted" : ""}" data-pk="${k}">${label}`
+  const pth = (k, label, cls = "") => `<th class="${cls} ${sk === k ? "sorted" : ""}" data-pk="${k}"${HEAD_TIPS[k] || k.startsWith("core:") ? ` title="${esc(HEAD_TIPS[k] || "Цена пикселя на " + k.slice(5))}"` : ""}>${label}`
     + `${sk === k ? (sd < 0 ? " ↓" : " ↑") : ""}</th>`;
   const fixed = 9 + 9 + 8 + 9;
   const coreW = others.length ? Math.min(7, 24 / others.length) : 0;
@@ -475,8 +499,8 @@ function projectTable() {
       const item = (label, value) => `<div><span>${label}</span>${value}</div>`;
       const kw = r.keyword_sets[0] || [];
       h += `<tr class="det"><td colspan="${6 + others.length}"><div class="dg num">`
-         + item("Цикл / пиксель", `${cyc(p.px_price)} · ${esc((p.px_bound || []).join("+"))}${pathNote(p.px_path)}`)
-         + item("Цикл / вершина", `${cyc(p.vtx_price)} · ${esc((p.vtx_bound || []).join("+"))}`)
+         + item("Цикл / пиксель", `${cyc(p.px_price)} · ${boundTag(p.px_bound)}${pathNote(p.px_path)}`)
+         + item("Цикл / вершина", `${cyc(p.vtx_price)} · ${boundTag(p.vtx_bound)}`)
          + item("Регистры", `${p.regs ?? "—"}${p.fp16 != null ? ` · fp16 ${p.fp16}%` : ""}`)
          + item("В кадре", r.frame_events ? `${pc(f || 0)} · ${plural(r.frame_events, "событие", "события", "событий")}` : "нет")
          + `</div>`
@@ -534,6 +558,74 @@ function render() {
         + `<td class="l fail">${esc(m.reason)}</td></tr>`).join("") + "</tbody></table></div>" : "";
 }
 render();
+// tooltips of the terms: put on headers, labels and badges that have no title of their own (the reference has more)
+const AUTO_TIPS = {
+  "цена": "Часть разницы от цены шейдера на пиксель / вершину: эффект правки шейдера",
+  "объём": "Часть разницы от числа пикселей / вершин: ракурс, сцена, LOD, перерисовка",
+  "состав": "Варианты, которые есть только в A или только в B: поменялись keywords, шейдер добавили или убрали",
+  "Разница": "B − A, млн циклов: минус и зелёный — стало дешевле",
+  "новый": "Шейдер есть только в B", "пропал": "Шейдер есть только в A",
+  "варианты поменялись": "Часть вариантов шейдера (keywords) есть только в A или только в B",
+  "только в A": "Вариант есть только в A", "только в B": "Вариант есть только в B",
+  "spilling": "Регистров не хватило, переменные выгружаются в память: нагрузка на LS, заметно дороже",
+  "регистров > 32": "Больше 32 рабочих регистров: ядро держит вдвое меньше потоков и хуже прячет задержки",
+  "мало fp16": "Меньше 25% вычислений в half: на Mali half вдвое дешевле float",
+  "динамический цикл": "Цикл неизвестной длины (свет на пиксель, шаги луча): цена посчитана при n итераций",
+  "упор в SFU": "Упирается в спецфункции (sin, exp, pow, rcp, sqrt, деление): заменить приближениями",
+  "Регистры": "Рабочие регистры на поток: больше 32 — вдвое меньше потоков на ядре",
+  "регистры пикселя": "Рабочие регистры фрагментного шейдера: больше 32 — вдвое меньше потоков",
+  "регистры вершины": "Рабочие регистры вершинного шейдера",
+  "fp16, %": "Доля вычислений в half: на Mali half вдвое дешевле float", "fp16 пикселя, %": "Доля вычислений в half: на Mali half вдвое дешевле float",
+  "Упор (самый загруженный блок)": "Блок ядра, который загружен сильнее всех: его циклы и есть цена",
+  "упор пикселя": "Блок ядра, который загружен сильнее всех: его циклы и есть цена",
+  "путь пикселя": "longest — самый длинный путь malioc; loop n=… — динамические циклы прогнаны n раз; total — длинный путь не посчитан",
+  "Динамические циклы": "Есть ли у шейдера циклы неизвестной длины: тогда цена зависит от n",
+  "Флаги": "Проблемы шейдера: spilling, много регистров, мало half, упор в SFU, динамический цикл",
+  "Keywords варианта": "Keywords материала + глобальные keywords пайплайна для прохода (свет, тени, туман, Forward+)",
+  "n циклов": "Сколько раз выполняются динамические циклы шейдера: источники света и пробы на пиксель, шаги луча",
+  "Кто дешевле": "На сколько дешевле — в % от цены более дорогого",
+  "Пиксель": "Цена фрагментного шейдера: циклы на один пиксель", "Вершина": "Цена вершинного шейдера: циклы на одну вершину (Position + Varying)",
+  "Vulkan": "Цены варианта, скомпилированного для Vulkan (SPIR-V)", "GLES": "Цены варианта, скомпилированного для OpenGL ES (GLSL)",
+  "Ядро": "Ядро Mali, на котором показаны цены; ★ — основное (G78, Galaxy S21)",
+  "Пиксели": "Сколько раз выполнился фрагментный шейдер", "Вершины": "Сколько раз выполнился вершинный шейдер",
+  "Потоки": "Сколько потоков compute-шейдера запущено",
+  "Цикл / пиксель": "Цена одного пикселя и упор (самый загруженный блок)", "Цикл / вершина": "Цена одной вершины (Position + Varying) и упор",
+  "Цикл / поток": "Цена одного потока compute-шейдера и упор",
+  "Цикл / пиксель, среднее": "Средняя цена пикселя по событиям группы", "Цикл / вершина, среднее": "Средняя цена вершины по событиям группы",
+  "Итог: пиксели / вершины": "Пиксели × цена пикселя и вершины × цена вершины, млн циклов",
+  "В кадре": "Доля кадра, которую дают события с тем же скомпилированным кодом",
+  "Группировать": "Как сложить события: по шейдеру, варианту (шейдер + проход + keywords), объекту или render target",
+  "вариант": "Шейдер + проход + keywords: то, что компилируется и замеряется", "RT": "Render target: куда рисует событие",
+  "Компиляция шейдеров в Unity": "Unity компилирует нужные варианты шейдеров для Android (Vulkan и GLES)",
+  "Замеры malioc": "Mali Offline Compiler считает цену каждого варианта на каждом ядре",
+  "Циклы в шейдерах (malioc)": "Шейдеры с динамическими циклами замеряются ещё раз с циклами, прогнанными 0, 1, 2 раза",
+  "Проверка изменений шейдеров": "Unity сверяет, не поменялись ли шейдеры со времени прошлой компиляции",
+  "B − A": "Разница B − A в циклах: минус и зелёный — B дешевле",
+  "Конвейер": "Блок ядра Mali: A — арифметика (FMA, CVT, SFU), LS — память, V — varyings, T — текстуры",
+  "Mali-G52": "Bifrost, 2018, бюджетный (Helio G85, Exynos 850): один блок арифметики, медленная FMA",
+  "Mali-G57": "Valhall, 2019, бюджетный / средний (Helio G99, Dimensity 700)",
+  "Mali-G78": "Valhall, 2020, флагман (Exynos 2100 — Galaxy S21, Tensor G1): основное ядро отчётов",
+  "Mali-G610": "Valhall, 2021, средний (Dimensity 8100)", "Mali-G710": "Valhall, 2021, флагман (Dimensity 9000, Tensor G2)",
+  "Mali-G615": "Valhall, 2022, средний (Dimensity 8300)",
+  "Mali-G715": "Valhall, 2022, флагман (Tensor G3, G4): FMA удвоена, SFU нет",
+  "Mali-G620": "5th Gen, 2023, средний", "Mali-G720": "5th Gen, 2023, верхний средний (Dimensity 8400)",
+  "G52": "Mali-G52: Bifrost, 2018, бюджетный", "G57": "Mali-G57: Valhall, 2019, бюджетный / средний",
+  "G78": "Mali-G78: Valhall, 2020, флагман (Galaxy S21) — основное ядро", "G715": "Mali-G715: Valhall, 2022, флагман",
+  "G720": "Mali-G720: 5th Gen, 2023, верхний средний",
+  "повторов цикла, n": "Сколько раз выполняются динамические циклы во всех шейдерах с ↻",
+  "Шейдер · пасс": "Шейдер и его проход (pass): у одного шейдера несколько проходов, у каждого своя цена",
+  "в кадре": "Шейдеры проекта, которые есть в этом кадре", "не в кадре": "Шейдеры материалов проекта, которых нет в этом кадре",
+  "события": "Каждое событие (draw / dispatch) отдельно",
+};
+function autoTips(root) {
+  for (const el of root.querySelectorAll("th, td:first-child, .badge, .k, label, .nm, .seg button, span, b, div > span:first-child")) {
+    if (el.title || el.children.length > 2) continue;
+    const t = el.textContent.trim().replace(/^[+−] /, "").replace(/:$/, "").replace(/ ★$/, "").replace(/[ ↑↓]+$/, "");
+    if (AUTO_TIPS[t]) { el.title = AUTO_TIPS[t]; el.style.cursor = "help"; }
+  }
+}
+new MutationObserver(() => autoTips(document.body)).observe(document.body, {childList: true, subtree: true});
+autoTips(document.body);
 </script>
 </body>
 </html>

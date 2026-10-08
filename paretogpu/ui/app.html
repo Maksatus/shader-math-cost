@@ -167,6 +167,7 @@ table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
     <button data-tab="reports">Отчёты</button>
     <button data-tab="compare">Сравнение</button>
     <button data-tab="site">Цена функций</button>
+    <button data-tab="ref">Справочник</button>
   </nav>
   <div class="env" id="env"></div>
 </div>
@@ -176,16 +177,16 @@ table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
     <div class="card" id="formCard">
       <div class="banner" id="recalcBanner" style="display:none"></div>
       <h2 id="formTitle">Новая проверка</h2>
-      <div class="howto" id="howto"><ol>
-        <li>Откройте проект в Unity, загрузите RenderDoc (вкладка Game → правой кнопкой → Load RenderDoc) и выставьте в окне Game нужный кадр в Play Mode.</li>
-        <li>Выберите проект ниже и нажмите «Проверить кадр».</li>
-        <li>Через несколько минут здесь появится цена кадра и самые дорогие шейдеры на Mali.</li>
-      </ol></div>
+      <p class="small muted" id="howto">Выставьте нужный кадр в окне Game Unity, выберите проект и нажмите «Проверить кадр». <a href="#" data-ref="usage" style="color:var(--accent)">Подробнее ↗</a></p>
       <div class="field" id="projField">
         <span class="lbl">Проект</span>
         <select id="project"></select>
         <input type="text" id="projectPath" placeholder="Папка Unity-проекта, например D:\client" style="display:none;margin-top:6px">
         <div class="status wait" id="edStatus"></div>
+      </div>
+      <div class="field" id="suffixField">
+        <span class="lbl">Суффикс снимка <span class="muted small">(необязательно)</span></span>
+        <input type="text" id="suffix" placeholder="например: city_night или after_fix">
       </div>
       <div class="field">
         <span class="lbl">Устройства</span>
@@ -259,6 +260,8 @@ table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
   <iframe id="siteFrame" title="Цена функций"></iframe>
 </section>
 
+<section id="tab-ref"><iframe id="refFrame" title="Справочник"></iframe></section>
+
 <datalist id="dl-cores"></datalist>
 <datalist id="dl-matA"></datalist>
 <datalist id="dl-matB"></datalist>
@@ -307,7 +310,7 @@ const PHASE_TEXT = {
 const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
   "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
 // settings of the simple form; the rest of the flags are in "Дополнительно"
-const SIMPLE = new Set(["project", "frame", "out", "renderdoc", "cores", "core", "materials"]);
+const SIMPLE = new Set(["project", "frame", "out", "renderdoc", "cores", "core", "materials", "suffix"]);
 const ADV_LABEL = {
   variants: "Папка скомпилированных вариантов", main_core: "Основное ядро", api: "API цен", vulkan_only: "Только Vulkan",
   no_compile: "Не компилировать", recompile: "Скомпилировать всё заново", retry_failed: "Повторить упавшие варианты",
@@ -322,11 +325,19 @@ function tab(name) {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === "tab-" + name));
   if (name === "site" && !$("#siteFrame").src) $("#siteFrame").src = "/site/index.html";
+  if (name === "ref" && !$("#refFrame").src) $("#refFrame").src = "/site/reference.html";
   if (name === "reports") loadReports();
   if (name === "compare") cmpMode === "materials" ? loadMaterials() : loadCompare();
   store.set("tab", name);
 }
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
+document.addEventListener("click", e => {
+  const a = e.target.closest("a[data-ref]");
+  if (!a) return;
+  e.preventDefault();
+  $("#refFrame").src = "/site/reference.html#" + a.dataset.ref;
+  tab("ref");
+});
 
 /* ---------- environment ---------- */
 async function loadEnv() {
@@ -419,6 +430,7 @@ function values() {
   const dev = radio("devices");
   v.cores = dev === "mobile" ? "preset:mobile" : dev === "g78" ? "Mali-G78" : $("#customCores").value.trim();
   if (radio("scope") === "materials") v.materials = true;
+  if (!recalc && $("#suffix").value.trim()) v.suffix = $("#suffix").value.trim();
   for (const a of advFields()) {
     const el = $("#a-" + a.dest);
     if (!el) continue;
@@ -460,7 +472,7 @@ function setRecalc(x) {
   if (x) $("#recalcBanner").innerHTML = `<div style="flex:1">Пересчёт снимка <b>${esc(x.name)}</b>${x.project ? ` (${esc(x.project)})` : ""}: кадр не снимается заново, только цена. Поправили шейдер — пересчитайте и сразу увидите разницу с прошлым расчётом.</div><button class="btn sm" id="recalcCancel">Отмена</button>`;
   if (x) $("#recalcCancel").onclick = () => setRecalc(null);
   $("#formTitle").textContent = x ? "Пересчёт снимка" : "Новая проверка";
-  for (const id of ["#howto", "#projField"]) $(id).style.display = x ? "none" : "";
+  for (const id of ["#howto", "#projField", "#suffixField"]) $(id).style.display = x ? "none" : "";
   renderAdv(); checkEditor(); updateRun();
 }
 
@@ -858,10 +870,8 @@ function showMat() {
   const url = $("#matHist").value;
   $("#cmpOpen").style.visibility = url ? "" : "hidden";
   if (!url) {
-    matMsg(`<h2>Сравнение двух материалов</h2><div class="howto"><ol>
-      <li>Выберите проект и материалы A и B: начните вводить имя, путь или шейдер, или перетащите .mat из проводника в поле.</li>
-      <li>Нажмите «Сравнить». Unity (редактор проекта должен быть открыт) скомпилирует варианты шейдеров с keywords этих материалов, malioc их замерит.</li>
-      <li>Будет цена пикселя и вершины на каждом Mali, в том числе при разном числе итераций циклов света n = 0…8.</li></ol></div>`);
+    matMsg(`<h2>Сравнение двух материалов</h2><p class="muted">Выберите проект и материалы A и B вверху (поиск по имени, пути, шейдеру или перетащите .mat) и нажмите «Сравнить». Нужен открытый редактор Unity.
+      <a href="#" data-ref="usage" style="color:var(--accent)">Подробнее ↗</a></p>`);
     return;
   }
   store.set("matHist", url);
@@ -945,6 +955,70 @@ $("#siteUpdate").onclick = () => {
   projects(); loadSimple(); renderAdv(); checkEditor(); loadHistory(); poll(); loadEnv();
   tab(store.get("tab") || "run");
 })();
+// tooltips of the terms: put on headers, labels and badges that have no title of their own (the reference has more)
+const AUTO_TIPS = {
+  "цена": "Часть разницы от цены шейдера на пиксель / вершину: эффект правки шейдера",
+  "объём": "Часть разницы от числа пикселей / вершин: ракурс, сцена, LOD, перерисовка",
+  "состав": "Варианты, которые есть только в A или только в B: поменялись keywords, шейдер добавили или убрали",
+  "Разница": "B − A, млн циклов: минус и зелёный — стало дешевле",
+  "новый": "Шейдер есть только в B", "пропал": "Шейдер есть только в A",
+  "варианты поменялись": "Часть вариантов шейдера (keywords) есть только в A или только в B",
+  "только в A": "Вариант есть только в A", "только в B": "Вариант есть только в B",
+  "spilling": "Регистров не хватило, переменные выгружаются в память: нагрузка на LS, заметно дороже",
+  "регистров > 32": "Больше 32 рабочих регистров: ядро держит вдвое меньше потоков и хуже прячет задержки",
+  "мало fp16": "Меньше 25% вычислений в half: на Mali half вдвое дешевле float",
+  "динамический цикл": "Цикл неизвестной длины (свет на пиксель, шаги луча): цена посчитана при n итераций",
+  "упор в SFU": "Упирается в спецфункции (sin, exp, pow, rcp, sqrt, деление): заменить приближениями",
+  "Регистры": "Рабочие регистры на поток: больше 32 — вдвое меньше потоков на ядре",
+  "регистры пикселя": "Рабочие регистры фрагментного шейдера: больше 32 — вдвое меньше потоков",
+  "регистры вершины": "Рабочие регистры вершинного шейдера",
+  "fp16, %": "Доля вычислений в half: на Mali half вдвое дешевле float", "fp16 пикселя, %": "Доля вычислений в half: на Mali half вдвое дешевле float",
+  "Упор (самый загруженный блок)": "Блок ядра, который загружен сильнее всех: его циклы и есть цена",
+  "упор пикселя": "Блок ядра, который загружен сильнее всех: его циклы и есть цена",
+  "путь пикселя": "longest — самый длинный путь malioc; loop n=… — динамические циклы прогнаны n раз; total — длинный путь не посчитан",
+  "Динамические циклы": "Есть ли у шейдера циклы неизвестной длины: тогда цена зависит от n",
+  "Флаги": "Проблемы шейдера: spilling, много регистров, мало half, упор в SFU, динамический цикл",
+  "Keywords варианта": "Keywords материала + глобальные keywords пайплайна для прохода (свет, тени, туман, Forward+)",
+  "n циклов": "Сколько раз выполняются динамические циклы шейдера: источники света и пробы на пиксель, шаги луча",
+  "Кто дешевле": "На сколько дешевле — в % от цены более дорогого",
+  "Пиксель": "Цена фрагментного шейдера: циклы на один пиксель", "Вершина": "Цена вершинного шейдера: циклы на одну вершину (Position + Varying)",
+  "Vulkan": "Цены варианта, скомпилированного для Vulkan (SPIR-V)", "GLES": "Цены варианта, скомпилированного для OpenGL ES (GLSL)",
+  "Ядро": "Ядро Mali, на котором показаны цены; ★ — основное (G78, Galaxy S21)",
+  "Пиксели": "Сколько раз выполнился фрагментный шейдер", "Вершины": "Сколько раз выполнился вершинный шейдер",
+  "Потоки": "Сколько потоков compute-шейдера запущено",
+  "Цикл / пиксель": "Цена одного пикселя и упор (самый загруженный блок)", "Цикл / вершина": "Цена одной вершины (Position + Varying) и упор",
+  "Цикл / поток": "Цена одного потока compute-шейдера и упор",
+  "Цикл / пиксель, среднее": "Средняя цена пикселя по событиям группы", "Цикл / вершина, среднее": "Средняя цена вершины по событиям группы",
+  "Итог: пиксели / вершины": "Пиксели × цена пикселя и вершины × цена вершины, млн циклов",
+  "В кадре": "Доля кадра, которую дают события с тем же скомпилированным кодом",
+  "Группировать": "Как сложить события: по шейдеру, варианту (шейдер + проход + keywords), объекту или render target",
+  "вариант": "Шейдер + проход + keywords: то, что компилируется и замеряется", "RT": "Render target: куда рисует событие",
+  "Компиляция шейдеров в Unity": "Unity компилирует нужные варианты шейдеров для Android (Vulkan и GLES)",
+  "Замеры malioc": "Mali Offline Compiler считает цену каждого варианта на каждом ядре",
+  "Циклы в шейдерах (malioc)": "Шейдеры с динамическими циклами замеряются ещё раз с циклами, прогнанными 0, 1, 2 раза",
+  "Проверка изменений шейдеров": "Unity сверяет, не поменялись ли шейдеры со времени прошлой компиляции",
+  "B − A": "Разница B − A в циклах: минус и зелёный — B дешевле",
+  "Конвейер": "Блок ядра Mali: A — арифметика (FMA, CVT, SFU), LS — память, V — varyings, T — текстуры",
+  "Mali-G52": "Bifrost, 2018, бюджетный (Helio G85, Exynos 850): один блок арифметики, медленная FMA",
+  "Mali-G57": "Valhall, 2019, бюджетный / средний (Helio G99, Dimensity 700)",
+  "Mali-G78": "Valhall, 2020, флагман (Exynos 2100 — Galaxy S21, Tensor G1): основное ядро отчётов",
+  "Mali-G610": "Valhall, 2021, средний (Dimensity 8100)", "Mali-G710": "Valhall, 2021, флагман (Dimensity 9000, Tensor G2)",
+  "Mali-G615": "Valhall, 2022, средний (Dimensity 8300)",
+  "Mali-G715": "Valhall, 2022, флагман (Tensor G3, G4): FMA удвоена, SFU нет",
+  "Mali-G620": "5th Gen, 2023, средний", "Mali-G720": "5th Gen, 2023, верхний средний (Dimensity 8400)",
+  "G52": "Mali-G52: Bifrost, 2018, бюджетный", "G57": "Mali-G57: Valhall, 2019, бюджетный / средний",
+  "G78": "Mali-G78: Valhall, 2020, флагман (Galaxy S21) — основное ядро", "G715": "Mali-G715: Valhall, 2022, флагман",
+  "G720": "Mali-G720: 5th Gen, 2023, верхний средний",
+};
+function autoTips(root) {
+  for (const el of root.querySelectorAll("th, td:first-child, .badge, .k, label, .nm, .seg button, span, b, div > span:first-child")) {
+    if (el.title || el.children.length > 2) continue;
+    const t = el.textContent.trim().replace(/^[+−] /, "").replace(/:$/, "").replace(/ ★$/, "").replace(/[ ↑↓]+$/, "");
+    if (AUTO_TIPS[t]) { el.title = AUTO_TIPS[t]; el.style.cursor = "help"; }
+  }
+}
+new MutationObserver(() => autoTips(document.body)).observe(document.body, {childList: true, subtree: true});
+autoTips(document.body);
 </script>
 </body>
 </html>

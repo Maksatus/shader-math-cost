@@ -17,6 +17,7 @@
 """
 import argparse
 import os
+import re
 import sys
 
 from paretogpu import mali
@@ -34,6 +35,13 @@ def parse_cores(args):
         return core_presets.parse(args.core or args.cores)
     except (ValueError, mali.MaliocError) as e:
         sys.exit(str(e))
+
+
+def frame_dir_name(project, stamp, suffix=None):
+    """frame_<project>_<time>[_<suffix>]: the suffix keeps latin letters, digits, '-' and '_' only."""
+    name = f"frame_{os.path.basename(os.path.abspath(project))}_{stamp}"
+    suffix = re.sub(r"[^\w-]+", "_", (suffix or "").strip(), flags=re.ASCII).strip("_")
+    return f"{name}_{suffix}" if suffix else name
 
 
 def positive_int(v):
@@ -94,8 +102,7 @@ def cmd_frame(args):
     import time
     from collections import Counter
     from paretogpu.frame import snapshot
-    name = os.path.basename(os.path.abspath(args.project))
-    out = args.out or os.path.join(OUT, f"frame_{name}_{time.strftime('%Y%m%d_%H%M%S')}")
+    out = args.out or os.path.join(OUT, frame_dir_name(args.project, time.strftime('%Y%m%d_%H%M%S'), args.suffix))
     try:
         meta, events = snapshot.run(args.project, out, args.timeout, args.max_events)
     except (snapshot.SnapshotError, snapshot.rdoc.RenderDocError) as e:
@@ -407,6 +414,7 @@ def build_parser():
                                      "the shader variant of every event")
     f.add_argument("--project", required=True, help="Unity project folder (its editor must be open)")
     f.add_argument("--out", help="output folder (default: paretogpu/out/frame_<project>_<time>, not in git)")
+    f.add_argument("--suffix", help="appended to the snapshot folder name: frame_<project>_<time>_<suffix>")
     f.add_argument("--timeout", type=int, default=1800, help="seconds")
     f.add_argument("--max-events", type=int, default=0, help="stop after N events (0 = all)")
     f.set_defaults(func=cmd_frame)

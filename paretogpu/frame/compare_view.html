@@ -92,6 +92,10 @@ table.cmp td.n { font-family: var(--mono); font-size: 12.5px; }
 table.cmp .gl { border-left: 1px solid var(--line); }
 table.chars { table-layout: fixed; }
 .hot { color: var(--medium); }
+.bnd { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 0 7px; border-radius: 999px; background: var(--chip, #232830); cursor: help; white-space: nowrap; }
+.bnd i { font-style: normal; font-weight: 400; color: var(--muted); }
+.costhelp { color: var(--accent, #34d399); font-size: 12px; text-decoration: none; }
+.costhelp:hover { text-decoration: underline; }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
 </style>
 </head>
@@ -114,6 +118,23 @@ const STAGE = {opaque: "непрозрачное", transparent: "прозрач�
 const PART = {fragment: "пиксели", vertex: "вершины", compute: "compute"};
 const UNIT = {fragment: "пикс.", vertex: "верш.", compute: "потоков"};
 const FLAG = {spilling: "spilling", regs_gt32: "регистров > 32", low_fp16: "мало fp16", dynamic_loop: "динамический цикл", sfu_bound: "упор в SFU"};
+// the pipes of a Mali shader core (malioc): the bound is the busiest one, its cycles are the price
+const PIPE = {
+  arith: ["A", "арифметика", "Арифметика: FMA, CVT и SFU вместе"],
+  fma: ["FMA", "умножение/сложение", "FMA — умножение и сложение (+ * mad lerp dot). Упор: меньше математики, half вместо float"],
+  cvt: ["CVT", "сравнения/типы", "CVT — сравнения, выбор и преобразования типов (min max clamp step ?:, half↔float). Упор: меньше сравнений и преобразований"],
+  sfu: ["SFU", "спецфункции", "SFU — спецфункции (rcp sqrt exp log sin cos) и деление. Упор: заменить их приближениями"],
+  ls: ["LS", "память", "LS — load/store: чтение буферов (свет Forward+, константы), спилл регистров, атомики. Упор: убрать спилл, меньше чтений буферов в циклах"],
+  v: ["V", "varyings", "V — интерполяция varyings из вершинного шейдера. Упор: меньше varyings, передавать в half"],
+  t: ["T", "текстуры", "T — выборки и фильтрация текстур. Упор: меньше выборок, ASTC, mip-map, проще фильтрация"],
+};
+const SITE_REF = location.protocol.startsWith("http") && /^(127\.0\.0\.1|localhost)$/.test(location.hostname)
+  ? "/site/reference.html" : "https://maksatus.github.io/shader-math-cost/reference.html";
+const SITE_COST = SITE_REF + "#cost";
+const boundTag = b => b && b.length ? b.map(x => { const p = PIPE[x] || [x, "", ""];
+  return `<span class="bnd" title="${esc(p[2] + " · клик — справочник")}" onclick="window.open(SITE_REF + '#fix', '_blank')">${esc(p[0])}${p[1] ? ` <i>${esc(p[1])}</i>` : ""}</span>`; }).join(" + ") : "—";
+const costHelp = `<a href="${SITE_COST}" target="_blank" class="costhelp">как считается цена — справочник ↗</a>`;
+const refLink = (id, text) => `<a href="${SITE_REF}#${id}" target="_blank" class="costhelp">${text} — справочник ↗</a>`;
 let core = D && D.main_core, hideSmall = true, query = "", open = new Set();
 
 function bar(d, max, w = 120) {
@@ -138,12 +159,7 @@ function render() {
       ? "<b>Тот же снимок, посчитанный дважды.</b> Пиксели и вершины одинаковые, поэтому вся разница — это цена шейдеров."
       : "<b>Два разных снимка.</b> Разница складывается из цены шейдеров и объёма работы: ракурс, сцена, LOD, анимации. Ниже они разделены."}</div>
     ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-    <details style="margin-top:10px"><summary>Как читать</summary>
-      <p>Всё в циклах GPU на кадр (млн) на выбранном ядре. Минус и зелёный — стало дешевле, плюс и красный — дороже.</p>
-      <ul><li><b>Цена</b> — шейдер стал дешевле или дороже на пиксель / вершину: эффект правки шейдера.</li>
-      <li><b>Объём</b> — шейдер рисует больше или меньше пикселей / вершин: ракурс, сцена, LOD, перерисовка.</li>
-      <li><b>Состав</b> — варианты, которые есть только в A или только в B: поменялись keywords, шейдер добавили или убрали.</li></ul>
-      <p>Цена + объём + состав = разница. События сопоставляются по варианту шейдера (шейдер, пасс, keywords), а не по номеру.</p></details></div>`;
+    <p class="small" style="margin:10px 0 0">${refLink("compare-frames", "Как читать сравнение")}</p></div>`;
   if (!x) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;
   const maxPart = Math.max(Math.abs(x.price), Math.abs(x.work), Math.abs(x.mix), 1);
@@ -212,7 +228,7 @@ function details(s) {
       <div class="kw">${esc(v.keywords.join(" ") || "без keywords")}</div>
       ${v.status === "both" ? `<div class="small" style="margin-top:4px">цена <b class="${cls(v.price)}">${sM(v.price)}</b> · объём <b class="${cls(v.work)}">${sM(v.work)}</b></div>` : ""}
       <div class="grid">${parts}${ch("px_regs", "регистры пикселя")}${ch("vtx_regs", "регистры вершины")}${ch("px_fp16", "fp16 пикселя, %")}
-        ${ch("px_bound", "упор пикселя", x => x ? x.join("+") : "—")}${ch("px_path", "путь пикселя")}</div>
+        ${ch("px_bound", "упор пикселя", boundTag)}${ch("px_path", "путь пикселя")}</div>
       ${flags ? `<div style="margin-top:6px">${flags}</div>` : ""}
       ${evs ? `<details style="margin-top:6px"><summary>События (${v.events_count}${v.events_count > v.events.length ? `, показаны ${v.events.length} с наибольшей разницей` : ""})</summary>
         <table style="margin-top:4px"><tr><th>Объект</th><th>Стадия</th><th class="n">Номер A / B</th><th class="n">Пиксели</th><th class="n">A</th><th class="n">B</th><th class="n">Разница</th></tr>${evs}</table></details>` : ""}</div>`;
@@ -251,23 +267,21 @@ function pipesTable(xa, xb, k, n) {
   const has = key => [la, lb, ga && ga.shortest, gb && gb.shortest, ga && ga.total, gb && gb.total].some(c => c && c[key] != null);
   const v = (c, key, t) => { const x = c && c[key]; if (x == null) return `<td class="n">—</td>`;
     const hot = t != null && Math.abs(x - t) < 1e-6 && ["arith", "ls", "v", "t"].includes(key);
-    return `<td class="n">${hot ? `<b class="hot" title="самый загруженный конвейер: цена">${c1(x)} ●</b>` : c1(x)}</td>`; };
+    return `<td class="n">${hot ? `<b class="hot" title="Самый загруженный блок: его циклы и есть цена (упор)">${c1(x)} ●</b>` : c1(x)}</td>`; };
   const d = (u, w) => u == null || w == null ? `<td class="n"></td>` : `<td class="n ${cls(w - u)}">${w === u ? "=" : (w > u ? "+" : "−") + c1(Math.abs(w - u))}</td>`;
   const dep = byNs(xa, k) || byNs(xb, k);
   const notes = [];
   if ((ga && ga.longest_na) || (gb && gb.longest_na)) notes.push(dep
     ? "У шейдера динамические циклы: malioc не считает самый длинный путь, он посчитан с циклами, прогнанными n раз."
     : "malioc не нашёл самый длинный путь: вместо него — «всего», поднятое до короткого пути там, где тот больше.");
-  const rows = PIPES.filter(([key]) => has(key)).map(([key, label, sub]) => `<tr${sub ? ` class="subp"` : ""}><td>${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
+  const rows = PIPES.filter(([key]) => has(key)).map(([key, label, sub]) => `<tr${sub ? ` class="subp"` : ""}><td title="${esc(PIPE[key][2])}" style="cursor:help">${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
     ${v(la, key, ta)}${v(lb, key, tb)}${d(la && la[key], lb && lb[key])}
     ${v(ga && ga.shortest, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.shortest, key)}${v(ga && ga.total, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.total, key)}</tr>`).join("");
   return `<h3>По конвейерам <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}, ${API_NAME[selApi] || esc(selApi)}</span></h3>
-    <table class="cmp">${cols(7)}<tr><th rowspan="2">Конвейер</th><th class="n grp" colspan="3">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
-      <th class="n grp gl" colspan="2">Короткий путь</th><th class="n grp gl" colspan="2">Всего (весь код)</th></tr>
+    <table class="cmp">${cols(7)}<tr><th rowspan="2">Конвейер</th><th class="n grp" colspan="3" title="Самый дорогой путь через шейдер: каждый if идёт по более дорогой ветке. По нему считается цена; ● — самый загруженный блок, его циклы и есть цена">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
+      <th class="n grp gl" colspan="2" title="Все if идут по дешёвой ветке">Короткий путь</th><th class="n grp gl" colspan="2" title="Каждая инструкция один раз: обе ветки if, тело цикла один раз. Объём кода, а не время">Всего (весь код)</th></tr>
       <tr><th class="n">A</th><th class="n">B</th><th class="n">B − A</th><th class="n gl">A</th><th class="n">B</th><th class="n gl">A</th><th class="n">B</th></tr>${rows}</table>
-    <div class="small muted" style="margin-top:6px">● — самый загруженный конвейер: его циклы и есть цена. FMA / CVT / SFU — части арифметики
-      (умножение-сложение; преобразования типов; sin, sqrt, деления). Короткий путь — все if идут дешёвой веткой;
-      «всего» — каждая инструкция один раз, обе ветки if и тело цикла один раз.${notes.length ? " " + notes.join(" ") : ""}</div>`;
+    <div class="small" style="margin-top:6px">${notes.length ? `<span class="muted">${notes.join(" ")}</span> ` : ""}${refLink("pipes", "блоки ядра и пути")}</div>`;
 }
 const PARTS = {px: ["Пиксель", "пиксель"], vtx: ["Вершина", "вершину"]};
 // how much cheaper the cheaper one is, of the dearer one's price
@@ -318,12 +332,7 @@ function renderMaterials() {
     <div class="ab">${matSide(D.a, "A")}<div class="arrow">→</div>${matSide(D.b, "B")}</div>
     <div class="mode small muted">Расчёт ${when(D.computed_at)} · ${esc(D.api)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
     ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-    <details style="margin-top:10px"><summary>Как читать</summary>
-      <p>Цена — циклы malioc на один пиксель / одну вершину на выбранном ядре (самый загруженный конвейер на самом длинном пути). Меньше — дешевле.</p>
-      <ul><li>Вариант шейдера = keywords материала + глобальные keywords пайплайна для этого прохода (свет, тени, туман), взятые из снимков кадра проекта.</li>
-      <li><b>n</b> — сколько раз выполняются динамические циклы шейдера (источники света и пробы на пиксель, шаги луча). От n цена пикселя растёт линейно; у шейдеров без таких циклов она одна. n = 2 — то же, что в отчёте кадра.</li>
-      <li>Обычно пиксели в кадре дороже вершин в разы, поэтому главное — цена пикселя.</li>
-      <li>Проходы A и B сопоставлены по имени, остальные по порядку.</li></ul></details></div>`;
+    <p class="small" style="margin:10px 0 0">${refLink("compare-materials", "Как читать сравнение")} · ${costHelp}</p></div>`;
   if (!D.cores.length) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;
   const parts = `<div class="seg" id="parts">${Object.entries(PARTS).map(([k, [t]]) => `<button data-k="${k}" class="${k === selPart ? "on" : ""}">${t}</button>`).join("")}</div>`;
@@ -350,12 +359,12 @@ function renderMaterials() {
       const [ca, cb] = low === undefined ? ["", ""] : better(a[key], b[key], low);
       return `<tr><td>${label}</td><td class="${ca}">${f(a[key])}</td><td class="${cb}">${f(b[key])}</td></tr>`;
     };
-    const bound = v => v && v.length ? v.join("+") : "—";
+    const bound = boundTag;
     const flags = fs => (fs || []).map(f => `<span class="badge flagbad">${esc(FLAG[f] || f)}</span>`).join(" ") || "—";
-    const pxRows = `${line("Регистры", "px_regs", undefined, true)}${line("fp16, %", "px_fp16", undefined, false)}${line("Упор в конвейер", "px_bound", bound)}
+    const pxRows = `${line("Регистры", "px_regs", undefined, true)}${line("fp16, %", "px_fp16", undefined, false)}${line("Упор (самый загруженный блок)", "px_bound", bound)}
       ${line("Динамические циклы", "looped", v => v == null ? "—" : v ? "есть: цена зависит от n" : "нет")}
       <tr><td>Флаги</td><td>${xa ? flags(a.flags) : "—"}</td><td>${xb ? flags(b.flags) : "—"}</td></tr>`;
-    const vtxRows = `${line("Регистры", "vtx_regs", undefined, true)}${line("Упор в конвейер", "vtx_bound", bound)}`;
+    const vtxRows = `${line("Регистры", "vtx_regs", undefined, true)}${line("Упор (самый загруженный блок)", "vtx_bound", bound)}`;
     const chars = `<h3>Характеристики шейдера ${k === "px" ? "пикселя" : "вершины"} <span class="muted small">зелёным — у кого лучше</span></h3>
       <table class="chars"><colgroup><col style="width:${LABEL_W}px"><col><col></colgroup><tr><th></th><th>A · ${A}</th><th>B · ${B}</th></tr>
       <tr><td>Keywords варианта</td><td>${pa ? kws(pa.keywords) : "—"}</td><td>${pb ? kws(pb.keywords) : "—"}</td></tr>
@@ -369,6 +378,70 @@ function renderMaterials() {
   document.querySelectorAll("#apis button").forEach(b => b.onclick = () => { selApi = b.dataset.a; render(); });
   document.querySelectorAll("#parts button").forEach(b => b.onclick = () => { selPart = b.dataset.k; render(); });
 }
+// tooltips of the terms: put on headers, labels and badges that have no title of their own (the reference has more)
+const AUTO_TIPS = {
+  "цена": "Часть разницы от цены шейдера на пиксель / вершину: эффект правки шейдера",
+  "объём": "Часть разницы от числа пикселей / вершин: ракурс, сцена, LOD, перерисовка",
+  "состав": "Варианты, которые есть только в A или только в B: поменялись keywords, шейдер добавили или убрали",
+  "Разница": "B − A, млн циклов: минус и зелёный — стало дешевле",
+  "новый": "Шейдер есть только в B", "пропал": "Шейдер есть только в A",
+  "варианты поменялись": "Часть вариантов шейдера (keywords) есть только в A или только в B",
+  "только в A": "Вариант есть только в A", "только в B": "Вариант есть только в B",
+  "spilling": "Регистров не хватило, переменные выгружаются в память: нагрузка на LS, заметно дороже",
+  "регистров > 32": "Больше 32 рабочих регистров: ядро держит вдвое меньше потоков и хуже прячет задержки",
+  "мало fp16": "Меньше 25% вычислений в half: на Mali half вдвое дешевле float",
+  "динамический цикл": "Цикл неизвестной длины (свет на пиксель, шаги луча): цена посчитана при n итераций",
+  "упор в SFU": "Упирается в спецфункции (sin, exp, pow, rcp, sqrt, деление): заменить приближениями",
+  "Регистры": "Рабочие регистры на поток: больше 32 — вдвое меньше потоков на ядре",
+  "регистры пикселя": "Рабочие регистры фрагментного шейдера: больше 32 — вдвое меньше потоков",
+  "регистры вершины": "Рабочие регистры вершинного шейдера",
+  "fp16, %": "Доля вычислений в half: на Mali half вдвое дешевле float", "fp16 пикселя, %": "Доля вычислений в half: на Mali half вдвое дешевле float",
+  "Упор (самый загруженный блок)": "Блок ядра, который загружен сильнее всех: его циклы и есть цена",
+  "упор пикселя": "Блок ядра, который загружен сильнее всех: его циклы и есть цена",
+  "путь пикселя": "longest — самый длинный путь malioc; loop n=… — динамические циклы прогнаны n раз; total — длинный путь не посчитан",
+  "Динамические циклы": "Есть ли у шейдера циклы неизвестной длины: тогда цена зависит от n",
+  "Флаги": "Проблемы шейдера: spilling, много регистров, мало half, упор в SFU, динамический цикл",
+  "Keywords варианта": "Keywords материала + глобальные keywords пайплайна для прохода (свет, тени, туман, Forward+)",
+  "n циклов": "Сколько раз выполняются динамические циклы шейдера: источники света и пробы на пиксель, шаги луча",
+  "Кто дешевле": "На сколько дешевле — в % от цены более дорогого",
+  "Пиксель": "Цена фрагментного шейдера: циклы на один пиксель", "Вершина": "Цена вершинного шейдера: циклы на одну вершину (Position + Varying)",
+  "Vulkan": "Цены варианта, скомпилированного для Vulkan (SPIR-V)", "GLES": "Цены варианта, скомпилированного для OpenGL ES (GLSL)",
+  "Ядро": "Ядро Mali, на котором показаны цены; ★ — основное (G78, Galaxy S21)",
+  "Пиксели": "Сколько раз выполнился фрагментный шейдер", "Вершины": "Сколько раз выполнился вершинный шейдер",
+  "Потоки": "Сколько потоков compute-шейдера запущено",
+  "Цикл / пиксель": "Цена одного пикселя и упор (самый загруженный блок)", "Цикл / вершина": "Цена одной вершины (Position + Varying) и упор",
+  "Цикл / поток": "Цена одного потока compute-шейдера и упор",
+  "Цикл / пиксель, среднее": "Средняя цена пикселя по событиям группы", "Цикл / вершина, среднее": "Средняя цена вершины по событиям группы",
+  "Итог: пиксели / вершины": "Пиксели × цена пикселя и вершины × цена вершины, млн циклов",
+  "В кадре": "Доля кадра, которую дают события с тем же скомпилированным кодом",
+  "Группировать": "Как сложить события: по шейдеру, варианту (шейдер + проход + keywords), объекту или render target",
+  "вариант": "Шейдер + проход + keywords: то, что компилируется и замеряется", "RT": "Render target: куда рисует событие",
+  "Компиляция шейдеров в Unity": "Unity компилирует нужные варианты шейдеров для Android (Vulkan и GLES)",
+  "Замеры malioc": "Mali Offline Compiler считает цену каждого варианта на каждом ядре",
+  "Циклы в шейдерах (malioc)": "Шейдеры с динамическими циклами замеряются ещё раз с циклами, прогнанными 0, 1, 2 раза",
+  "Проверка изменений шейдеров": "Unity сверяет, не поменялись ли шейдеры со времени прошлой компиляции",
+  "B − A": "Разница B − A в циклах: минус и зелёный — B дешевле",
+  "Конвейер": "Блок ядра Mali: A — арифметика (FMA, CVT, SFU), LS — память, V — varyings, T — текстуры",
+  "Mali-G52": "Bifrost, 2018, бюджетный (Helio G85, Exynos 850): один блок арифметики, медленная FMA",
+  "Mali-G57": "Valhall, 2019, бюджетный / средний (Helio G99, Dimensity 700)",
+  "Mali-G78": "Valhall, 2020, флагман (Exynos 2100 — Galaxy S21, Tensor G1): основное ядро отчётов",
+  "Mali-G610": "Valhall, 2021, средний (Dimensity 8100)", "Mali-G710": "Valhall, 2021, флагман (Dimensity 9000, Tensor G2)",
+  "Mali-G615": "Valhall, 2022, средний (Dimensity 8300)",
+  "Mali-G715": "Valhall, 2022, флагман (Tensor G3, G4): FMA удвоена, SFU нет",
+  "Mali-G620": "5th Gen, 2023, средний", "Mali-G720": "5th Gen, 2023, верхний средний (Dimensity 8400)",
+  "G52": "Mali-G52: Bifrost, 2018, бюджетный", "G57": "Mali-G57: Valhall, 2019, бюджетный / средний",
+  "G78": "Mali-G78: Valhall, 2020, флагман (Galaxy S21) — основное ядро", "G715": "Mali-G715: Valhall, 2022, флагман",
+  "G720": "Mali-G720: 5th Gen, 2023, верхний средний",
+};
+function autoTips(root) {
+  for (const el of root.querySelectorAll("th, td:first-child, .badge, .k, label, .nm, .seg button, span, b, div > span:first-child")) {
+    if (el.title || el.children.length > 2) continue;
+    const t = el.textContent.trim().replace(/^[+−] /, "").replace(/:$/, "").replace(/ ★$/, "").replace(/[ ↑↓]+$/, "");
+    if (AUTO_TIPS[t]) { el.title = AUTO_TIPS[t]; el.style.cursor = "help"; }
+  }
+}
+new MutationObserver(() => autoTips(document.body)).observe(document.body, {childList: true, subtree: true});
+autoTips(document.body);
 render();
 </script>
 </body>

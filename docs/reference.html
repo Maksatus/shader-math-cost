@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Справочник · Mali Shader Math Cost</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #121417; --panel: #1a1e23; --text: #eceef0; --muted: #8b939c; --line: #2a3038;
+  --accent: #34d399; --on-accent: #062a1d; --chip: #232830; --hover: #20252b;
+  --cheap: #8bd99b; --medium: #e8c27a; --heavy: #f2877b; --info: #7fb2e5;
+  --sans: Manrope, system-ui, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 16px; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); }
+header { padding: 20px 24px 6px; max-width: 1240px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0; }
+.sitenav { display: flex; gap: 4px; margin-bottom: 12px; }
+.sitenav a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px; padding: 6px 12px; border-radius: 8px; }
+.sitenav a:hover { background: var(--hover); color: var(--text); }
+.sitenav a.on { background: var(--chip); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 28px; max-width: 1240px; margin: 0 auto; padding: 10px 24px 60px; }
+@media (max-width: 860px) { .layout { grid-template-columns: 1fr; } nav.toc { position: static !important; } }
+nav.toc { position: sticky; top: 16px; align-self: start; font-size: 13.5px; }
+nav.toc a { display: block; color: var(--muted); text-decoration: none; padding: 3px 10px; border-left: 2px solid var(--line); }
+nav.toc a:hover { color: var(--text); border-left-color: var(--muted); }
+nav.toc a.on { color: var(--text); border-left-color: var(--accent); }
+nav.toc .grp { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 4px; }
+article { max-width: 900px; min-width: 0; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+section h2 { font-size: 18px; margin: 0 0 8px; }
+section h2 a.self { color: var(--muted); text-decoration: none; font-weight: 400; margin-left: 6px; opacity: 0; }
+section h2:hover a.self { opacity: 1; }
+section:target { border-color: var(--accent); }
+p, li { color: #c9ced3; }
+b, strong { color: var(--text); }
+ul { padding-left: 20px; }
+li { margin: 3px 0; }
+.code, code { font-family: var(--mono); font-size: 13px; background: var(--chip); border-radius: 5px; padding: 0 5px; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+th, td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+td.k { white-space: nowrap; font-weight: 700; }
+.note { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); padding: 8px 12px; border-radius: 6px; margin: 10px 0; }
+.formula { font-family: var(--mono); font-size: 13.5px; background: var(--chip); border-radius: 8px; padding: 8px 12px; margin: 8px 0; color: var(--text); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <nav class="sitenav"><a href="index.html">Цена функций</a><a href="reference.html" class="on">Справочник</a></nav>
+  <h1>Справочник</h1>
+  <p class="sub">Что значат числа и термины в отчётах кадра, сравнениях и таблице функций ParetoGPU</p>
+</header>
+<div class="layout">
+<nav class="toc" id="toc">
+  <div class="grp">Цена шейдера</div>
+  <a href="#cost">Циклы на пиксель</a>
+  <a href="#pipes">Блоки ядра Mali</a>
+  <a href="#bound">Упор</a>
+  <a href="#paths">Пути: длинный, короткий, всего</a>
+  <a href="#loops">Динамические циклы и n</a>
+  <a href="#vertex">Цена вершины</a>
+  <a href="#regs">Регистры, spilling, fp16</a>
+  <a href="#flags">Флаги</a>
+  <a href="#fix">Что делать при упоре</a>
+  <div class="grp">Кадр и сравнения</div>
+  <a href="#frame">Цена кадра</a>
+  <a href="#counts">Пиксели и вершины</a>
+  <a href="#report">Отчёт кадра</a>
+  <a href="#compare-frames">Сравнение кадров</a>
+  <a href="#compare-materials">Сравнение материалов</a>
+  <div class="grp">Таблица функций</div>
+  <a href="#functions">Как измерялись функции</a>
+  <a href="#fn-columns">Колонки и подробности</a>
+  <a href="#fma">Единица FMA</a>
+  <div class="grp">Общее</div>
+  <a href="#usage">Как пользоваться</a>
+  <a href="#cores">Ядра Mali</a>
+  <a href="#api">Vulkan и GLES</a>
+  <a href="#limits">Ограничения</a>
+</nav>
+<article>
+
+<section id="cost"><h2>Циклы на пиксель<a class="self" href="#cost">#</a></h2>
+  <p><b>Цена шейдера</b> — сколько тактов ядро Mali тратит на один его запуск: на один пиксель (фрагментный шейдер),
+  одну вершину (вершинный) или один поток (compute). Её считает Mali Offline Compiler (malioc) для каждого ядра,
+  без устройства.</p>
+  <div class="formula">цена = такты самого загруженного блока ядра на самом длинном пути через шейдер</div>
+  <p>Ниже — что это за <a href="#pipes">блоки</a>, почему берётся <a href="#bound">самый загруженный</a> и что такое
+  <a href="#paths">самый длинный путь</a>.</p>
+  <p>Это не миллисекунды. Цена показывает, сколько работы шейдер даёт ядру. Сравнивать её стоит между шейдерами на одном ядре.</p>
+</section>
+
+<section id="pipes"><h2>Блоки ядра Mali<a class="self" href="#pipes">#</a></h2>
+  <p>В шейдерном ядре Mali несколько блоков (конвейеров), и работают они <b>одновременно</b>.</p>
+  <table>
+    <tr><th>Блок</th><th>Что делает</th><th>Что туда попадает</th></tr>
+    <tr><td class="k">A</td><td>арифметика</td><td>Общая загрузка трёх частей ниже; как она из них складывается — под таблицей.</td></tr>
+    <tr><td class="k">&nbsp;&nbsp;FMA</td><td>умножение и сложение</td><td><code>+ * mad lerp dot</code>, матрицы; на G615/G715 и 5th Gen также округления и <code>(int)x</code></td></tr>
+    <tr><td class="k">&nbsp;&nbsp;CVT</td><td>сравнения, выбор, типы</td><td><code>min max clamp step sign ?:</code>, целочисленное сложение, переходы half↔float; на G57–G710 также округления</td></tr>
+    <tr><td class="k">&nbsp;&nbsp;SFU</td><td>спецфункции</td><td><code>rcp sqrt rsqrt exp2 log2 sin cos</code>, деление, целочисленное умножение</td></tr>
+    <tr><td class="k">LS</td><td>load/store — память</td><td>чтение и запись буферов (uniform и storage buffer, константы, не поместившиеся в регистры), image load/store, атомики и <a href="#regs">спилл регистров</a></td></tr>
+    <tr><td class="k">V</td><td>varyings</td><td>интерполяция данных, пришедших из вершинного шейдера во фрагментный: UV, нормали, цвета</td></tr>
+    <tr><td class="k">T</td><td>текстуры</td><td>выборки и фильтрация текстур</td></tr>
+  </table>
+  <p><b>Как A складывается из частей.</b> На G57–G78 A — самая загруженная из FMA, CVT и SFU (они работают параллельно).
+  На G610/G710 части делят выдачу команд, и A ≈ FMA + CVT + SFU/4. На G715/G720 — между этими крайностями.
+  У Bifrost (G52) блок арифметики один, частей malioc не показывает.</p>
+</section>
+
+<section id="bound"><h2>Упор (bound)<a class="self" href="#bound">#</a></h2>
+  <p>Раз блоки работают одновременно, шейдер не выполнится быстрее своего самого загруженного блока, а работа
+  остальных «прячется» за ним. Этот блок и называется <b>упором</b>. В отчётах он показан как
+  «<b>LS</b> память», «<b>SFU</b> спецфункции» и т.п.; его такты и есть цена.</p>
+  <div class="note">Главное правило: экономия в блоке, который не упор, цену почти не меняет. Если шейдер упирается в LS
+  (память), сокращение математики его не ускорит — пока арифметика не станет больше LS.</div>
+  <p>Пример: LS 36, арифметика 21, T 4.3 → цена 36, упор LS. Убрать половину математики: цена так и останется 36.</p>
+  <p>Если упоров два (например <code>FMA+CVT</code>), они загружены одинаково.</p>
+</section>
+
+<section id="paths"><h2>Пути: длинный, короткий, всего<a class="self" href="#paths">#</a></h2>
+  <ul>
+    <li><b>Самый длинный путь</b> — самый дорогой путь через шейдер: каждый <code>if</code> идёт по более дорогой ветке.
+    <b>Цена считается по нему</b>, то есть это оценка сверху для одного запуска.</li>
+    <li><b>Самый короткий путь</b> — все ветки идут по дешёвой стороне. Вместе с длинным даёт разброс.</li>
+    <li><b>Всего</b> — каждая инструкция посчитана один раз: обе ветки <code>if</code>, тело цикла один раз. Это объём
+    кода, а не время: может быть и больше, и меньше длинного пути.</li>
+  </ul>
+  <p>Если malioc не может посчитать длинный путь, а циклы не удалось прогнать (<a href="#loops">ниже</a>), в цене стоит
+  «всего», поднятое по каждому блоку до короткого пути, и путь помечен как <code>total</code>.</p>
+</section>
+
+<section id="loops"><h2>Динамические циклы и n<a class="self" href="#loops">#</a></h2>
+  <p>Цикл, число итераций которого известно только при выполнении: источники света Forward+ на пиксель, пробы, шаги луча.
+  malioc не знает, сколько будет итераций, и самый длинный путь для такого шейдера не считает (N/A).</p>
+  <p>ParetoGPU переписывает каждый такой цикл так, чтобы он выполнился ровно <b>n</b> раз, замеряет шейдер при n = 0, 1, 2
+  и продолжает линейно:</p>
+  <div class="formula">цена(n) = цена(1) + (n − 1) × (цена(2) − цена(1)),   цена(0) замеряется отдельно</div>
+  <ul>
+    <li>Внешние динамические циклы получают n итераций, вложенные в них — одну (например, одно слово маски кластера на источник).</li>
+    <li>В отчёте кадра по умолчанию n = 2, таблица «Кадр при n итераций» показывает n = 0, 1, 2, 4, 8. В сравнении
+    материалов n переключается.</li>
+    <li>Циклы с постоянной границей не трогаются: их malioc считает сам.</li>
+  </ul>
+</section>
+
+<section id="vertex"><h2>Цена вершины<a class="self" href="#vertex">#</a></h2>
+  <p>Mali (IDVS) делит вершинный шейдер на две части: <b>Position</b> (позиция, считается для всех вершин) и
+  <b>Varying</b> (остальные выходы, только для видимых треугольников). Цена вершины = Position + Varying, то есть
+  оценка сверху: часть вершин Varying не выполняет.</p>
+  <p>Выходы вершинного шейдера пишутся в память, поэтому у вершин частый упор — LS.</p>
+</section>
+
+<section id="regs"><h2>Регистры, spilling, fp16<a class="self" href="#regs">#</a></h2>
+  <ul>
+    <li><b>Рабочие регистры</b> — сколько регистров нужно одному потоку. До 32 — ядро держит максимум потоков.
+    <b>Больше 32</b> — вдвое меньше потоков одновременно (occupancy 50%), и ядро хуже прячет задержки памяти и текстур,
+    хотя в цене malioc этого не видно.</li>
+    <li><b>Spilling</b> — регистров не хватило даже так, и переменные выгружаются в память (стек) и читаются обратно.
+    Это нагрузка на LS и почти всегда заметное удорожание.</li>
+    <li><b>fp16</b> — доля вычислений в half (16 бит). На Mali half вдвое дешевле float в FMA и занимает вдвое меньше
+    регистров. В отчёте помечается, если её меньше 25%.</li>
+  </ul>
+</section>
+
+<section id="flags"><h2>Флаги<a class="self" href="#flags">#</a></h2>
+  <table>
+    <tr><th>Флаг</th><th>Значение</th></tr>
+    <tr><td class="k">spilling</td><td>регистры выгружаются в память — <a href="#regs">дорого</a></td></tr>
+    <tr><td class="k">регистров &gt; 32</td><td>вдвое меньше потоков на ядре</td></tr>
+    <tr><td class="k">мало fp16</td><td>half меньше 25% вычислений: кандидат на перевод в half</td></tr>
+    <tr><td class="k">упор в SFU</td><td>шейдер упирается в спецфункции: заменить их приближениями</td></tr>
+    <tr><td class="k">динамический цикл</td><td>у шейдера цикл неизвестной длины, цена считается <a href="#loops">при n итераций</a></td></tr>
+  </table>
+</section>
+
+<section id="fix"><h2>Что делать при упоре<a class="self" href="#fix">#</a></h2>
+  <table>
+    <tr><th>Упор</th><th>Что помогает</th></tr>
+    <tr><td class="k">FMA</td><td>меньше математики; half вместо float; вынести общее в вершинный шейдер, константы или текстуру-таблицу</td></tr>
+    <tr><td class="k">CVT</td><td>меньше сравнений, <code>clamp min max</code>, выбора; меньше переходов между half и float</td></tr>
+    <tr><td class="k">SFU</td><td>заменить <code>sin pow exp</code> и деления приближениями (столбец «Аппроксимация» в <a href="index.html">таблице функций</a>); делить через заранее посчитанный <code>rcp</code></td></tr>
+    <tr><td class="k">LS</td><td>убрать spilling (меньше одновременно живых переменных, half); меньше чтений буферов в циклах; меньше источников света на пиксель; упаковать данные плотнее</td></tr>
+    <tr><td class="k">V</td><td>меньше varyings, упаковать их в меньшее число векторов, передавать в half</td></tr>
+    <tr><td class="k">T</td><td>меньше выборок; сжатые форматы (ASTC); mip-map; без анизотропной и трилинейной фильтрации там, где их не видно</td></tr>
+  </table>
+</section>
+
+<section id="frame"><h2>Цена кадра<a class="self" href="#frame">#</a></h2>
+  <div class="formula">draw = пиксели × цена пикселя + вершины × цена вершины;   dispatch = потоки × цена потока</div>
+  <p>Цена кадра — сумма по всем событиям, в млн циклов на выбранном ядре. У каждого события своя доля кадра; события
+  группируются по стадии, шейдеру, варианту, объекту и render target.</p>
+  <p>Отсюда: шейдер на 10% дешевле экономит 10% только своей доли кадра. Дешёвый шейдер на весь экран может стоить
+  кадру больше дорогого на маленьком объекте.</p>
+  <p><b>Вариант шейдера</b> — шейдер + проход + keywords: именно он компилируется и замеряется. Один шейдер с разными
+  keywords — разные варианты с разной ценой.</p>
+</section>
+
+<section id="counts"><h2>Пиксели и вершины<a class="self" href="#counts">#</a></h2>
+  <table>
+    <tr><th>Метка</th><th>Откуда число</th></tr>
+    <tr><td class="k">renderdoc</td><td>точно: сколько раз реально выполнился шейдер (счётчики RenderDoc), с перерисовкой</td></tr>
+    <tr><td class="k">fullscreen</td><td>площадь экрана: полноэкранный проход посчитан без RenderDoc</td></tr>
+    <tr><td class="k">diff</td><td>оценка: сколько пикселей поменялось в Frame Debugger; обычно занижено (не видна перерисовка)</td></tr>
+    <tr><td class="k">mesh</td><td>число вершин меша из Frame Debugger</td></tr>
+  </table>
+</section>
+
+<section id="report"><h2>Отчёт кадра<a class="self" href="#report">#</a></h2>
+  <table>
+    <tr><th>Что</th><th>Значение</th></tr>
+    <tr><td class="k">% кадра</td><td>доля события (или группы) в цене кадра на выбранном ядре</td></tr>
+    <tr><td class="k">Пиксели</td><td>сколько раз выполнился фрагментный шейдер; метка рядом — <a href="#counts">откуда число</a></td></tr>
+    <tr><td class="k">Цикл / пикс</td><td><a href="#cost">цена</a> одного пикселя; рядом <a href="#bound">упор</a></td></tr>
+    <tr><td class="k">Итог, млн</td><td>пиксели × цена пикселя + вершины × цена вершины, млн циклов</td></tr>
+    <tr><td class="k">Накоплено</td><td>сумма «% кадра» этой строки и всех выше: «первые N строк — это X% кадра» (при сортировке по итогу)</td></tr>
+    <tr><td class="k">↻ цикл n</td><td>у шейдера <a href="#loops">динамический цикл</a>, цена посчитана при n итераций</td></tr>
+    <tr><td class="k">Кадр при n итераций</td><td>весь кадр, если в каждом шейдере с ↻ цикл повторится n раз; доля событий с циклами</td></tr>
+    <tr><td class="k">⚠ число</td><td>сколько у шейдера <a href="#flags">флагов</a>; ⚠ — есть spilling или регистров &gt; 32</td></tr>
+    <tr><td class="k">!</td><td>пиксели события не посчитаны или посчитаны с оговоркой</td></tr>
+    <tr><td class="k">Шейдеры проекта</td><td>варианты шейдеров всех материалов проекта, даже не попавших в кадр (запуск «Кадр и все материалы проекта»); материалы с одинаковым скомпилированным кодом — одна строка</td></tr>
+  </table>
+  <p>Наведите на метку, число или заголовок колонки — появится подсказка.</p>
+</section>
+
+<section id="compare-frames"><h2>Сравнение кадров<a class="self" href="#compare-frames">#</a></h2>
+  <p>События двух расчётов сопоставляются по варианту шейдера, а не по номеру. Разница B − A каждого варианта делится на три части:</p>
+  <ul>
+    <li><b>Цена</b> — шейдер стал дешевле или дороже на пиксель / вершину: эффект правки шейдера.</li>
+    <li><b>Объём</b> — шейдер рисует больше или меньше пикселей / вершин: ракурс, сцена, LOD, перерисовка.</li>
+    <li><b>Состав</b> — варианты, которые есть только в A или только в B: поменялись keywords, шейдер добавили или убрали.</li>
+  </ul>
+  <div class="formula">цена = (pB − pA) × (wA + wB) / 2;   объём = (wB − wA) × (pA + pB) / 2;   цена + объём = B − A</div>
+  <p>Тот же снимок, посчитанный дважды (пересчёт после правки), даёт только цену: пиксели и вершины одинаковые.</p>
+</section>
+
+<section id="compare-materials"><h2>Сравнение материалов<a class="self" href="#compare-materials">#</a></h2>
+  <ul>
+    <li>Вариант материала = его шейдер, цветные проходы, keywords материала и <b>глобальные keywords</b> пайплайна для
+    прохода (свет, тени, туман, Forward+), взятые из снимков кадра проекта.</li>
+    <li>Без снимков глобальные keywords не добавляются, а проходы берутся все, кроме служебных (тени, глубина, Meta).</li>
+    <li>Проходы A и B сопоставляются по имени, остальные по порядку.</li>
+    <li>Показывается цена пикселя и вершины без кадра: пиксели × цена считать не на чем. Чтобы узнать вклад в кадр,
+    сравните кадры до и после замены материала.</li>
+    <li>«Дешевле на X%» считается от цены более дорогого из двух.</li>
+  </ul>
+</section>
+
+<section id="functions"><h2>Как измерялись функции<a class="self" href="#functions">#</a></h2>
+  <ul>
+    <li><b>Единица «FMA»</b> — стоимость одной скалярной highp FMA (<code>a*b+c</code>) на том же GPU. У разных GPU такты в разном масштабе, а в FMA видно, сколько «обычных операций» стоит функция: «sin = 8» — sin стоит как 8 умножений-сложений. Сырые такты есть в подробностях (клик по строке).</li>
+    <li><b>Уровни:</b> дешёвая ≤ 1.5 FMA, средняя ≤ 10, тяжёлая &gt; 10.</li>
+    <li><b>Почему на новых GPU функции «дорожают».</b> Они не стали медленнее: например, <code>sqrt</code> на ядре G78 занимает 0.25 такта, на G715 — 0.125, на Mali G2 — 0.0625. Но в G715 и 5th Gen блоки FMA удвоили, а блок спецфункций (SFU) — нет, поэтому относительно обычной арифметики <code>sqrt</code>, деление, <code>sin</code>, <code>exp</code> подорожали вдвое. На таких GPU выгоднее экономить именно на этих функциях. На старых Bifrost, наоборот, сама FMA медленная, поэтому спецфункции там выглядят дешёвыми.</li>
+    <li>Цифры относятся только к Mali (Android на MediaTek, старых Exynos, Kirin, Google Tensor G1–G4). У Adreno (Snapdragon), Apple GPU и Xclipse (Exynos 2022+) они другие.</li>
+    <li>Каждая функция компилируется в цепочку из 8 и 24 зависимых вызовов <code>x = f(x, a) + w</code> во фрагментном шейдере (если не хватает регистров — 8 и 16 или 4 и 8). Стоимость — разница тактов на один вызов минус та же цепочка без функции. Операнды берутся из varying, чтобы компилятор не свернул вычисления.</li>
+    <li>Стоимость маргинальная, то есть сколько функция добавляет к реальному коду. Поэтому умножение в конце функции сливается со следующим сложением в FMA: <code>pow(x, 2)</code> и <code>radians</code> стоят ≈0, а <code>log10</code> — как <code>log2</code>. Исключение — строки <code>add</code>, <code>mul</code> и <code>mad</code>: это сами базовые операции, они меряются цепочкой без <code>+ w</code> (<code>x = x * a</code>), поэтому <code>mul</code> = 1. <code>abs</code>, <code>saturate</code> и <code>f16tof32</code> часто бесплатны, потому что это модификаторы операндов.</li>
+    <li><b>Блок</b> функции — где внутри GPU она считается: FMA, CVT или SFU (<a href="#pipes">что в каком</a>; на G615/G715 и 5th Gen сдвиги и побитовые операции в CVT, на G57–G710 — в SFU). Блоки работают параллельно: функция в CVT или SFU в шейдере, где в основном умножения и сложения, может оказаться частично бесплатной, а много SFU-функций подряд упрутся в SFU. У Bifrost блок один — «ALU». «—» — бесплатно: компилятор встраивает операцию в соседнюю инструкцию.</li>
+    <li><b>Аппроксимация ×N</b> — есть более дешёвая формула с близкой точностью, N — во сколько раз она быстрее (медиана по GPU). Выигрыш — для функции отдельно: если шейдер и так упирается в FMA, он меньше.</li>
+    <li>Тест написан на GLSL. Unity (без <code>#pragma use_dxc</code>) переводит HLSL через FXC и HLSLcc, и часть функций там разворачивается иначе: например, <code>atan2</code>, <code>asin</code> и <code>acos</code> FXC раскладывает в полиномы сам, а <code>sign</code> в HLSL возвращает int. Для таких функций цена в Unity может отличаться.</li>
+    <li>Это статическая оценка компилятора, а не замер на устройстве: она хороша для сравнения функций между собой.</li>
+  </ul>
+</section>
+
+<section id="fn-columns"><h2>Колонки и подробности<a class="self" href="#fn-columns">#</a></h2>
+  <table>
+    <tr><th>Колонка</th><th>Значение</th></tr>
+    <tr><td class="k">Тип</td><td><b>float/half</b>: векторные функции (dot, length, normalize…) меряются на float3, матрицы — на float3x3; <b>float4/half4</b> — на float4 и float4x4. Хелперы Unity — всегда на своём типе. <b>half</b> = <code>mediump</code>. Целочисленные операции — только в 32 битах: mediump int (min16int) ведёт себя нестабильно.</td></tr>
+    <tr><td class="k">Медиана</td><td>медиана цены по всем GPU, в FMA</td></tr>
+    <tr><td class="k">Разброс по GPU</td><td>от самого дешёвого до самого дорогого GPU</td></tr>
+    <tr><td class="k">Колонки поколений</td><td>медиана по GPU одного поколения (годы под названием)</td></tr>
+    <tr><td class="k">FMA</td><td>цена в FMA на этом GPU</td></tr>
+    <tr><td class="k">такты</td><td>сырые такты malioc на один вызов</td></tr>
+    <tr><td class="k">FMA-блок, CVT, SFU</td><td>такты каждого блока арифметики на один вызов; у Bifrost один общий ALU</td></tr>
+    <tr><td class="k">Блок</td><td>самый загруженный блок — где считается функция</td></tr>
+    <tr><td class="k">Рег.</td><td>рабочие регистры шейдера с одним вызовом</td></tr>
+    <tr><td class="k">Цепочка</td><td>длины цепочек, между которыми снят замер; ⚠ — регистры вытесняются в память (spilling)</td></tr>
+    <tr><td class="k">короткий путь / ветка пропущена</td><td>цена, если ветвление идёт дешёвой стороной</td></tr>
+    <tr><td class="k">× tex2D, коорд.</td><td>у текстурных функций: во сколько выборок обходится функция и цена вычисления координат</td></tr>
+    <tr><td class="k">Разница</td><td>отличаются ли цены OpenGL ES и Vulkan</td></tr>
+  </table>
+</section>
+
+<section id="fma"><h2>Единица FMA<a class="self" href="#fma">#</a></h2>
+  <p>В <a href="index.html">таблице функций</a> цена — не в тактах, а в <b>FMA</b>: во сколько раз функция дороже одной
+  скалярной highp FMA (<code>a*b+c</code>) на том же GPU. «sin = 8» — sin стоит как 8 умножений-сложений. Так функции
+  можно сравнивать между GPU с разной шириной блоков. В отчётах кадра и сравнениях цены — в тактах.</p>
+</section>
+
+<section id="usage"><h2>Как пользоваться<a class="self" href="#usage">#</a></h2>
+  <p><b>Проверка кадра</b></p>
+  <ol>
+    <li>Откройте проект в Unity и выставьте в окне Game нужный кадр (обычно в Play Mode).</li>
+    <li>Выберите проект во вкладке «Проверка кадра» и нажмите «Проверить кадр».</li>
+    <li>Через несколько минут там появится цена кадра и самые дорогие шейдеры на Mali, а полный отчёт — во вкладке «Отчёты».</li>
+  </ol>
+  <p><b>Пиксели:</b> «Быстро» — Frame Debugger, сколько пикселей поменял каждый draw (хватает для поиска дорогих шейдеров);
+  «Точно» — сколько раз реально выполнился пиксельный шейдер, с перерисовкой (нужен RenderDoc, загруженный в Unity: Game → Load RenderDoc).</p>
+  <p><b>Пересчёт.</b> Поправили шейдер — откройте «Отчёты» и нажмите «Пересчитать» у снимка: тот же кадр посчитается с новыми
+  ценами, и в «Сравнении» разница будет только от шейдеров.</p>
+  <p><b>Сравнение материалов.</b> Во вкладке «Сравнение» → «Материалы» выберите проект и материалы A и B: начните вводить
+  имя, путь или шейдер, или перетащите .mat из проводника в поле. «Сравнить» — Unity (редактор должен быть открыт)
+  скомпилирует варианты шейдеров с keywords материалов, malioc их замерит. Будет цена пикселя и вершины на каждом Mali,
+  в том числе при разном n. Прошлые сравнения — в списке справа.</p>
+</section>
+
+<section id="cores"><h2>Ядра Mali<a class="self" href="#cores">#</a></h2>
+  <table>
+    <tr><th>Ядро</th><th>Архитектура</th><th>Год, класс</th><th>Где встречается</th></tr>
+    <tr><td class="k">Mali-G52</td><td>Bifrost</td><td>2018, бюджетный</td><td>Helio G85, G88, Exynos 850; один блок арифметики, медленная FMA</td></tr>
+    <tr><td class="k">Mali-G57</td><td>Valhall</td><td>2019, бюджетный / средний</td><td>Helio G99, Dimensity 700, 810</td></tr>
+    <tr><td class="k">Mali-G78</td><td>Valhall</td><td>2020, флагман</td><td>Exynos 2100 (Galaxy S21), Kirin 9000, Tensor G1 — <b>основное ядро</b> отчётов</td></tr>
+    <tr><td class="k">Mali-G715</td><td>Valhall</td><td>2022, флагман</td><td>Tensor G3, G4 (Pixel 8, 9); FMA удвоена, SFU нет</td></tr>
+    <tr><td class="k">Mali-G720</td><td>5th Gen</td><td>2023, верхний средний</td><td>Dimensity 8400</td></tr>
+  </table>
+  <p>У поколений блоки разной ширины, поэтому такты разных поколений напрямую не сравниваются — сравнивайте доли и
+  порядок шейдеров. Ядра одного поколения сравнимы.</p>
+</section>
+
+<section id="api"><h2>Vulkan и GLES<a class="self" href="#api">#</a></h2>
+  <p>Unity компилирует шейдер для Vulkan (SPIR-V) и OpenGL ES (GLSL) разными путями, и драйвер Mali получает разный код.
+  Цены одного шейдера в двух API могут заметно отличаться, а иногда меняется и то, какой из двух шейдеров дешевле.
+  Смотрите тот API, на котором работает игра. По умолчанию — Vulkan.</p>
+</section>
+
+<section id="limits"><h2>Ограничения<a class="self" href="#limits">#</a></h2>
+  <ul>
+    <li>Это статическая оценка компилятора, а не замер на устройстве.</li>
+    <li>Не учитываются промахи кэша, пропускная способность памяти, задержки текстур, отброс пикселей по глубине (early-ZS),
+    тайловая память и пропускная способность шины.</li>
+    <li>Цена по самому длинному пути — оценка сверху для ветвистых шейдеров.</li>
+    <li>Хороша для сравнения шейдеров между собой на одном ядре и для поиска самых дорогих в кадре.</li>
+  </ul>
+</section>
+
+</article>
+</div>
+<script>
+// highlight the section being read in the table of contents
+const links = [...document.querySelectorAll("#toc a")];
+const obs = new IntersectionObserver(es => {
+  for (const e of es) if (e.isIntersecting) links.forEach(a => a.classList.toggle("on", a.getAttribute("href") === "#" + e.target.id));
+}, {rootMargin: "0px 0px -70% 0px"});
+document.querySelectorAll("article section").forEach(s => obs.observe(s));
+</script>
+</body>
+</html>
