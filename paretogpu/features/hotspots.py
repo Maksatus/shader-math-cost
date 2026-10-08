@@ -15,6 +15,8 @@ import time
 from paretogpu.app import ablation as ablation_run
 from paretogpu.core import ablation
 from paretogpu.core.pricing import LOOP_ITERS, loop_n
+from paretogpu.features.common import JOBS, fail, positive_int
+from paretogpu.features.spec import Arg, Command
 from paretogpu.views import html
 from paretogpu.views.reporter import CONSOLE
 
@@ -104,3 +106,42 @@ def render_html(res):
 
 def write(res, out_dir):
     return html.write_result(res, out_dir, "hotspots", f"Почему тяжёлые: {res['snapshot']}")
+
+
+def run_command(args):
+    try:
+        res = run(args.frame, args.top, args.core, args.jobs)
+    except ValueError as e:
+        fail(f"hotspots: {e}", e)
+    for it in res["shaders"]:
+        print(f"{100 * (it['share'] or 0):5.1f}%  {it['variant']}")
+        for stage, a in it["ablation"].items():
+            if "error" in a:
+                print(f"        {stage}: {a['error']}")
+                continue
+            x = a["by_core"][res["core"]]
+            if "error" in x["base"]:
+                print(f"        {stage}: {x['base']['error']}")
+                continue
+            roots = sorted((sid for sid, st in a["statements"].items() if st["parent"] is None
+                            and "error" not in x["stmts"].get(sid, {"error": 1})),
+                           key=lambda sid: (-x["stmts"][sid]["price"], -x["stmts"][sid]["incl"].get("arith", 0)))
+            print(f"        {stage} {x['base']['price']} cycles (GLES, n = {a['n']}): "
+                  + "; ".join(f"line {a['statements'][sid]['line'] + 1} -{x['stmts'][sid]['price']:.2f} "
+                              f"({a['statements'][sid]['explain']['text']})" for sid in roots[:3]))
+            if a.get("vertex_candidates"):
+                print(f"        to the vertex shader: {len(a['vertex_candidates'])} candidates")
+    print(f"-> {os.path.abspath(write(res, args.out or args.frame))}")
+    return 0
+
+
+HOTSPOTS = Command(
+    "hotspots", "why the heaviest shaders of a priced snapshot are heavy: every line of their GLES variant ablated "
+                "(plan A3.5), the costliest parts and what they do, the candidates for moving to the vertex shader "
+                "-> hotspots.html",
+    [Arg("frame", help="snapshot folder with frame_cost.json (after `cost`)"),
+     Arg("--top", type=positive_int, default=10, help="how many of the costliest variants (default %(default)s)"),
+     Arg("--core", help="core to ablate on (default: the snapshot's main core)"),
+     JOBS,
+     Arg("--out", help="output folder (default: the snapshot folder)")],
+    run_command, phases=lambda v: ["ablation", "report"])

@@ -10,8 +10,14 @@ Passes of A and B are paired by name, the rest in order (another shader may name
 
   run(project, a, b, root, cores, ...) -> JSON-able result; render_html() puts it into views/templates/result_view.html
 """
+import os
+
+from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import materials
-from paretogpu.core.materials import NS, pair_passes, apis_of, describe
+from paretogpu.core.materials import NS, apis_of, describe, pair_passes
+from paretogpu.features.common import JOBS, cores_args, fail, parse_cores
+from paretogpu.features.spec import Arg, Command
+from paretogpu.store import workspace
 from paretogpu.views import html
 from paretogpu.views.reporter import CONSOLE
 
@@ -33,3 +39,47 @@ def render_html(res):
 
 def write(res, out_dir):
     return html.write_result(res, out_dir, "matcompare", f"Материалы: {res['a']['material']} → {res['b']['material']}")
+
+
+def run_command(args):
+    cores = parse_cores(args)
+    project = os.path.abspath(args.project)
+    root = args.variants or workspace.variants_dir(project)
+    out = args.out or workspace.new_result_dir("matcompare")
+    try:
+        res = run(project, args.a, args.b, root, cores, ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"], args.api,
+                  args.jobs, compile_missing=not args.no_compile, recompile=args.recompile,
+                  snapshot_folders=[workspace.OUT])
+    except (ValueError, VariantsError) as e:
+        fail(f"matcompare: {e}", e)
+    for w in res["warnings"]:
+        print(f"  ! {w}")
+    mc = res["main_core"]
+    for ia, ib in res["pairs"]:
+        pa = res["a"]["passes"][ia] if ia is not None else None
+        pb = res["b"]["passes"][ib] if ib is not None else None
+        fmt = lambda p, k: "/".join(f"{p['prices'][mc][k][str(n)]:.1f}" for n in res["ns"]) \
+            if p and mc in p["prices"] else "-"
+        print(f"{mc} {(pa or pb)['pass']}: pixel A {fmt(pa, 'px')}  B {fmt(pb, 'px')}; vertex A {fmt(pa, 'vtx')}  "
+              f"B {fmt(pb, 'vtx')}  (cycles at n = {'/'.join(map(str, res['ns']))})")
+    print(f"-> {os.path.abspath(write(res, out))}")
+    return 0
+
+
+MATCOMPARE = Command(
+    "matcompare", "two materials of a Unity project against each other: their shader variants (material and pipeline "
+                  "keywords, color passes) per pixel and vertex, dynamic loops at n = 0..8; needs the open editor to "
+                  "compile",
+    [Arg("a", help="material A: .mat path, relative to the project or absolute"),
+     Arg("b", help="material B"),
+     Arg("--project", required=True, help="Unity project folder (its editor must be open to compile)"),
+     Arg("--variants", help="folder of the compiled variants (default: paretogpu/out/variants_<project>, the one the "
+                            "frames of the project share)"),
+     cores_args(),
+     Arg("--api", default="vulkan", choices=["vulkan", "gles"], help="prices of this API (default vulkan)"),
+     Arg("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)"),
+     Arg("--no-compile", action="store_true", help="use only the variants already in the folder"),
+     Arg("--recompile", action="store_true", help="compile the materials' variants again"),
+     JOBS,
+     Arg("--out", help="output folder (default: paretogpu/out/_matcompare/<time>)")],
+    run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "report"])

@@ -12,7 +12,6 @@ the log. One run at a time; it goes on when the window is closed (the server hol
 paretogpu/out/_ui/jobs. How long every phase took in the last runs (history.json) estimates the time left of the
 phases that have no count and of the ones still to come.
 """
-import argparse
 import http.server
 import json
 import mimetypes
@@ -30,8 +29,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-from paretogpu import cli
 from paretogpu.core import compare
+from paretogpu.features import BY_NAME, COMMANDS
 from paretogpu.store import cost_runs as runs_store
 from paretogpu.store import workspace
 from paretogpu.views import html
@@ -50,24 +49,9 @@ LOG_LINES = 50000  # kept in memory per run; the file has all of them
 
 def phases_of(cmd, v):
     """Phases a step goes through, in order (the ids Reporter.phase() prints); [] = one phase, "run"."""
-    if cmd == "frame":
-        return ["rd_capture", "snapshot", "rd_counters"]
-    if cmd == "cost":
-        return (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
-                                                                  "report"]
-    if cmd == "export":
-        return ["unity_export"] + (["measure"] if v.get("measure") else [])
-    if cmd == "measure":
-        return ["measure"]
-    if cmd == "matcompare":
-        return ["materials", "fingerprints", "compile", "measure", "loops", "report"]
-    if cmd == "matshader":
-        return ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"]
-    if cmd == "hotspots":
-        return ["ablation", "report"]
-    if cmd == "bench_run":
-        return ["bench_compile"]
-    return []
+    if cmd in BY_NAME:
+        return BY_NAME[cmd].phases_of(v)
+    return BENCH_PHASES.get(cmd, [])
 
 
 # a preset is what one button runs: its steps; `hide`: arguments the server fills in (the chain's own folders).
@@ -89,37 +73,12 @@ BENCH = {  # bench scripts are not paretogpu commands: their arguments by hand
     "bench_site": {"help": "docs/data.js and docs/summary_*.csv from docs/mali_math_cost.csv (bench/build_site.py)",
                    "args": []},
 }
+BENCH_PHASES = {"bench_run": ["bench_compile"]}
 
 
 def schema():
-    """{command: {"help", "args": [...]}} from the argparse parser of paretogpu/cli.py, plus the bench scripts."""
-    ap = cli.build_parser()
-    sub = next(a for a in ap._actions if isinstance(a, argparse._SubParsersAction))
-    helps = {a.dest: a.help for a in sub._choices_actions}
-    out = {}
-    for name, p in sub.choices.items():
-        if name == "ui":
-            continue
-        group = {id(a): i for i, g in enumerate(p._mutually_exclusive_groups) for a in g._group_actions}
-        args = []
-        for a in p._actions:
-            if isinstance(a, argparse._HelpAction):
-                continue
-            if not a.option_strings:
-                kind = "positional"
-            elif isinstance(a, argparse._StoreTrueAction):
-                kind = "flag"
-            elif isinstance(a, argparse._AppendAction):
-                kind = "list"
-            else:
-                kind = "value"
-            default = a.default if isinstance(a.default, (str, int, float, bool)) or a.default is None else None
-            args.append({"dest": a.dest, "flag": max(a.option_strings, key=len) if a.option_strings else None,
-                         "kind": kind, "multi": a.nargs in ("+", "*"), "required": bool(a.required),
-                         "default": default, "choices": list(a.choices) if a.choices else None,
-                         "help": (a.help or "").replace("%(default)s", str(a.default)), "metavar": a.metavar,
-                         "group": group.get(id(a))})
-        out[name] = {"help": helps.get(name, ""), "args": args}
+    """{command: {"help", "args": [...]}} of the commands (features/), plus the bench scripts."""
+    out = {c.name: c.schema() for c in COMMANDS}
     out.update(BENCH)
     return out
 

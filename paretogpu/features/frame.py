@@ -9,11 +9,16 @@ The frame is whatever the Game view shows: its resolution and the current qualit
 import json
 import os
 import shutil
+from collections import Counter
 
 from paretogpu.adapters import renderdoc as rdoc
+from paretogpu.adapters.renderdoc import RenderDocError
 from paretogpu.adapters.unity import frame as unity_frame
 from paretogpu.adapters.unity.frame import SnapshotError
 from paretogpu.core.events import match, normalize, pixel_count
+from paretogpu.features.common import fail
+from paretogpu.features.spec import Arg, Command
+from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
 
@@ -91,3 +96,47 @@ def run(project, out, timeout=1800, max_events=0, rep=CONSOLE, renderdoc=True):
     with open(os.path.join(out, "frame_events.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump({**meta, "events": events}, f, indent=1, ensure_ascii=False)
     return meta, events
+
+
+def run_command(args):
+    out = args.out or workspace.new_snapshot_dir(args.project, args.suffix)
+    try:
+        meta, events = run(args.project, out, args.timeout, args.max_events)
+    except (SnapshotError, RenderDocError) as e:
+        fail(f"snapshot failed: {e}", e)
+    draws = [e for e in events if e["kind"] == "draw"]
+    print(f"Unity {meta['unity']} ({meta['graphics_api']}, quality {meta['quality']}, "
+          f"{'play' if meta['play_mode'] else 'edit'} mode): {len(events)} events in {meta['seconds']} s")
+    stages = Counter(e["stage"] for e in events)
+    print("stages: " + ", ".join(f"{s} {n}" for s, n in stages.most_common()))
+    variants = {(e["shader"], e["pass"], tuple(e["keywords"])) for e in draws}
+    print(f"{len(draws)} draws, {len(variants)} shader variants, "
+          f"{sum(e['vertices'] for e in draws)} vertices, {len({e['rt']['name'] for e in events})} render targets")
+    methods = Counter(e["pixel_method"] for e in draws)
+    stage_px = Counter()
+    for e in draws:
+        stage_px[e["stage"]] += e["pixel_count"] or 0
+    print("pixels by stage: " + ", ".join(f"{s} {n:,}" for s, n in stage_px.most_common())
+          + "  (" + ", ".join(f"{m} {n}" for m, n in methods.most_common()) + ")")
+    if meta.get("renderdoc"):
+        r = meta["renderdoc"]
+        print(f"renderdoc: {r['matched']} events matched, {r['missing']} without calls -> {r['capture']}")
+        if r.get("mismatched"):
+            print(f"  WARNING: {r['mismatched']} draws whose RenderDoc calls do not add up to the Frame Debugger index "
+                  "count (ev['rd']['count_mismatch']): the call order went astray, their counters may be another draw's")
+        lost = {"ps_invocations", "vs_invocations", "cs_invocations"} - set(r.get("counters") or [])
+        if lost:
+            print(f"  WARNING: the capture has no {', '.join(sorted(lost))}: those counts fall back to other sources")
+    print(f"-> {os.path.join(out, 'frame_events.json')}")
+    return 0
+
+
+FRAME = Command(
+    "frame", "snapshot the frame of the open Unity editor: RenderDoc (loaded in the editor: Game tab -> Load RenderDoc) "
+             "for the pixels and vertices, the Frame Debugger for the shader variant of every event",
+    [Arg("--project", required=True, help="Unity project folder (its editor must be open)"),
+     Arg("--out", help="output folder (default: paretogpu/out/frame_<project>_<time>, not in git)"),
+     Arg("--suffix", help="appended to the snapshot folder name: frame_<project>_<time>_<suffix>"),
+     Arg("--timeout", type=int, default=1800, help="seconds"),
+     Arg("--max-events", type=int, default=0, help="stop after N events (0 = all)")],
+    run_command, phases=lambda v: ["rd_capture", "snapshot", "rd_counters"])

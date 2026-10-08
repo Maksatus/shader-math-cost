@@ -3,6 +3,7 @@
   resolve(project, path)  a .mat file -> its shader, keywords and switched-off passes
   prepare(project, paths, root, cores, ...)  the materials' variants compiled and measured, dynamic loops priced
   common(prep, sides, ...)  the fields every result about materials has (features/matcompare.py, matshader.py)
+  project_variants(project, events, ...)  the variants of every material of the project (cost --materials)
 """
 import os
 import time
@@ -10,6 +11,7 @@ from collections import Counter
 
 from paretogpu.adapters.unity import assets as materials
 from paretogpu.adapters.unity import cli as unity
+from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import variants
 from paretogpu.core import materials as plan_
 from paretogpu.core.materials import NS
@@ -96,3 +98,26 @@ def common(prep, sides, cores, api, apis, ns=NS):
             "main_core": main_core(found), "ns": list(ns),
             "default_n": LOOP_ITERS, "malioc": ", ".join(sorted({r["malioc"] for r in recs})),
             "checked": state["checked"], "snapshots": len(snaps), "warnings": warn, "computed_at": time.time()}
+
+
+def project_variants(project, events, folders, root, compile_missing=True, rep=CONSOLE):
+    """Variants of every material of the project (core/materials.py): passes and global keywords from the snapshot's
+    `events` and every other snapshot of the project in `folders`, the shaders' passes from the open editor.
+    Returns ({variant key: [material paths]}, [skipped materials])."""
+    mats = materials.scan(project)
+    snaps = [events] + workspace.snapshots_of(project, folders)
+    info = plan_.snapshot_info(snaps)
+    names = plan_.material_shaders(mats)
+    editor = None
+    if names and compile_missing:
+        if unity.editor_ready(project, allow_play=True):
+            try:
+                editor = variants.shader_query(project, "Passes", names, root)
+            except VariantsError as e:
+                rep.log(f"passes of the materials' shaders: {e}")
+    if editor is None:
+        rep.log("passes of the materials' shaders are taken from the snapshots only "
+                + ("(--no-compile)" if not compile_missing else "(the editor does not answer Unity CLI)"))
+    keys, skipped = plan_.plan(mats, info, editor)
+    rep.log(f"materials: {len(mats)} in {project}, {len(snaps)} snapshots -> {len(keys)} variants")
+    return keys, skipped

@@ -8,13 +8,19 @@ dynamic loops at n iterations.
   run(project, material, root, cores, ...) -> JSON-able result (kind "material"); render_html() -> result_view.html
 """
 import os
+import sys
 
+from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import ablation as ablation_run
 from paretogpu.app import materials
 from paretogpu.core import ablation
 from paretogpu.core.materials import NS, apis_of, describe
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.core.variants import match
+from paretogpu.features.common import JOBS, cores_args, fail, parse_cores
+from paretogpu.features.spec import Arg, Command
+from paretogpu.model.cores import main_core
+from paretogpu.store import workspace
 from paretogpu.views import html
 from paretogpu.views.reporter import CONSOLE
 
@@ -68,3 +74,60 @@ def render_html(res):
 
 def write(res, out_dir):
     return html.write_result(res, out_dir, "matshader", f"Материал: {res['m']['material']}")
+
+
+def run_command(args):
+    cores = parse_cores(args)
+    ablate = [c.strip() for c in args.ablate_cores.split(",")] if args.ablate_cores else [main_core(cores)]
+    bad = [c for c in ablate if c not in cores]
+    if bad:
+        sys.exit(f"--ablate-cores {', '.join(bad)}: not among the cores ({', '.join(cores)})")
+    project = os.path.abspath(args.project)
+    root = args.variants or workspace.variants_dir(project)
+    out = args.out or workspace.new_result_dir("matshader")
+    try:
+        res = run(project, args.material, root, cores, ["gles3", "vulkan"], args.api, args.jobs,
+                  compile_missing=not args.no_compile, recompile=args.recompile, snapshot_folders=[workspace.OUT],
+                  ablate_cores=ablate, n=args.n)
+    except (ValueError, VariantsError) as e:
+        fail(f"matshader: {e}", e)
+    for w in res["warnings"]:
+        print(f"  ! {w}")
+    for p in res["m"]["passes"]:
+        for stage, a in (p.get("ablation") or {}).items():
+            if "error" in a:
+                print(f"{p['pass']} {stage}: {a['error']}")
+                continue
+            for core, x in a["by_core"].items():
+                if "error" in x["base"]:
+                    print(f"{p['pass']} {stage} {core}: {x['base']['error']}")
+                    continue
+                parts = sorted((sid for sid, st in a["statements"].items() if st["parent"] is None
+                                and "error" not in x["stmts"].get(sid, {"error": 1})),
+                               key=lambda sid: -x["stmts"][sid]["price"])
+                print(f"{p['pass']} {stage} {core}: {x['base']['price']} cycles (GLES, n = {a['n']}), "
+                      f"{len(a['statements'])} statements; costliest parts:")
+                for sid in parts[:5]:
+                    st = a["statements"][sid]
+                    print(f"  -{x['stmts'][sid]['price']:6.2f}  line {st['line'] + 1}: {st['text'][:80]}")
+    print(f"-> {os.path.abspath(write(res, out))}")
+    return 0
+
+
+MATSHADER = Command(
+    "matshader", "one material of a Unity project: its shader variants (material and pipeline keywords, color "
+                 "passes), their prices and what every line of their code costs (ablation, plan A3.2); needs the open "
+                 "editor to compile",
+    [Arg("material", help=".mat path, relative to the project or absolute"),
+     Arg("--project", required=True, help="Unity project folder (its editor must be open to compile)"),
+     Arg("--variants", help="folder of the compiled variants (default: paretogpu/out/variants_<project>)"),
+     cores_args(),
+     Arg("--ablate-cores", help="cores to ablate on, comma separated (default Mali-G78): every statement is one malioc "
+                                "run per core"),
+     Arg("--n", type=int, default=LOOP_ITERS, help="iterations of the dynamic loops in the ablation (default %(default)s)"),
+     Arg("--api", default="vulkan", choices=["vulkan", "gles"], help="main API of the prices (default vulkan)"),
+     Arg("--no-compile", action="store_true", help="use only the variants already in the folder"),
+     Arg("--recompile", action="store_true", help="compile the material's variants again"),
+     JOBS,
+     Arg("--out", help="output folder (default: paretogpu/out/_matshader/<time>)")],
+    run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"])
