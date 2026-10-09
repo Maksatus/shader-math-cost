@@ -11,6 +11,7 @@ A Rule is one kind of artifact. Two kinds of rules:
           its includes, Unity's defines) only the open editor can fingerprint.
 
   Engine(rep, jobs).get(rule, keys) -> {key: value}
+  Engine(...).get(rule, keys, tick)  a keyed rule counting into a progress counter shared with other gets (no phase)
 """
 import concurrent.futures as cf
 import os
@@ -76,17 +77,18 @@ class Engine:
         self.jobs = jobs or os.cpu_count()
         self.memo = memo
 
-    def get(self, rule, keys):
+    def get(self, rule, keys, tick=None):
         keys = list(dict.fromkeys(keys))
-        values = self._keyed(rule, keys) if rule.keyed else self._batch(rule, keys)
+        values = self._keyed(rule, keys, tick) if rule.keyed else self._batch(rule, keys)
         rule.finish(values)
         return values
 
-    def _keyed(self, rule, keys):
+    def _keyed(self, rule, keys, tick=None):
         if not keys:
             return {}
-        self.rep.phase(rule.phase, len(keys))
-        tick = self.rep.counter(len(keys))
+        if tick is None:
+            self.rep.phase(rule.phase, len(keys))
+            tick = self.rep.counter(len(keys))
         memo = (self.memo or memo_store.default()) if rule.memo else None
         new, lock = [], threading.Lock()
 

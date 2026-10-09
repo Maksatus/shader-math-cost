@@ -1,11 +1,13 @@
 """Ablation of a shader measured with malioc (plan A3.2): core/ablation.py says what to ablate, this measures it.
 
   run(src, stage, cores, n, jobs) -> per core: base pipes and price, every statement's inclusive and self cost
+Every ablated copy is a keyed rule of the engine (AblateRule): remembered by the hash of the shader's text, so a
+shader analysed again is measured only where it changed.
 """
-import concurrent.futures as cf
-import os
+import hashlib
 
 from paretogpu.adapters import malioc as mali
+from paretogpu.app.engine import Engine, Rule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.core import vertexmove
@@ -33,6 +35,27 @@ def measure(src, core, stage, n, forced_loops):
             "price": round(price, 4), "bound": bound, "regs": regs, "na": c["longest"] is None}
 
 
+class AblateRule(Rule):
+    """(statement id, core) -> measure() of the shader with that statement ablated, its loops forced to n."""
+    phase = "ablation"
+    memo = "ablation/1"
+
+    def __init__(self, src, parsed, stage, n, forced):
+        self.src, self.p, self.stage, self.n, self.forced = src, parsed, stage, n, forced
+        self.sha = hashlib.sha1(src.encode("utf-8")).hexdigest()
+
+    def memo_key(self, key):
+        sid, core = key
+        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{mali.MALIOC}"
+
+    def remember(self, value):
+        return "error" not in value
+
+    def build_one(self, key):
+        sid, core = key
+        return measure(ablated(self.p, sid, self.stage), core, self.stage, self.n, self.forced[core])
+
+
 def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None):
     """Ablation of every statement of main() on every core. Returns
     {"lines": main()'s lines [{"no", "text", "stmt"}], "statements": {id: {...}}, "by_core": {core: {"base", "stmts"}}}."""
@@ -46,16 +69,7 @@ def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None):
     tasks = [(s["id"], c) for s in targets for c in cores if "error" not in base[c]]
     rep.log(f"ablation of {len(targets)} statements of the {stage} shader on {', '.join(cores)} ...")
     tick = tick or rep.counter(len(tasks))  # one counter may span several shaders
-
-    def job(t):
-        sid, c = t
-        try:
-            return measure(ablated(p, sid, stage), c, stage, n, forced[c])
-        finally:
-            tick()
-
-    with cf.ThreadPoolExecutor(jobs or os.cpu_count()) as ex:
-        res = dict(zip(tasks, ex.map(job, tasks)))
+    res = Engine(rep, jobs).get(AblateRule(src, p, stage, n, forced), tasks, tick)
     children = {}
     for sid, par in parent.items():
         if par is not None:

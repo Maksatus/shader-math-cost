@@ -177,7 +177,7 @@ def ui(res, inputs):
 
 
 # --- comparing ---------------------------------------------------------------------------------------------------
-VOLATILE = {"computed_at", "made_at", "cost_computed_at", "started", "finished", "seconds", "time", "cost_time",
+VOLATILE = {"computed_at", "made_at", "cost_computed_at", "created", "started", "finished", "seconds", "time", "cost_time",
             "snapshot_time", "updated"}
 TIME_RE = re.compile(r"\d{8}_\d{6}b*")
 BLOBS = [re.compile(r"^const D = (.*);$", re.M),
