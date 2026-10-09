@@ -1,8 +1,10 @@
 """Local web UI: `python -m paretogpu ui`.
 
 One window (Edge in app mode, else the default browser) on http://127.0.0.1:<port>:
-  /            app.html: tabs "function costs" (docs/, the site as on GitHub), "project test" (the commands with
-               their progress), "reports" (the snapshots in paretogpu/out)
+  /            static/index.html: tabs "function costs" (docs/, the site as on GitHub), "project test" (the commands
+               with their progress), "reports" (the snapshots in paretogpu/out); its parts in static/: app.css and
+               one script per tab in js/ (run in the order index.html lists them)
+  /static/...  ui/static/;  /shared/...  views/static/ (theme.css: the palette every page shares)
   /site/...    docs/
   /out/...     paretogpu/out: reports of the project's frames; served only here, they never reach git or the site
   /api/...     JSON
@@ -33,6 +35,7 @@ from paretogpu.ui.runner import Runner
 from paretogpu.views import html
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+STATIC = os.path.join(HERE, "static")
 PRESETS = presets.PRESETS
 
 
@@ -140,7 +143,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = u.path
         try:
             if p in ("/", "/index.html"):
-                return self._file(HERE, "app.html")
+                return self._file(STATIC, "index.html")
+            if p.startswith("/static/"):
+                return self._file(STATIC, p[len("/static/"):])
+            if p.startswith("/shared/"):
+                return self._file(html.STATIC, p[len("/shared/"):])
             if p.startswith("/site/"):
                 return self._file(DOCS, p[len("/site/"):])
             if p.startswith("/out/"):

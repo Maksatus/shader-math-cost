@@ -48,7 +48,7 @@ class Arg:
         p.add_argument(self.flag, **kw)
 
     def schema(self, group=None):
-        """The UI's description of the argument (ui/app.html builds its form fields from it)."""
+        """The UI's description of the argument (ui/static/js/run_form.js builds its form fields from it)."""
         default = False if self.action == "store_true" and self.default is None else self.default
         if not isinstance(default, (str, int, float, bool)) and default is not None:
             default = None

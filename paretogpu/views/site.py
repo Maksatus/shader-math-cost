@@ -1,11 +1,13 @@
 """The function cost site (docs/): data.js packs mali_math_cost.csv so that index.html works when opened straight
-from disk (file:// cannot fetch() a CSV); summary_<api>.csv: function x variant, median per architecture.
+from disk (file:// cannot fetch() a CSV); summary_<api>.csv: function x variant, median per architecture;
+theme.css: the palette every page shares (views/static/theme.css).
 
   build(site_dir)
 """
 import csv
 import json
 import os
+import shutil
 import statistics
 from collections import defaultdict
 
@@ -14,7 +16,11 @@ from paretogpu.model.cores import ARCHS
 VARIANTS = ["float", "half", "float4", "half4"]
 
 
+THEME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "theme.css")
+
+
 def build(res, log=print):
+    shutil.copyfile(THEME, os.path.join(res, "theme.css"))
     with open(os.path.join(res, "mali_math_cost.csv"), encoding="utf-8") as f:
         text = f.read()
     with open(os.path.join(res, "data.js"), "w", encoding="utf-8") as f:

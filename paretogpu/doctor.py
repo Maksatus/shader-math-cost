@@ -29,7 +29,7 @@ def check_python():
 
 
 def check_files():
-    need = ["docs/index.html", "docs/data.js", "docs/approx.js", "paretogpu/ui/app.html", "paretogpu/ui/server.py"]
+    need = ["docs/index.html", "docs/data.js", "docs/approx.js", "paretogpu/ui/static/index.html", "paretogpu/ui/server.py"]
     missing = [p for p in need if not os.path.exists(os.path.join(ROOT, p))]
     if missing:
         report(FAIL, "файлы сайта", "нет " + ", ".join(missing))

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParetoGPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="top">
+  <div class="brand">Pareto<b>GPU</b><span>профилировщик шейдеров Mali</span></div>
+  <nav id="tabs">
+    <button data-tab="run">Проверка кадра<span id="tabPill"></span></button>
+    <button data-tab="reports">Отчёты</button>
+    <button data-tab="compare">Сравнение</button>
+    <button data-tab="mat">Материал</button>
+    <button data-tab="site">Цена функций</button>
+    <button data-tab="ref">Справочник</button>
+  </nav>
+  <div class="env" id="env"></div>
+</div>
+
+<section id="tab-run"><div class="page"><div class="cols">
+  <div>
+    <div class="card" id="formCard">
+      <div class="banner" id="recalcBanner" style="display:none"></div>
+      <h2 id="formTitle">Новая проверка</h2>
+      <p class="small muted" id="howto">Выставьте нужный кадр в окне Game Unity, выберите проект и нажмите «Проверить кадр». <a href="#" data-ref="usage" style="color:var(--accent)">Подробнее ↗</a></p>
+      <div class="field" id="projField">
+        <span class="lbl">Проект</span>
+        <select id="project"></select>
+        <input type="text" id="projectPath" placeholder="Папка Unity-проекта, например D:\client" style="display:none;margin-top:6px">
+        <div class="status wait" id="edStatus"></div>
+      </div>
+      <div class="field" id="suffixField">
+        <span class="lbl">Суффикс снимка <span class="muted small">(необязательно)</span></span>
+        <input type="text" id="suffix" placeholder="например: city_night или after_fix">
+      </div>
+      <div class="field">
+        <span class="lbl">Устройства</span>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="devices" value="mobile" checked><div><b>Типичные Mali</b><span>G52, G57, G78, G715, G720: от слабых до новых. Главное в отчёте — G78 (Galaxy S21).</span></div></label>
+          <label class="opt"><input type="radio" name="devices" value="g78"><div><b>Только Mali-G78</b><span>Galaxy S21 (Exynos). Быстрее, если нужен один телефон.</span></div></label>
+          <label class="opt"><input type="radio" name="devices" value="custom"><div style="flex:1"><b>Свои</b><span>Ядра Mali через запятую.</span>
+            <input type="text" id="customCores" list="dl-cores" placeholder="Mali-G57,Mali-G710"></div></label>
+        </div>
+      </div>
+      <div class="field">
+        <span class="lbl">Что считать</span>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="scope" value="frame" checked><div><b>Только этот кадр</b><span>Шейдеры, которые есть в кадре.</span></div></label>
+          <label class="opt"><input type="radio" name="scope" value="materials"><div><b>Кадр и все материалы проекта</b><span>Ещё и цена шейдеров всех материалов проекта, даже тех, что не попали в кадр. Дольше.</span></div></label>
+        </div>
+      </div>
+      <button class="btn primary big" id="runBtn">▶ Проверить кадр</button>
+      <div class="why" id="runWhy"></div>
+      <div class="err" id="formErr"></div>
+      <details class="more" id="advBox"><summary>Дополнительно (для опытных)</summary><div class="adv" id="adv"></div></details>
+    </div>
+  </div>
+  <div>
+    <div class="card" id="jobCard"><div class="empty">Здесь будет ход проверки: какой шаг идёт, сколько осталось, а в конце — цена кадра и самые дорогие шейдеры.</div></div>
+    <div class="card">
+      <h2>Прошлые запуски</h2>
+      <table class="hist" id="hist"></table>
+    </div>
+  </div>
+</div></div></section>
+
+<section id="tab-reports">
+  <div class="page" id="repList"></div>
+  <div class="viewer" id="repView" style="display:none">
+    <div class="bar2">
+      <button class="btn" id="repBack">← К списку</button>
+      <b id="repName"></b>
+      <span style="flex:1"></span>
+      <div class="seg" id="repWhich"><button data-w="report" class="on" title="Отчёт кадра: цена событий и шейдеров">Отчёт кадра</button><button data-w="hotspots" title="Самые дорогие шейдеры кадра: их самые тяжёлые части и что в них">Почему тяжёлые</button></div>
+      <button class="btn" id="repRecalc">Пересчитать</button>
+      <button class="btn" id="repFolder">Открыть папку</button>
+      <a class="btn" id="repOpen" target="_blank">В браузере</a>
+    </div>
+    <iframe id="repFrame" title="Отчёт"></iframe>
+  </div>
+</section>
+
+<section id="tab-compare">
+  <div class="bar2 cmpbar">
+    <div class="seg" id="cmpMode"><button data-m="frames">Кадры</button><button data-m="materials">Материалы</button></div>
+    <span class="ab fr">A</span><select id="cmpA" class="fr" title="Было"></select>
+    <button class="btn sm fr" id="cmpSwap" title="Поменять местами">⇄</button>
+    <span class="ab fr">B</span><select id="cmpB" class="fr" title="Стало"></select>
+    <select id="matProject" class="mt" title="Unity-проект" style="width:auto;max-width:220px"></select>
+    <span class="ab mt">A</span><input type="text" id="matA" class="mt" list="dl-matA" placeholder="Материал A: имя или путь, или перетащите .mat">
+    <button class="btn sm mt" id="matSwap" title="Поменять местами">⇄</button>
+    <span class="ab mt">B</span><input type="text" id="matB" class="mt" list="dl-matB" placeholder="Материал B">
+    <button class="btn sm primary mt" id="matRun">Сравнить</button>
+    <span style="flex:1"></span>
+    <select id="matHist" class="mt" title="Прошлые сравнения материалов" style="width:auto;max-width:360px"></select>
+    <a class="btn sm fr" id="cmpSave">Сохранить HTML</a>
+    <a class="btn sm" id="cmpOpen" target="_blank">В браузере</a>
+  </div>
+  <div class="page" id="cmpEmpty" style="display:none"></div>
+  <iframe id="cmpFrame" title="Сравнение"></iframe>
+</section>
+
+<section id="tab-site">
+  <div class="bar2"><span class="muted small" id="siteInfo"></span><span style="flex:1"></span>
+    <button class="btn sm" id="siteUpdate">Обновить данные…</button></div>
+  <iframe id="siteFrame" title="Цена функций"></iframe>
+</section>
+
+<section id="tab-mat">
+  <div class="bar2 cmpbar">
+    <select id="msProject" title="Unity-проект" style="width:auto;max-width:220px"></select>
+    <input type="text" id="msMat" list="dl-ms" placeholder="Материал: имя, путь или шейдер, или перетащите .mat" style="width:420px">
+    <button class="btn sm primary" id="msRun">Разобрать</button>
+    <span style="flex:1"></span>
+    <select id="msHist" title="Прошлые разборы" style="width:auto;max-width:360px"></select>
+    <a class="btn sm" id="msOpen" target="_blank">В браузере</a>
+  </div>
+  <div class="page" id="msEmpty" style="display:none"></div>
+  <iframe id="msFrame" title="Материал"></iframe>
+</section>
+
+<section id="tab-ref"><iframe id="refFrame" title="Справочник"></iframe></section>
+
+<datalist id="dl-cores"></datalist>
+<datalist id="dl-matA"></datalist>
+<datalist id="dl-matB"></datalist>
+<datalist id="dl-ms"></datalist>
+
+<script src="/static/js/core.js"></script>
+<script src="/static/js/run_form.js"></script>
+<script src="/static/js/run_panel.js"></script>
+<script src="/static/js/reports.js"></script>
+<script src="/static/js/compare.js"></script>
+<script src="/static/js/material.js"></script>
+<script src="/static/js/report_view.js"></script>
+<script src="/static/js/site.js"></script>
+<script src="/static/js/tips.js"></script>
+<script src="/static/js/main.js"></script>
+</body>
+</html>

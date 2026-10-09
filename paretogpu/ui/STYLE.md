@@ -1,28 +1,21 @@
 # ParetoGPU — как верстать страницы
 
-Обязательно для любой новой HTML-страницы или раздела ParetoGPU: окно (`ui/app.html`), отчёт кадра
+Обязательно для любой новой HTML-страницы или раздела ParetoGPU: окно (`ui/static/`: `index.html`, `app.css`, `js/`), отчёт кадра
 (`views/templates/frame_report.html`), сравнение (`views/templates/result_view.html`), таблица функций (`docs/index.html`) и всё новое.
 Цель — один вид везде: тёмная тема «Mint Editor», спокойные цвета, плотные, но читаемые таблицы.
 
-## 1. Токены (копировать в `<head>` как есть)
+## 1. Токены: `paretogpu/views/static/theme.css`
 
-Общего CSS-файла нет: страницы и отчёты самодостаточны (открываются как файлы). Блок ниже одинаковый во всех
-страницах. Меняете цвет — меняйте во всех четырёх файлах сразу.
+Палитра и шрифты — в одном файле. Окно подключает его как `/shared/theme.css`, отчёты получают его встроенным
+(`views/html.py`), сайт — копией `docs/theme.css` (её кладёт `python -m paretogpu bench`). Меняете цвет — меняйте
+только там. Своё у страницы (например, `--heat-*` таблицы функций) — в её `<style>` после темы.
 
 ```html
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theme.css">
 <style>
-:root {
-  color-scheme: dark;
-  --bg: #121417; --panel: #1a1e23; --text: #eceef0; --muted: #8b939c; --line: #2a3038;
-  --accent: #34d399; --on-accent: #062a1d; --chip: #232830; --hover: #20252b;
-  --cheap: #8bd99b; --medium: #e8c27a; --heavy: #f2877b; --info: #7fb2e5; --bar: #55606c;
-  --part-px: #7fb2e5; --part-vx: #b9a3e0; --part-cs: #6cc4c4;
-  --sans: Manrope, system-ui, "Segoe UI", sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-}
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
 </style>
 ```
