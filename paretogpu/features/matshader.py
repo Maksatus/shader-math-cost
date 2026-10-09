@@ -5,7 +5,7 @@ material's keywords plus the pipeline's global keywords of every color pass. On 
 fragment and vertex shader is ablated statement by statement (core/ablation.py, plan A3.2) on the chosen cores,
 dynamic loops at n iterations.
 
-  run(project, material, root, cores, ...) -> JSON-able result (kind "material"); render_html() -> result_view.html
+  run(project, material, root, cores, ...) -> JSON-able result (kind "material"); RESULT: its page
 """
 import os
 import sys
@@ -13,15 +13,15 @@ import sys
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import ablation as ablation_run
 from paretogpu.app import materials
+from paretogpu.app import results
 from paretogpu.core import ablation
 from paretogpu.core.materials import NS, apis_of, describe
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.core.variants import match
 from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
-from paretogpu.features.spec import Arg, Command
+from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.model.cores import main_core
 from paretogpu.store import workspace
-from paretogpu.views import html
 from paretogpu.views.reporter import CONSOLE
 
 STAGES = (("fragment", "frag"), ("vertex", "vert"))
@@ -68,14 +68,6 @@ def run(project, material, root, cores, platforms=("gles3", "vulkan"), api="vulk
             "ablate_cores": ablate_cores, "ablate_n": n}
 
 
-def render_html(res):
-    return html.render_result(res, f"Материал: {res['m']['material']}")
-
-
-def write(res, out_dir):
-    return html.write_result(res, out_dir, "matshader", f"Материал: {res['m']['material']}")
-
-
 def run_command(args):
     cores = parse_cores(args)
     ablate = [c.strip() for c in args.ablate_cores.split(",")] if args.ablate_cores else [main_core(cores)]
@@ -110,9 +102,12 @@ def run_command(args):
                 for sid in parts[:5]:
                     st = a["statements"][sid]
                     print(f"  -{x['stmts'][sid]['price']:6.2f}  line {st['line'] + 1}: {st['text'][:80]}")
-    print(f"-> {os.path.abspath(write(res, out))}")
+    print(f"-> {os.path.abspath(results.publish(RESULT, res, out))}")
     return 0
 
+
+RESULT = ResultKind("matshader", lambda r: f"Материал: {r['m']['material']}",
+                    lambda r: {"m": {k: r["m"].get(k) for k in ("material", "path", "shader")}})
 
 MATSHADER = Command(
     "matshader", "one material of a Unity project: its shader variants (material and pipeline keywords, color "
@@ -132,4 +127,4 @@ MATSHADER = Command(
      Arg("--out", help="output folder (default: paretogpu/out/_matshader/<time>)")],
     run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"],
     report=lambda v: os.path.join(v["out"], "matshader.html"),
-    ui_values=lambda v: default_variants({**v, "out": workspace.new_result_dir("matshader")}))
+    ui_values=lambda v: default_variants({**v, "out": workspace.new_result_dir("matshader")}), result=RESULT)

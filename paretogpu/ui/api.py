@@ -9,6 +9,7 @@ import urllib.parse
 
 from paretogpu.core import compare
 from paretogpu.store import cost_runs as runs_store
+from paretogpu.store import results as store_results
 from paretogpu.store import workspace
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -108,13 +109,11 @@ def snapshots():
             row["cost_time"] = os.path.getmtime(rp)
         hs = os.path.join(d, "hotspots.html")
         row["hotspots"] = out_url(hs) if os.path.exists(hs) else None
-        cost = _cached_json(os.path.join(d, "frame_cost.json"))
+        cost = store_results.read_meta(d, "cost")
         if cost:
-            mc = cost.get("main_core")
-            t = (cost.get("totals") or {}).get(mc) or {}
-            cov = cost.get("coverage") or {}
-            row.update(main_core=mc, total=t.get("total"), fragment=t.get("fragment"), vertex=t.get("vertex"),
-                       compute=t.get("compute"), priced=cov.get("draws_priced"), api_cost=cost.get("api"))
+            t = cost.get("summary") or {}
+            row.update(main_core=t.get("main_core"), total=t.get("total"), fragment=t.get("fragment"),
+                       vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"), api_cost=t.get("api"))
         rows.append(row)
     return sorted(rows, key=lambda r: -r["time"])
 
@@ -144,34 +143,25 @@ def run_file(rid):
     return path if os.path.isfile(path) else None
 
 
-def _results(kind):
-    """[(id, folder, result)] of the analyses of `kind` in paretogpu/out (workspace.RESULTS) with their page."""
+def results(kind=None):
+    """Every result in paretogpu/out (of one kind), newest first, with the URL of its page."""
     rows = []
-    folder = workspace.results_dir(kind)
-    if os.path.isdir(folder):
-        for name in os.listdir(folder):
-            d = os.path.join(folder, name)
-            r = _cached_json(os.path.join(d, f"{kind}.json"))
-            if r and os.path.exists(os.path.join(d, f"{kind}.html")):
-                rows.append((name, d, r))
+    for m in store_results.scan(kind):
+        page = os.path.join(m["folder"], m["page"]) if m.get("page") else None
+        rows.append({**m, "url": out_url(page) if page and os.path.exists(page) else None})
     return rows
 
 
 def matcompares():
-    """Comparisons of two materials in paretogpu/out/_matcompare, newest first."""
-    rows = [{"id": name, "url": out_url(os.path.join(d, "matcompare.html")), "project": r.get("project"),
-             "computed_at": r.get("computed_at"), "a": {k: r["a"].get(k) for k in ("material", "path", "shader")},
-             "b": {k: r["b"].get(k) for k in ("material", "path", "shader")}}
-            for name, d, r in _results("matcompare")]
-    return sorted(rows, key=lambda r: -(r["computed_at"] or 0))
+    """Comparisons of two materials, newest first (the material tab's history)."""
+    return [{"id": r["id"], "url": r["url"], "project": r.get("project"), "computed_at": r.get("created"),
+             "a": r["summary"].get("a"), "b": r["summary"].get("b")} for r in results("matcompare") if r["url"]]
 
 
 def matshaders():
-    """Analyses of one material in paretogpu/out/_matshader, newest first."""
-    rows = [{"id": name, "url": out_url(os.path.join(d, "matshader.html")), "project": r.get("project"),
-             "computed_at": r.get("computed_at"), "m": {k: r["m"].get(k) for k in ("material", "path", "shader")}}
-            for name, d, r in _results("matshader")]
-    return sorted(rows, key=lambda r: -(r["computed_at"] or 0))
+    """Analyses of one material, newest first."""
+    return [{"id": r["id"], "url": r["url"], "project": r.get("project"), "computed_at": r.get("created"),
+             "m": r["summary"].get("m")} for r in results("matshader") if r["url"]]
 
 
 _materials = {}  # project -> (time, rows)

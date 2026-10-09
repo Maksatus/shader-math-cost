@@ -12,12 +12,13 @@ import time
 
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import materials as project_materials
+from paretogpu.app import results
 from paretogpu.app import variants
 from paretogpu.core import frame_cost
 from paretogpu.core import materials as shaders
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS
 from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
-from paretogpu.features.spec import Arg, Command
+from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.model.cores import main_core as main_core_of
 from paretogpu.store import cost_runs, workspace
 from paretogpu.views import html, tables
@@ -74,8 +75,8 @@ def run_command(args):
     os.makedirs(out, exist_ok=True)
     tables.write_frame_cost(c, out)
     run_id = cost_runs.archive(c, out)  # every run is kept: a snapshot priced again is compared with its earlier runs
-    html.write_frame_report(c, os.path.join(out, "frame_report.html"),
-                            f"Стоимость кадра {os.path.basename(os.path.abspath(args.frame))}")
+    html.write_frame_report(c, os.path.join(out, "frame_report.html"), RESULT.title(c))
+    results.publish(RESULT, c, out, os.path.basename(os.path.abspath(args.frame)))
     print_summary(c, state, args.api)
     for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json", f"{cost_runs.COSTS}/{run_id}.json"):
         print(f"-> {os.path.abspath(os.path.join(out, name))}")
@@ -125,6 +126,17 @@ def print_summary(c, state, api):
             print(f"  skipped {n}: {r}")
 
 
+def _totals(c):
+    mc = c.get("main_core")
+    t = (c.get("totals") or {}).get(mc) or {}
+    return {"main_core": mc, "api": c.get("api"), "total": t.get("total"), "fragment": t.get("fragment"),
+            "vertex": t.get("vertex"), "compute": t.get("compute"),
+            "priced": (c.get("coverage") or {}).get("draws_priced")}
+
+
+RESULT = ResultKind("cost", lambda c: f"Стоимость кадра {os.path.basename(os.path.normpath(c.get('frame_dir') or '.'))}",
+                    _totals, data="frame_cost.json", page="frame_report.html", own_page=True)
+
 COST = Command(
     "cost", "cost of a frame snapshot: every event's shader variant measured with malioc, pixels x pixel price + "
             "vertices x vertex price, frame_report.html",
@@ -158,4 +170,4 @@ COST = Command(
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
                                                                          "report"],
     report=lambda v: os.path.join(v.get("out") or v["frame"], "frame_report.html"),
-    ui_values=default_variants)
+    ui_values=default_variants, result=RESULT)

@@ -6,10 +6,10 @@ vertices) and mix (variants) by core/compare.py -> compare.html, compare.json.
 import os
 import sys
 
+from paretogpu.app import results
 from paretogpu.core import compare
-from paretogpu.features.spec import Arg, Command
+from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.store import cost_runs
-from paretogpu.views import html
 
 
 def run_command(args):
@@ -32,9 +32,17 @@ def run_command(args):
             print(f"  {s['delta'] / 1e6:+8.2f} M  {s['shader'][:50]:50s} price {s['price'] / 1e6:+.2f}, "
                   f"work {s['work'] / 1e6:+.2f}, mix {s['mix'] / 1e6:+.2f}" + (f"  [{s['status']}]" if s["status"] != "both" else ""))
     out = args.out or (args.b if os.path.isdir(args.b) else os.path.dirname(os.path.abspath(args.b)))
-    print(f"-> {os.path.abspath(html.write_result(cmp, out, 'compare'))}")
+    print(f"-> {os.path.abspath(results.publish(RESULT, cmp, out))}")
     return 0
 
+
+def _brief(cmp):
+    x = compare.brief(cmp) or {}
+    return {"a": cmp["a"].get("snapshot"), "b": cmp["b"].get("snapshot"), "core": x.get("core"),
+            "a_total": x.get("a"), "b_total": x.get("b"), "delta": x.get("delta")}
+
+
+RESULT = ResultKind("compare", lambda c: "Сравнение кадров", _brief)
 
 COMPARE = Command(
     "compare", "compare two cost runs: the frame, its stages and shaders, every change split into price (the shaders), "
@@ -42,4 +50,4 @@ COMPARE = Command(
     [Arg("a", help="before: snapshot folder (its latest cost), frame_cost.json or <snapshot>/costs/<time>.json"),
      Arg("b", help="after: the same kinds"),
      Arg("--out", help="folder for compare.html and compare.json (default: B's folder)")],
-    run_command)
+    run_command, result=RESULT)

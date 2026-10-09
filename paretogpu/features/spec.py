@@ -5,9 +5,10 @@
   phases(values) -> the progress phases (views/reporter.py) a run goes through, in order, for the UI
   report(values) -> the page the run writes (the UI opens it), or None
   ui_values(values) -> the values with the folders the UI does not ask for filled in
+  result: ResultKind -> what a run leaves (model/result.py): its title and summary for the lists of results
 """
 import argparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -68,6 +69,22 @@ class Group:
 
 
 @dataclass
+class ResultKind:
+    """What a command's run leaves: <name>.json and <name>.html (own_page: the command writes its own page and data),
+    described by <name>.result.json with title(doc) and summary(doc) (app/results.py)."""
+    name: str
+    title: object
+    summary: object = lambda doc: {}
+    data: str = None
+    page: str = None
+    own_page: bool = False
+
+    def __post_init__(self):
+        self.data = self.data or f"{self.name}.json"
+        self.page = self.page or f"{self.name}.html"
+
+
+@dataclass
 class Command:
     name: str
     help: str
@@ -76,7 +93,7 @@ class Command:
     phases: object = None                           # phases(values) -> [phase id]
     report: object = None                           # report(values) -> path of the page the run writes
     ui_values: object = None                        # ui_values(values) -> values with the UI's own folders
-    extra: dict = field(default_factory=dict)
+    result: object = None                           # ResultKind
 
     def flat_args(self):
         """[(Arg, index of its mutually exclusive group or None)] in the order they are declared."""

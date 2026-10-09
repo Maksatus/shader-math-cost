@@ -22,7 +22,9 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from paretogpu.app.results import adopt
 from paretogpu.core import compare
+from paretogpu.features import RESULT_KINDS
 from paretogpu.store import cost_runs as runs_store
 from paretogpu.store import workspace
 from paretogpu.ui import api, presets
@@ -170,6 +172,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"reports": api.snapshots()})
             if p == "/api/costs":
                 return self._json({"runs": api.cost_runs()})
+            if p == "/api/results":
+                return self._json({"items": api.results(q.get("kind"))})
             if p == "/api/matcompares":
                 return self._json({"items": api.matcompares()})
             if p == "/api/matshaders":
@@ -292,6 +296,7 @@ def serve(port=8765, open_window=True, stay=False):
         except (OSError, ValueError):
             pass
         sys.exit(f"port {port} is busy: --port <another>")
+    adopt(RESULT_KINDS)
     RUNNER = Runner()
     SCHEMA = presets.schema()
     auto = open_window and not stay

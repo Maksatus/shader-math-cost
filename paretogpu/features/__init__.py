@@ -9,3 +9,4 @@ from paretogpu.features.measure import EXPORT, MEASURE, REPORT
 
 COMMANDS = [MEASURE, REPORT, EXPORT, FRAME, COST, COMPARE, MATCOMPARE, MATSHADER, HOTSPOTS]
 BY_NAME = {c.name: c for c in COMMANDS}
+RESULT_KINDS = [c.result for c in COMMANDS if c.result]

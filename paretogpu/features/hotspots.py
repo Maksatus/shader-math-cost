@@ -6,18 +6,18 @@ statement by statement (core/ablation.py): its costliest parts with their pipes 
 reads, buffer reads in a light loop, sin, division, hash...), and the candidates for moving to the vertex shader
 (core/vertexmove.py). Dynamic loops at the frame's n.
 
-  run(frame_dir, top, core, jobs) -> JSON-able result (kind "hotspots"); write() -> <frame>/hotspots.html
+  run(frame_dir, top, core, jobs) -> JSON-able result (kind "hotspots"); RESULT: <frame>/hotspots.html
 """
 import json
 import os
 import time
 
 from paretogpu.app import ablation as ablation_run
+from paretogpu.app import results
 from paretogpu.core import ablation
 from paretogpu.core.pricing import LOOP_ITERS, loop_n
 from paretogpu.features.common import JOBS, fail, positive_int
-from paretogpu.features.spec import Arg, Command
-from paretogpu.views import html
+from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.views.reporter import CONSOLE
 
 VERTEX_SHARE = 0.25  # the vertex shader is ablated too when it is at least this part of the variant's cost
@@ -100,14 +100,6 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
             "shaders": items, "warnings": warn, "computed_at": time.time()}
 
 
-def render_html(res):
-    return html.render_result(res, f"Почему тяжёлые: {res['snapshot']}")
-
-
-def write(res, out_dir):
-    return html.write_result(res, out_dir, "hotspots", f"Почему тяжёлые: {res['snapshot']}")
-
-
 def run_command(args):
     try:
         res = run(args.frame, args.top, args.core, args.jobs)
@@ -131,9 +123,13 @@ def run_command(args):
                               f"({a['statements'][sid]['explain']['text']})" for sid in roots[:3]))
             if a.get("vertex_candidates"):
                 print(f"        to the vertex shader: {len(a['vertex_candidates'])} candidates")
-    print(f"-> {os.path.abspath(write(res, args.out or args.frame))}")
+    print(f"-> {os.path.abspath(results.publish(RESULT, res, args.out or args.frame, res['snapshot']))}")
     return 0
 
+
+RESULT = ResultKind("hotspots", lambda r: f"Почему тяжёлые: {r['snapshot']}",
+                    lambda r: {"core": r.get("core"), "frame_total": r.get("frame_total"),
+                               "shaders": [s.get("variant") for s in r.get("shaders") or []]})
 
 HOTSPOTS = Command(
     "hotspots", "why the heaviest shaders of a priced snapshot are heavy: every line of their GLES variant ablated "
@@ -145,4 +141,4 @@ HOTSPOTS = Command(
      JOBS,
      Arg("--out", help="output folder (default: the snapshot folder)")],
     run_command, phases=lambda v: ["ablation", "report"],
-    report=lambda v: os.path.join(v.get("out") or v["frame"], "hotspots.html"))
+    report=lambda v: os.path.join(v.get("out") or v["frame"], "hotspots.html"), result=RESULT)

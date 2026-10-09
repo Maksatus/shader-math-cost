@@ -8,17 +8,17 @@ priced at every n of NS (core/loops.py). No frame is needed: the result is the p
 
 Passes of A and B are paired by name, the rest in order (another shader may name its passes differently).
 
-  run(project, a, b, root, cores, ...) -> JSON-able result; render_html() puts it into views/templates/result_view.html
+  run(project, a, b, root, cores, ...) -> JSON-able result; RESULT: its page (views/templates/result_view.html)
 """
 import os
 
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import materials
+from paretogpu.app import results
 from paretogpu.core.materials import NS, apis_of, describe, pair_passes
 from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
-from paretogpu.features.spec import Arg, Command
+from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.store import workspace
-from paretogpu.views import html
 from paretogpu.views.reporter import CONSOLE
 
 
@@ -31,14 +31,6 @@ def run(project, a, b, root, cores, platforms=("gles3", "vulkan"), api="vulkan",
     sides = [describe(m, keys, prep["state"], cores, apis, ns) for m, keys in zip(prep["mats"], prep["keys"])]
     return {"kind": "materials", **materials.common(prep, sides, cores, api, apis, ns), "a": sides[0], "b": sides[1],
             "pairs": pair_passes([p["pass"] for p in sides[0]["passes"]], [p["pass"] for p in sides[1]["passes"]])}
-
-
-def render_html(res):
-    return html.render_result(res, f"Материалы: {res['a']['material']} → {res['b']['material']}")
-
-
-def write(res, out_dir):
-    return html.write_result(res, out_dir, "matcompare", f"Материалы: {res['a']['material']} → {res['b']['material']}")
 
 
 def run_command(args):
@@ -62,9 +54,16 @@ def run_command(args):
             if p and mc in p["prices"] else "-"
         print(f"{mc} {(pa or pb)['pass']}: pixel A {fmt(pa, 'px')}  B {fmt(pb, 'px')}; vertex A {fmt(pa, 'vtx')}  "
               f"B {fmt(pb, 'vtx')}  (cycles at n = {'/'.join(map(str, res['ns']))})")
-    print(f"-> {os.path.abspath(write(res, out))}")
+    print(f"-> {os.path.abspath(results.publish(RESULT, res, out))}")
     return 0
 
+
+def _material(m):
+    return {k: m.get(k) for k in ("material", "path", "shader")}
+
+
+RESULT = ResultKind("matcompare", lambda r: f"Материалы: {r['a']['material']} → {r['b']['material']}",
+                    lambda r: {"a": _material(r["a"]), "b": _material(r["b"])})
 
 MATCOMPARE = Command(
     "matcompare", "two materials of a Unity project against each other: their shader variants (material and pipeline "
@@ -84,4 +83,4 @@ MATCOMPARE = Command(
      Arg("--out", help="output folder (default: paretogpu/out/_matcompare/<time>)")],
     run_command, phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "report"],
     report=lambda v: os.path.join(v["out"], "matcompare.html"),
-    ui_values=lambda v: default_variants({**v, "out": workspace.new_result_dir("matcompare")}))
+    ui_values=lambda v: default_variants({**v, "out": workspace.new_result_dir("matcompare")}), result=RESULT)
