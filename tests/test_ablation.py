@@ -95,6 +95,32 @@ class Parse(unittest.TestCase):
         # the other output keeps nothing alive but itself
         self.assertEqual(dead[sid["SV_Target0.w = 1.0;"]], {sid["SV_Target0.w = 1.0;"]})
 
+    def test_statements_that_kill_each_other_have_no_cycle(self):
+        src = """#version 310 es
+in highp vec4 in_POSITION0;
+mediump float vs_TEXCOORD5;
+mediump vec3 vs_TEXCOORD8;
+void main()
+{
+    gl_Position = in_POSITION0 * 2.0;
+    vs_TEXCOORD5 = 0.0;
+    vs_TEXCOORD8.xyz = vec3(0.0, 0.0, 0.0);
+    return;
+}
+"""
+        p = ablation.parse(src, "vertex")
+        parent, _ = ablation.tree(p)
+        for sid in parent:
+            seen, x = set(), sid
+            while x is not None:
+                self.assertNotIn(x, seen)
+                seen.add(x)
+                x = parent.get(x)
+        texts = {s["id"]: s["text"] for s in p["statements"]}
+        five = next(i for i, t in texts.items() if t.startswith("vs_TEXCOORD5"))
+        eight = next(i for i, t in texts.items() if t.startswith("vs_TEXCOORD8"))
+        self.assertEqual(parent[eight], five)
+
     def test_ablated_source(self):
         p = ablation.parse(UNITY_LIKE)
         sid = next(s["id"] for s in p["statements"] if s["text"].startswith("u_xlat16_1.xyz = vec3"))

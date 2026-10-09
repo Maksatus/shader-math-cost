@@ -297,7 +297,8 @@ def dead_sets(p, users):
 
 def tree(p):
     """({statement id: parent id or None}, users): a statement's parent is the closest statement whose removal makes
-    it dead code (its immediate post-dominator towards the outputs); users: {statement: statements reading it}."""
+    it dead code (its immediate post-dominator towards the outputs); users: {statement: statements reading it}.
+    Statements that kill each other (the same dead code, e.g. two writes nothing reads) chain in source order."""
     edges = set()
     final = _flow(p["tree"], {}, p, edges)
     for key in p["outputs"]:
@@ -311,8 +312,9 @@ def tree(p):
     for s in p["statements"]:
         if s["type"] != "assign":
             continue
-        doms = [d for d, ds in dead.items() if d != s["id"] and s["id"] in ds]
-        parent[s["id"]] = min(doms, key=lambda d: len(dead[d])) if doms else None
+        doms = [d for d, ds in dead.items() if d != s["id"] and s["id"] in ds
+                and (d not in dead.get(s["id"], ()) or d < s["id"])]
+        parent[s["id"]] = min(doms, key=lambda d: (len(dead[d]), -d)) if doms else None
     return parent, users
 
 
