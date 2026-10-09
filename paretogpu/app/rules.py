@@ -4,7 +4,9 @@
   MeasureRule  (file, core) -> malioc's Measurement of the file on the core
   LoopRule     (file, core) -> LoopProfile: the file's dynamic loops forced to n = 0, 1, 2 and measured
 """
+import hashlib
 import os
+import threading
 
 from paretogpu.adapters import malioc as mali
 from paretogpu.adapters.unity import cli as unity
@@ -149,13 +151,48 @@ def api_of(path, api):
     return "vulkan" if path.endswith(mali.SPIRV_EXT) else api
 
 
+class _Hashes:
+    """sha1 of files, each read once (a file is measured on several cores)."""
+
+    def __init__(self, root):
+        self.root, self.done, self.lock = root, {}, threading.Lock()
+
+    def __call__(self, rel):
+        with self.lock:
+            h = self.done.get(rel)
+        if h is None:
+            with open(os.path.join(self.root, rel), "rb") as f:
+                h = hashlib.sha1(f.read()).hexdigest()
+            with self.lock:
+                self.done[rel] = h
+        return h
+
+
 class MeasureRule(Rule):
     """malioc on one file (relative to `root`) and one core: GLSL for `api`, SPIR-V always for Vulkan; the stage comes
-    from the extension. The value keeps whether it came from malioc's cache ("cached")."""
+    from the extension. The value keeps whether it came from a cache ("cached"); failures are not remembered."""
     phase = "measure"
+    memo = "measure/1"
 
     def __init__(self, root, api="gles", info=None):
         self.root, self.api, self.info = root, api, info or {}
+        self.hash = _Hashes(root)
+
+    def memo_key(self, key):
+        rel, core = key
+        try:
+            return f"{self.hash(rel)}|{core}|{api_of(rel, self.api)}|{mali.stage_of(rel)}|{mali.MALIOC}"
+        except OSError:
+            return None
+
+    def remember(self, value):
+        return bool(value.get("ok"))
+
+    def _hit(self, rel, value):
+        info = self.info.get(rel, {})
+        return {"file": rel, "root": os.path.abspath(self.root),
+                **{k: info[k] for k in ("shader", "pass", "keywords") if k in info},
+                **{k: v for k, v in value.items() if k not in ("file", "root", "shader", "pass", "keywords")}}
 
     def build_one(self, key) -> Measurement:
         rel, core = key
@@ -169,6 +206,9 @@ class MeasureRule(Rule):
         info = self.info.get(rel, {})
         return {"file": rel, "root": os.path.abspath(self.root),
                 **{k: info[k] for k in ("shader", "pass", "keywords") if k in info}, **r}
+
+    def from_memo(self, key, value):
+        return {**self._hit(key[0], value), "cached": True}
 
 
 def parametric(forced, api, stage, core, cache=mali.CACHE) -> LoopProfile | None:
@@ -193,19 +233,34 @@ def parametric(forced, api, stage, core, cache=mali.CACHE) -> LoopProfile | None
 
 class LoopRule(Rule):
     """The dynamic loops of a file forced to n = 0, 1, 2 iterations (core/loops.py) and measured on one core;
-    None when its loops cannot be forced (it is priced by total cycles then)."""
+    None when its loops cannot be forced (it is priced by total cycles then; not remembered)."""
     phase = "loops"
+    memo = "loops/1"
 
     def __init__(self, root):
         self.root = root
         self.forced = {}
+        self.locks = {}
+        self.lock = threading.Lock()
+        self.hash = _Hashes(root)
+
+    def memo_key(self, key):
+        fn, core = key
+        try:
+            return f"{self.hash(fn)}|{core}|{mali.stage_of(fn)}|{','.join(map(str, loops.NS))}|{mali.MALIOC}"
+        except OSError:
+            return None
+
+    def _forced(self, fn):
+        with self.lock:
+            lock = self.locks.setdefault(fn, threading.Lock())
+        with lock:
+            if fn not in self.forced:
+                src = mali.read_source(os.path.join(self.root, fn))
+                self.forced[fn] = [loops.force(src, n) for n in loops.NS]
+            return self.forced[fn]
 
     def build_one(self, key) -> LoopProfile | None:
         fn, core = key
         api = "vulkan" if fn.endswith(mali.SPIRV_EXT) else "gles"
-        return parametric(self.forced[fn], api, mali.stage_of(fn), core)
-
-    def force_files(self, files):
-        for fn in files:
-            src = mali.read_source(os.path.join(self.root, fn))
-            self.forced[fn] = [loops.force(src, n) for n in loops.NS]
+        return parametric(self._forced(fn), api, mali.stage_of(fn), core)

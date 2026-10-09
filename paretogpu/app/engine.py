@@ -2,9 +2,10 @@
 Mokhov, Mitchell, Peyton Jones).
 
 A Rule is one kind of artifact. Two kinds of rules:
-  keyed   every key is built on its own, in parallel, and is content-addressed: its key holds what it is made of
-          (a shader file's text, a core), the cache sits in the adapter (adapters/malioc.py), so there is nothing to
-          check: malioc runs, forced dynamic loops;
+  keyed   every key is built on its own, in parallel, and is content-addressed: memo_key(key) holds what it is made
+          of (the hash of a shader file's text, a core, malioc's version), so there is nothing to check: a value
+          remembered under that key (store/memo.py, kind = the rule's memo name with its version) is the value;
+          malioc runs, forced dynamic loops;
   batch   stored values are checked first (lookup: still valid for the current inputs?) and the missing ones are
           built in one go: the compiled variants (one Unity run compiles hundreds of them), whose inputs (the shader,
           its includes, Unity's defines) only the open editor can fingerprint.
@@ -13,7 +14,9 @@ A Rule is one kind of artifact. Two kinds of rules:
 """
 import concurrent.futures as cf
 import os
+import threading
 
+from paretogpu.store import memo as memo_store
 from paretogpu.views.reporter import CONSOLE
 
 MISSING = object()
@@ -22,6 +25,19 @@ MISSING = object()
 class Rule:
     phase = None   # the progress phase its builds report as
     keyed = True
+    memo = None    # keyed rules: the name and version their values are remembered under ("loops/1"), or None
+
+    def memo_key(self, key):
+        """What a keyed rule's value is made of, as a string (None: not remembered)."""
+        return None
+
+    def remember(self, value):
+        """Whether a built value may be remembered (not a failure that may go away)."""
+        return value is not None
+
+    def from_memo(self, key, value):
+        """The value of `key` from what was remembered (a rule may add what depends on the key, not the content)."""
+        return value
 
     def prepare(self, keys):
         """Before the lookups (batch rules): read the store, ask for the current inputs."""
@@ -55,9 +71,10 @@ class Rule:
 
 
 class Engine:
-    def __init__(self, rep=CONSOLE, jobs=None):
+    def __init__(self, rep=CONSOLE, jobs=None, memo=None):
         self.rep = rep
         self.jobs = jobs or os.cpu_count()
+        self.memo = memo
 
     def get(self, rule, keys):
         keys = list(dict.fromkeys(keys))
@@ -70,14 +87,27 @@ class Engine:
             return {}
         self.rep.phase(rule.phase, len(keys))
         tick = self.rep.counter(len(keys))
+        memo = (self.memo or memo_store.default()) if rule.memo else None
+        new, lock = [], threading.Lock()
 
         def one(k):
-            v = rule.build_one(k)
+            mk = memo and rule.memo_key(k)
+            v = memo.get(rule.memo, mk, MISSING) if mk else MISSING
+            if v is not MISSING:
+                v = rule.from_memo(k, v)
+            else:
+                v = rule.build_one(k)
+                if mk and rule.remember(v):
+                    with lock:
+                        new.append((mk, v))
             tick()
             return v
 
         with cf.ThreadPoolExecutor(self.jobs) as ex:
-            return dict(zip(keys, ex.map(one, keys)))
+            values = dict(zip(keys, ex.map(one, keys)))
+        if memo:
+            memo.put_many(rule.memo, new)
+        return values
 
     def _batch(self, rule, keys):
         rule.prepare(keys)

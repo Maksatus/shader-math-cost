@@ -13,6 +13,7 @@ from unittest import mock
 from paretogpu.app import rules, variants
 from paretogpu.app.engine import MISSING, Engine, Rule
 from paretogpu.model.variant import VariantKey
+from paretogpu.store.memo import Memo
 from paretogpu.views.reporter import Reporter
 
 
@@ -62,6 +63,20 @@ class Keyed(Rule):
         return key * key
 
 
+class Remembered(Keyed):
+    memo = "square/1"
+
+    def __init__(self):
+        self.built = []
+
+    def memo_key(self, key):
+        return str(key)
+
+    def build_one(self, key):
+        self.built.append(key)
+        return None if key < 0 else key * key
+
+
 class EngineTest(unittest.TestCase):
     def test_batch_builds_only_what_is_missing(self):
         rep = Recorder()
@@ -84,6 +99,19 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(Engine(rep, jobs=4).get(Keyed(), [3, 1, 3, 2]), {3: 9, 1: 1, 2: 4})
         self.assertEqual(rep.events, [("phase", "square", 3)])
         self.assertEqual(Engine(rep).get(Keyed(), []), {})
+
+    def test_keyed_values_are_remembered(self):
+        d = tempfile.mkdtemp()
+        memo = Memo(os.path.join(d, "memo.sqlite"))
+        try:
+            first, second = Remembered(), Remembered()
+            self.assertEqual(Engine(Recorder(), memo=memo).get(first, [2, 3, -1]), {2: 4, 3: 9, -1: None})
+            self.assertEqual(Engine(Recorder(), memo=memo).get(second, [2, 3, -1, 5]), {2: 4, 3: 9, -1: None, 5: 25})
+            self.assertEqual(sorted(first.built), [-1, 2, 3])
+            self.assertEqual(sorted(second.built), [-1, 5])
+        finally:
+            memo.close()
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class MeasureOnlyRequestedTest(unittest.TestCase):

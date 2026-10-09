@@ -10,9 +10,10 @@ and uniform computation. Longest path cycles are None when malioc reports N/A
 malioc: the newest installed Arm Performance Studio (find_malioc(); MALIOC overrides it). The cache key holds the
 malioc path, which holds the Studio version, so a new version never reads results of an old one.
 
-Cache entries written by the old bench/run.py (v2) hold only the parsed main
-variant; they are still served to callers that need just that (run.py), and
-recompiled when the raw JSON is needed.
+The cache is one SQLite file, <cache>/malioc.sqlite (WAL: many threads and processes read and write it at once),
+the entries compressed. Entries of the older cache, one JSON file per key in the same folder, are moved into it the
+first time they are asked for. Entries written by the old bench/run.py (v2) hold only the parsed main variant; they
+are still served to callers that need just that (run.py), and recompiled when the raw JSON is needed.
 """
 import atexit
 import glob
@@ -21,10 +22,12 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
 import time
+import zlib
 
 from paretogpu.model import cores as core_names
 from paretogpu.model.errors import ParetoError
@@ -207,51 +210,101 @@ def _key_lock(key):
         return _key_locks.setdefault(key, threading.Lock())
 
 
-def _read_cache(cpath):
-    """Cache entry or None. On Windows a file being replaced by another process
-    cannot be opened for a moment: retry, then treat it as a miss."""
-    for attempt in range(5):
+class _Cache:
+    """<folder>/malioc.sqlite: key -> zlib-compressed JSON entry; a miss looks for the older <folder>/<key>.json."""
+
+    def __init__(self, folder):
+        self.folder = folder
+        self.path = os.path.join(folder, "malioc.sqlite")
+        self.tls = threading.local()
+        self.conns = []
+        self.lock = threading.Lock()
+        os.makedirs(folder, exist_ok=True)
+        db = sqlite3.connect(self.path, timeout=60)
         try:
-            with open(cpath, encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return None
-        except (PermissionError, json.JSONDecodeError):
-            time.sleep(0.05 * (attempt + 1))
-    return None
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
+            db.commit()
+        finally:
+            db.close()
+
+    def _db(self):
+        db = getattr(self.tls, "db", None)
+        if db is None:
+            db = self.tls.db = sqlite3.connect(self.path, timeout=60, check_same_thread=False)
+            db.execute("PRAGMA synchronous=NORMAL")
+            with self.lock:
+                self.conns.append(db)
+        return db
+
+    def close(self):
+        with self.lock:
+            for db in self.conns:
+                db.close()
+            self.conns = []
+
+    def get(self, key):
+        row = self._db().execute("SELECT value FROM entries WHERE key = ?", (key,)).fetchone()
+        if row:
+            return json.loads(zlib.decompress(row[0]))
+        old = self._read_file(os.path.join(self.folder, key + ".json"))
+        if old is not None:
+            self.put(key, old)
+        return old
+
+    def put(self, key, entry):
+        db = self._db()
+        db.execute("INSERT OR REPLACE INTO entries (key, value) VALUES (?, ?)",
+                   (key, zlib.compress(json.dumps(entry).encode("utf-8"), 6)))
+        db.commit()
+
+    @staticmethod
+    def _read_file(path):
+        """An entry of the older file cache, or None. On Windows a file being replaced by another process cannot be
+        opened for a moment: retry, then treat it as a miss."""
+        for attempt in range(5):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            except FileNotFoundError:
+                return None
+            except (PermissionError, json.JSONDecodeError):
+                time.sleep(0.05 * (attempt + 1))
+        return None
+
+
+_caches = {}
+_caches_guard = threading.Lock()
+
+
+def _cache(folder):
+    folder = os.path.abspath(folder)
+    with _caches_guard:
+        if folder not in _caches:
+            _caches[folder] = _Cache(folder)
+            atexit.register(_caches[folder].close)
+        return _caches[folder]
 
 
 def compile(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE, need_raw=False):
     """Cached malioc run. Returns {"ok": True, cycles, short, bound, props, driver[, raw][, cached]}
     or {"ok": False, "error": text}; failures are not cached.
     need_raw: recompile old cache entries that lack the raw JSON."""
-    os.makedirs(cache, exist_ok=True)
+    store = _cache(cache)
     key = cache_key(src, core, api, stage, malioc)
     # variants with identical sources share the key: one thread compiles, the others wait and read
     with _key_lock(key):
-        return _compile_locked(src, core, api, stage, malioc, cache, need_raw,
-                               os.path.join(cache, key + ".json"))
-
-
-def _compile_locked(src, core, api, stage, malioc, cache, need_raw, cpath):
-    res = _read_cache(cpath)
-    if res and res.get("v") in LEGACY_VERSIONS and (res.get("raw") or not need_raw):
-        res["cached"] = True
+        res = store.get(key)
+        if res and res.get("v") in LEGACY_VERSIONS and (res.get("raw") or not need_raw):
+            res["cached"] = True
+            return res
+        try:
+            j = _strip(run_malioc(src, core, api, stage, malioc))
+        except MaliocError as e:
+            return {"ok": False, "error": str(e)}
+        res = {"v": CACHE_VERSION, "ok": True, **_legacy(j), "raw": j}
+        store.put(key, res)
         return res
-    try:
-        j = _strip(run_malioc(src, core, api, stage, malioc))
-    except MaliocError as e:
-        return {"ok": False, "error": str(e)}
-    res = {"v": CACHE_VERSION, "ok": True, **_legacy(j), "raw": j}
-    tmp = cpath + f".{threading.get_ident()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(res, f)
-    try:
-        os.replace(tmp, cpath)
-    except PermissionError:
-        # Windows: another process is reading or writing the same entry; the result is the same
-        os.remove(tmp)
-    return res
 
 
 def _cycles(perf, key):

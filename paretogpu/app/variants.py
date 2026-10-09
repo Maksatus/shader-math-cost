@@ -67,9 +67,7 @@ def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
         rep.skip("loops")
         return {}
     rep.log(f"pricing dynamic loops of {len(dyn)} files at n = {', '.join(map(str, loops.NS))} ...")
-    rule = LoopRule(root)
-    rule.force_files(dyn)
-    res = Engine(rep, jobs).get(rule, [(fn, c) for fn in dyn for c in cores])
+    res = Engine(rep, jobs).get(LoopRule(root), [(fn, c) for fn in dyn for c in cores])
     out = {fn: {} for fn in dyn}
     for (fn, core), p in res.items():
         if p:
