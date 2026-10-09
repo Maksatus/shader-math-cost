@@ -3,19 +3,19 @@
 // "Compile and show code" (ParetoGpuExport.cs) would include them.
 //
 // Used by `python -m paretogpu cost` (app/variants.py):
-//   unity command run_script --file ParetoGpuVariants.cs --entry ParetoGpuVariants.Run --args '["<config.json>"]'
+//   adapters/unity/bridge.py call(..., "ParetoGpuVariants.cs", "Run", <out>, "variants", ...)
 //
-// config.json: one entry per variant in parallel arrays (JsonUtility in a run_script assembly reads arrays of
+// config: one entry per variant in parallel arrays (JsonUtility in a run_script assembly reads arrays of
 // strings and numbers, not arrays of this script's classes); keywords are space separated, id = array index:
 //   {"shaders": ["Custom/Lit"], "subshaders": [0], "pass_indices": [0], "passes": ["Forward Opaque"],
-//    "keywords": ["_EMISSION _NORMALMAP"], "platforms": ["gles3", "vulkan"], "out": "<absolute folder>"}
+//    "keywords": ["_EMISSION _NORMALMAP"], "platforms": ["gles3", "vulkan"]} (and the job's "out", "name")
 // Compute kernels (subshader -1) are refused: ComputeShader.FindKernel / HasKernel and the internal
 // ShaderUtil.CompileComputeShaderVariant crashed the 6000.3.18f1 editor when called from here.
 // Writes <out>/<id>_<platform>_<vert|frag>.bin (GLSL text for gles3, SPIR-V binary for vulkan: what
-// ShaderData.Pass.CompileVariant(..., forExternalTool: true) returns for Android) and <out>/variants_result.json
-// with the fingerprint of every variant's shader (see Fingerprint).
+// ShaderData.Pass.CompileVariant(..., forExternalTool: true) returns for Android) as it goes ("variants i/n" in
+// the job's progress) and answers with the fingerprint of every variant's shader (see Fingerprint).
 //
-// Fingerprints entry: config {"shaders": [...], "out": "<file.json>"} -> {"unity": ..., "shaders": {name: fingerprint}}
+// Fingerprints entry: config {"shaders": [...]} -> {"unity": ..., "shaders": {name: fingerprint}}
 // without compiling anything; app/variants.py compares them with the fingerprints stored next to the compiled
 // files and compiles a variant again when its shader, an include or package it depends on, the Unity version or
 // the Android platform defines changed.
@@ -51,7 +51,6 @@ public static class ParetoGpuVariants
         public string[] passes = new string[0];
         public string[] keywords = new string[0];
         public string[] platforms = { "gles3", "vulkan" };
-        public string @out = "";
     }
 
     static readonly Dictionary<string, ShaderCompilerPlatform> Platforms = new Dictionary<string, ShaderCompilerPlatform>
@@ -64,8 +63,7 @@ public static class ParetoGpuVariants
 
     public static string Run(string configPath)
     {
-        var cfg = JsonUtility.FromJson<Config>(File.ReadAllText(configPath));
-        Directory.CreateDirectory(cfg.@out);
+        var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         var byName = new Dictionary<string, Shader>();
         var lines = new List<string>();
         var variants = Enumerable.Range(0, cfg.shaders.Length).Select(i => new Variant
@@ -113,7 +111,7 @@ public static class ParetoGpuVariants
                             continue;
                         }
                         var fn = $"{v.id}_{plat}_{ext}.bin";
-                        File.WriteAllBytes(Path.Combine(cfg.@out, fn), r.ShaderData);
+                        File.WriteAllBytes(Path.Combine(ParetoGpuJob.Folder, fn), r.ShaderData);
                         files.Add($"{{\"platform\": {Str(plat)}, \"stage\": {Str(ext)}, \"file\": {Str(fn)}}}");
                     }
                 }
@@ -126,25 +124,24 @@ public static class ParetoGpuVariants
             }
             lines.Add($"{{\"id\": {v.id}, \"files\": [{string.Join(", ", files)}], " +
                       $"\"fingerprint\": {Str(fingerprint)}, \"errors\": [{string.Join(", ", errors.Select(Str))}]}}");
+            ParetoGpuJob.Progress($"variants {v.id + 1}/{variants.Count}");
         }
-        var json = "{\"unity\": " + Str(Application.unityVersion) + ", \"variants\": [\n " + string.Join(",\n ", lines) + "]}\n";
-        File.WriteAllText(Path.Combine(cfg.@out, "variants_result.json"), json);
-        return "ok " + variants.Count;
+        return ParetoGpuJob.Done("{\"unity\": " + Str(Application.unityVersion) + ", \"variants\": [\n " +
+                                 string.Join(",\n ", lines) + "]}\n");
     }
 
     [Serializable]
     class FingerprintConfig
     {
         public string[] shaders = new string[0];
-        public string @out = "";
     }
 
-    // Passes entry: config {"shaders": [...], "out": "<file.json>"} -> {"shaders": {name: [{"subshader", "pass_index",
+    // Passes entry: config {"shaders": [...]} -> {"shaders": {name: [{"subshader", "pass_index",
     // "pass", "light_mode"}] or null}}: the passes of shaders no frame snapshot has drawn (the project shaders tab
     // of the frame report picks their color passes by LightMode). Nothing is compiled.
     public static string Passes(string configPath)
     {
-        var cfg = JsonUtility.FromJson<FingerprintConfig>(File.ReadAllText(configPath));
+        var cfg = JsonUtility.FromJson<FingerprintConfig>(ParetoGpuJob.Open(configPath));
         var byName = new Dictionary<string, Shader>();
         var items = new List<string>();
         foreach (var name in cfg.shaders.Distinct())
@@ -166,9 +163,8 @@ public static class ParetoGpuVariants
             }
             items.Add($"{Str(name)}: [{string.Join(", ", passes)}]");
         }
-        File.WriteAllText(cfg.@out, "{\"unity\": " + Str(Application.unityVersion) + ", \"shaders\": {\n " +
-                                    string.Join(",\n ", items) + "}}\n");
-        return "ok " + items.Count;
+        return ParetoGpuJob.Done("{\"unity\": " + Str(Application.unityVersion) + ", \"shaders\": {\n " +
+                                 string.Join(",\n ", items) + "}}\n");
     }
 
     // Shader.FindPassTagValue(subshader, pass, "LightMode") through reflection (the 3-argument overload is not in
@@ -193,16 +189,15 @@ public static class ParetoGpuVariants
 
     public static string Fingerprints(string configPath)
     {
-        var cfg = JsonUtility.FromJson<FingerprintConfig>(File.ReadAllText(configPath));
+        var cfg = JsonUtility.FromJson<FingerprintConfig>(ParetoGpuJob.Open(configPath));
         var byName = new Dictionary<string, Shader>();
         var items = cfg.shaders.Distinct().Select(name =>
         {
             var shader = Find(name, byName);
             return $"{Str(name)}: {Str(shader == null ? null : Fingerprint(shader))}";
         });
-        File.WriteAllText(cfg.@out, "{\"unity\": " + Str(Application.unityVersion) + ", \"shaders\": {\n " +
-                                    string.Join(",\n ", items) + "}}\n");
-        return "ok " + cfg.shaders.Length;
+        return ParetoGpuJob.Done("{\"unity\": " + Str(Application.unityVersion) + ", \"shaders\": {\n " +
+                                 string.Join(",\n ", items) + "}}\n");
     }
 
     // What the compiled code of a shader depends on: the Unity version, the Android platform defines and the color
@@ -260,17 +255,5 @@ public static class ParetoGpuVariants
     }
 
     // JsonUtility does not serialize lists of this script's own types in a run_script assembly: JSON by hand
-    static string Str(string v)
-    {
-        if (v == null)
-            return "null";
-        var sb = new StringBuilder("\"");
-        foreach (var c in v)
-        {
-            if (c == '"' || c == '\\') sb.Append('\\').Append(c);
-            else if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
-            else sb.Append(c);
-        }
-        return sb.Append('"').ToString();
-    }
+    static string Str(string v) => ParetoGpuJob.Str(v);
 }

@@ -31,7 +31,7 @@ def _es31(platform, data):
 
 def recover(root):
     """A Unity run that did not finish (the editor crashed or the connection broke) leaves its compiled files in
-    <root>/_compiled without variants_result.json: place what is there. Returns {key: [errors]} or None."""
+    <root>/_compiled without its answer: place what is there. Returns {key: [errors]} or None."""
     raw = store.raw_dir(root)
     found = unity_variants.unfinished_run(raw)
     if not found:

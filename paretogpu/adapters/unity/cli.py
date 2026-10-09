@@ -1,7 +1,7 @@
-"""Unity: the editor of a project, Unity CLI (com.unity.pipeline) and the C# scripts run in the open editor.
+"""Unity: the editor of a project and Unity CLI (com.unity.pipeline); bridge.py runs the C# scripts of cs/ in it.
 
   editor_ready(project)  the open editor answers Unity CLI and is idle
-  run_script(...)        `unity command run_script` of one of cs/*.cs in that editor
+  cli_json(args)         a Unity CLI command: its JSON answer
   unity_exe(project)     Unity.exe of the project's version (batchmode)
 """
 import json
@@ -19,11 +19,6 @@ HUB_EDITORS = r"C:\Program Files\Unity\Hub\Editor"
 
 class UnityError(ParetoError):
     code = "unity"
-
-
-def script(name):
-    """Absolute path of a C# script of cs/ (Unity resolves relative paths from its project)."""
-    return os.path.join(CS, name)
 
 
 def unity_cli():
@@ -82,16 +77,6 @@ def cli_json(args, timeout):
         return {"success": False, "errors": [{"message": (r.stdout + r.stderr).strip()[-2000:]}]}
 
 
-def run_script(project, path, entry, args, timeout_ms, wait, timeout=None):
-    """`unity command run_script` of the C# file `path` in the open editor of `project`: its JSON answer.
-    timeout_ms: how long the editor may run the entry; wait: seconds this process waits for the CLI."""
-    cmd = ["command", "run_script", "--project-path", project]
-    if timeout is not None:
-        cmd += ["--timeout", str(timeout)]
-    cmd += ["--timeout_ms", str(timeout_ms), "--file", path, "--entry", entry, "--args", json.dumps(args)]
-    return cli_json(cmd, wait)
-
-
 def editor_ready(project, allow_play=False):
     """The project's editor answers Unity CLI and is idle (or in Play Mode, if allow_play)."""
     if not unity_cli():
@@ -103,14 +88,3 @@ def editor_ready(project, allow_play=False):
     res = ((d.get("data") or {}).get("result") or {}) if d.get("success") else {}
     ok = ("ready", "playing", "paused") if allow_play else ("ready",)
     return res.get("status") in ok and not res.get("compiling") and not res.get("domainReloadInProgress")
-
-
-def errors_of(d):
-    return "; ".join(e.get("message", "") for e in d.get("errors") or []) or json.dumps(d)[:2000]
-
-
-def code_of(d):
-    """The error code of a failed Unity CLI answer (model/errors.py), or None for the error's own."""
-    if "No Pipeline instance found" in json.dumps(d):
-        return "unity_cli_off"
-    return None

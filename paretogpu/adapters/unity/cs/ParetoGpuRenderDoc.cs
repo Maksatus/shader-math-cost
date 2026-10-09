@@ -1,15 +1,15 @@
 // RenderDoc capture of the Game view (plan item K1.3: the reference for the pixel counts).
 //
-// Used by `python -m paretogpu renderdoc`:
-//   unity command run_script --file ParetoGpuRenderDoc.cs --entry ParetoGpuRenderDoc.Start --args '["<config.json>"]'
+// Used by `python -m paretogpu frame`:
+//   adapters/unity/bridge.py call(..., "ParetoGpuRenderDoc.cs", "Start", <out>, "renderdoc", ...)
 // Needs RenderDoc loaded into the editor (Game tab menu -> Load RenderDoc). Start() pauses Play Mode if asked,
 // enables the Frame Debugger at its last event (it re-renders the whole game frame inside the Game view repaint)
 // and records that repaint like the Game view RenderDoc button; the Frame Debugger is restored after. The Frame
 // Debugger is driven through FrameDebuggerUtility alone (as its window does), no window is opened.
-// Writes <out>/renderdoc.json: {"capture": "<new .rdc>"}.
-// Pause() / Resume() (entry points) set the pause state.
+// Answers {"capture": "<new .rdc>", "bytes", "was_paused"} (cs/ParetoGpuJob.cs: <out>/renderdoc.json).
+// Pause() (an entry point outside the job protocol) sets the pause state.
 //
-// config.json: {"out": "<absolute folder>", "pause": true}
+// config: {"pause": true}
 
 using System;
 using System.IO;
@@ -23,7 +23,6 @@ public static class ParetoGpuRenderDoc
     [Serializable]
     class Config
     {
-        public string @out = "";
         public bool pause = true;
     }
 
@@ -81,18 +80,15 @@ public static class ParetoGpuRenderDoc
 
     public static string Start(string configPath)
     {
-        var cfg = JsonUtility.FromJson<Config>(File.ReadAllText(configPath));
-        outDir = cfg.@out;
-        Directory.CreateDirectory(outDir);
-        foreach (var f in new[] { "renderdoc.json", "renderdoc.error" })
-            if (File.Exists(Path.Combine(outDir, f))) File.Delete(Path.Combine(outDir, f));
+        var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
+        outDir = ParetoGpuJob.Folder;
         rd = typeof(EditorWindow).Assembly.GetType("UnityEditorInternal.RenderDoc");
         if (rd == null || !(bool)rd.GetMethod("IsLoaded", S, null, Type.EmptyTypes, null).Invoke(null, null))
-            return Fail("RenderDoc is not loaded: Game tab menu -> Load RenderDoc");
+            return ParetoGpuJob.Fail("renderdoc", "RenderDoc is not loaded: Game tab menu -> Load RenderDoc");
         var gvType = typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView");
         gameView = Resources.FindObjectsOfTypeAll(gvType).FirstOrDefault() as EditorWindow;
         if (gameView == null)
-            return Fail("no Game view");
+            return ParetoGpuJob.Fail("no_frame", "no Game view: open the Game tab");
         pauseAfter = cfg.pause;
         fdOn = false;
         wasPaused = EditorApplication.isPaused;
@@ -143,7 +139,13 @@ public static class ParetoGpuRenderDoc
                 SceneRepaintDirty();
                 gameView.Repaint();
                 int n = FdCount();
-                if (n == 0 || ticks < 10) { if (ticks > 600) throw new Exception("the Frame Debugger did not capture a frame"); return; }
+                if (n == 0 || ticks < 10)
+                {
+                    if (ticks > 600)
+                        throw new ParetoGpuJob.Failure("no_frame", "the Frame Debugger did not capture a frame: enter Play " +
+                                                       "Mode and make the Game view visible");
+                    return;
+                }
                 // A Frame Debugger already at its last event does not replay the frame: the repaint only blits its
                 // cached image and the capture holds the editor UI alone. One event back now, the last one in
                 // state 1: the limit changes, so the captured repaint replays the whole frame.
@@ -181,29 +183,23 @@ public static class ParetoGpuRenderDoc
                 .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
             if (cap == null)
             {
-                if (ticks > 600) throw new Exception("no new .rdc capture found in " + string.Join(", ", dirs));
+                if (ticks > 600) throw new ParetoGpuJob.Failure("renderdoc", "no new .rdc capture found in " + string.Join(", ", dirs));
                 return;
             }
             EditorApplication.update -= Tick;
             RestoreFrameDebugger();
             RestoreTemplate();
             File.WriteAllText(Path.Combine(outDir, "renderdoc.frames"), $"frame debugger events {frame}");
-            File.WriteAllText(Path.Combine(outDir, "renderdoc.json"),
-                "{\"capture\": \"" + cap.FullName.Replace("\\", "\\\\") + "\", \"bytes\": " + cap.Length + ", \"was_paused\": " + (wasPaused ? "true" : "false") + "}");
+            ParetoGpuJob.Done("{\"capture\": " + ParetoGpuJob.Str(cap.FullName) + ", \"bytes\": " + cap.Length +
+                              ", \"was_paused\": " + (wasPaused ? "true" : "false") + "}");
         }
         catch (Exception e)
         {
             EditorApplication.update -= Tick;
             RestoreFrameDebugger();
             RestoreTemplate();
-            File.WriteAllText(Path.Combine(outDir, "renderdoc.error"), (e.InnerException ?? e).ToString());
+            ParetoGpuJob.Fail(e);
         }
-    }
-
-    static string Fail(string msg)
-    {
-        File.WriteAllText(Path.Combine(outDir, "renderdoc.error"), msg);
-        return "error: " + msg;
     }
 
     // RENDERDOC_API_1_6_0 is a table of function pointers (renderdoc_app.h): entry 11 SetCaptureFilePathTemplate,

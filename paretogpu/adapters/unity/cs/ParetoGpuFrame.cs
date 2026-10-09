@@ -1,7 +1,7 @@
 // Frame snapshot through the Frame Debugger (plan items K1.1, K1.2).
 //
 // Used by `python -m paretogpu frame`:
-//   unity command run_script --file ParetoGpuFrame.cs --entry ParetoGpuFrame.Start --args '["<config.json>"]'
+//   adapters/unity/bridge.py call(..., "ParetoGpuFrame.cs", "Start", <out>, "frame", ...)
 // Start() returns at once; the snapshot runs on EditorApplication.update: enable the Frame Debugger (if it is
 // off), wait for the captured frame, then replay it event by event (limit = i + 1) and read each event's data.
 // The result goes to <out>/frame.json, progress to <out>/frame.progress; the Frame Debugger is restored after.
@@ -15,7 +15,7 @@
 // pause Play Mode, SetEnabled(true, ProfilerDriver.connectedProfiler); a new limit: limit = n and a scene repaint;
 // DisableFrameDebugger: SetEnabled(false, GetRemotePlayerGUID())); no window is opened.
 //
-// config.json: {"out": "<absolute folder>", "max_events": 0}
+// config: {"max_events": 0} (and the job's "out", "name": cs/ParetoGpuJob.cs)
 
 using System;
 using System.Collections;
@@ -32,7 +32,6 @@ public static class ParetoGpuFrame
     [Serializable]
     class Config
     {
-        public string @out = "";
         public int max_events = 0;
     }
 
@@ -40,7 +39,6 @@ public static class ParetoGpuFrame
     const BindingFlags I = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
     static Type util, dataType;
-    static string outDir;
     static int maxEvents, state, index, count, waited, stable, lastCount;
     static bool wasEnabled, wasPaused;
     static int wasLimit;
@@ -53,20 +51,16 @@ public static class ParetoGpuFrame
 
     public static string Start(string configPath)
     {
-        var cfg = JsonUtility.FromJson<Config>(File.ReadAllText(configPath));
-        outDir = cfg.@out;
+        var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         maxEvents = cfg.max_events;
-        Directory.CreateDirectory(outDir);
-        foreach (var f in new[] { "frame.json", "frame.progress", "frame.error" })
-            if (File.Exists(Path.Combine(outDir, f))) File.Delete(Path.Combine(outDir, f));
 
         util =AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("UnityEditorInternal.FrameDebuggerInternal.FrameDebuggerUtility"))
             .FirstOrDefault(t => t != null);
         dataType = util?.Assembly.GetType("UnityEditorInternal.FrameDebuggerInternal.FrameDebuggerEventData");
         if (util == null || dataType == null)
-            return Fail("FrameDebuggerUtility not found in this Unity version");
+            return ParetoGpuJob.Fail("error", "FrameDebuggerUtility not found in this Unity version");
         if (!(bool)Prop("locallySupported"))
-            return Fail("Frame Debugger is not supported for the current graphics API");
+            return ParetoGpuJob.Fail("error", "Frame Debugger is not supported for the current graphics API");
 
         wasEnabled = (int)Prop("count") > 0;  // a disabled Frame Debugger has no events
         // enabling the Frame Debugger pauses Play Mode and the replay moves the limit: both are set back in Stop()
@@ -107,8 +101,8 @@ public static class ParetoGpuFrame
                 EditorApplication.QueuePlayerLoopUpdate();
                 SceneRepaintDirty();
                 if (EditorApplication.timeSinceStartup - started > 60)
-                    throw new Exception("the Frame Debugger did not capture a frame in 60 s: make the Game view visible " +
-                                        "(or enter Play Mode) and retry");
+                    throw new ParetoGpuJob.Failure("no_frame", "the Frame Debugger did not capture a frame in 60 s: make " +
+                                                   "the Game view visible (or enter Play Mode) and retry");
                 int c = (int)Prop("count");
                 stable = c > 0 && c == lastCount ? stable + 1 : 0;
                 lastCount = c;
@@ -138,7 +132,7 @@ public static class ParetoGpuFrame
         catch (Exception e)
         {
             Stop();
-            File.WriteAllText(Path.Combine(outDir, "frame.error"), (e.InnerException ?? e).ToString());
+            ParetoGpuJob.Fail(e);
         }
     }
 
@@ -158,8 +152,7 @@ public static class ParetoGpuFrame
           .Append(", \"seconds\": ").Append((EditorApplication.timeSinceStartup - started).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
           .Append(",\n \"events\": [\n").Append(string.Join(",\n", events)).Append("\n]}\n");
         Stop();
-        File.WriteAllText(Path.Combine(outDir, "frame.json"), sb.ToString());
-        Progress("done");
+        ParetoGpuJob.Done(sb.ToString());
     }
 
     static void Stop()
@@ -285,25 +278,7 @@ public static class ParetoGpuFrame
         return m.Invoke(null, args);
     }
 
-    static void Progress(string s) => File.WriteAllText(Path.Combine(outDir, "frame.progress"), s);
+    static void Progress(string s) => ParetoGpuJob.Progress(s);
 
-    static string Fail(string msg)
-    {
-        File.WriteAllText(Path.Combine(outDir, "frame.error"), msg);
-        return "error: " + msg;
-    }
-
-    static string Str(string v)
-    {
-        if (v == null)
-            return "null";
-        var sb = new StringBuilder("\"");
-        foreach (var c in v)
-        {
-            if (c == '"' || c == '\\') sb.Append('\\').Append(c);
-            else if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
-            else sb.Append(c);
-        }
-        return sb.Append('"').ToString();
-    }
+    static string Str(string v) => ParetoGpuJob.Str(v);
 }

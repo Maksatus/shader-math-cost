@@ -8,8 +8,8 @@ then splits the result with split.py:
 
 How Unity is reached (mode="auto"):
   1. the project is open in an editor and Unity CLI (com.unity.pipeline) answers ->
-     `unity command run_script` in that editor: nothing is written to the project;
-  2. the project is not open -> Unity.exe -batchmode -executeMethod; the script is
+     bridge.py in that editor: nothing is written to the project;
+  2. the project is not open -> Unity.exe -batchmode -executeMethod; the script (as bridge.py builds it) is
      copied into Assets/Editor for the run and removed afterwards;
   3. the project is open but the editor does not answer -> error.
 """
@@ -19,11 +19,12 @@ import shutil
 import subprocess
 import time
 
+from paretogpu.adapters.unity import bridge
 from paretogpu.adapters.unity import split as split_unity
-from paretogpu.adapters.unity.cli import (UnityError, code_of, editor_ready, errors_of, project_open, run_script,
-                                         script, unity_exe)
+from paretogpu.adapters.unity.cli import UnityError, editor_ready, project_open, unity_exe
 
-SCRIPT = script("ParetoGpuExport.cs")
+SCRIPT = "ParetoGpuExport.cs"
+JOB = "export"
 TEMP_DIR = "ParetoGpuExportTemp"  # Assets/Editor/<this> during a batchmode run
 
 
@@ -31,17 +32,12 @@ class ExportError(UnityError):
     code = "export"
 
 
-def run_in_editor(project, config, timeout):
-    d = run_script(project, SCRIPT, "ParetoGpuExport.Run", [config], timeout * 1000, timeout + 60, timeout)
-    res = (d.get("data") or {}).get("result") or {}
-    if not d.get("success") or not res.get("success"):
-        diag = "; ".join(str(x) for x in res.get("diagnostics") or [])
-        raise ExportError(f"run_script failed: {diag or errors_of(d)}", code_of(d))
-    return json.loads(res["result"])
-
-
 def run_batch(project, config, out, timeout):
+    """The export in Unity.exe -batchmode: the job protocol of bridge.py without Unity CLI."""
     exe = unity_exe(project)
+    path = os.path.join(out, f"{JOB}_config.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({**config, "out": out, "name": JOB}, f, indent=1)
     editor_dir = os.path.join(project, "Assets", "Editor")
     tmp = os.path.join(editor_dir, TEMP_DIR)
     created_editor = not os.path.exists(editor_dir)
@@ -50,10 +46,10 @@ def run_batch(project, config, out, timeout):
     os.makedirs(tmp)
     log = os.path.join(out, "unity_batch.log")
     try:
-        shutil.copy(SCRIPT, tmp)
+        shutil.copy(bridge.source(SCRIPT), tmp)
         try:
             r = subprocess.run([exe, "-batchmode", "-quit", "-projectPath", project,
-                                "-executeMethod", "ParetoGpuExport.Batch", "-paretogpuConfig", config,
+                                "-executeMethod", "ParetoGpuExport.Batch", "-paretogpuConfig", path,
                                 "-logFile", log], timeout=timeout)
         except subprocess.TimeoutExpired:
             raise ExportError(f"Unity did not finish in {timeout} s, see {log}") from None
@@ -65,9 +61,11 @@ def run_batch(project, config, out, timeout):
                 os.remove(p)
         if created_editor and os.path.isdir(editor_dir) and not os.listdir(editor_dir):
             os.rmdir(editor_dir)
-    result = os.path.join(out, "export.json")
+    result = os.path.join(out, f"{JOB}.json")
+    if os.path.exists(os.path.join(out, f"{JOB}.error")):
+        raise bridge.failure(os.path.join(out, f"{JOB}.error"), ExportError)
     if not os.path.exists(result):
-        raise ExportError(f"Unity exited with code {r.returncode} without export.json, see {log}")
+        raise ExportError(f"Unity exited with code {r.returncode} without {JOB}.json, see {log}")
     with open(result, encoding="utf-8") as f:
         return json.load(f)
 
@@ -84,9 +82,7 @@ def export(project, shaders, out, platforms=("gles3", "vulkan"), mode="auto", ti
     for fn in os.listdir(raw):
         if os.path.isfile(os.path.join(raw, fn)):
             os.remove(os.path.join(raw, fn))
-    config = os.path.join(raw, "config.json")
-    with open(config, "w", encoding="utf-8") as f:
-        json.dump({"shaders": list(shaders), "platforms": list(platforms), "out": raw}, f, indent=1)
+    config = {"shaders": list(shaders), "platforms": list(platforms)}
 
     if mode == "auto":
         if editor_ready(project):
@@ -98,7 +94,10 @@ def export(project, shaders, out, platforms=("gles3", "vulkan"), mode="auto", ti
             mode = "batch"
     t = time.time()
     try:
-        res = run_in_editor(project, config, timeout) if mode == "editor" else run_batch(project, config, raw, timeout)
+        if mode == "editor":
+            res = bridge.call(project, SCRIPT, "Run", raw, JOB, config, ExportError, timeout)
+        else:
+            res = run_batch(project, config, raw, timeout)
     except json.JSONDecodeError as e:
         raise ExportError(f"Unity returned a broken result: {e}") from None
     except subprocess.TimeoutExpired:

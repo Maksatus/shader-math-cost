@@ -2,13 +2,13 @@
 // (only variants that would be included into the build), for the chosen platforms.
 //
 // Used by `python -m paretogpu export`, two ways:
-//   open editor:  unity command run_script --file ParetoGpuExport.cs --entry ParetoGpuExport.Run --args '["<config.json>"]'
+//   open editor:  adapters/unity/bridge.py call(..., "ParetoGpuExport.cs", "Run", <out>, "export", ...)
 //   closed:       Unity.exe -batchmode -quit -projectPath <p> -executeMethod ParetoGpuExport.Batch -paretogpuConfig <config.json>
-//                 (the file is copied into Assets/Editor for the run and removed afterwards)
+//                 (the file bridge.py builds is copied into Assets/Editor for the run and removed afterwards)
 //
-// config.json: {"shaders": ["Assets/...shadergraph", "Assets/Folder", "Shader/Name"], "platforms": ["gles3", "vulkan"],
-//               "out": "<absolute folder>"}
-// Writes <out>/<shader name>.shader (the "Compile and show code" text) and <out>/export.json.
+// config: {"shaders": ["Assets/...shadergraph", "Assets/Folder", "Shader/Name"], "platforms": ["gles3", "vulkan"]}
+//         (and the job's "out", "name": cs/ParetoGpuJob.cs)
+// Writes <out>/<shader name>.shader (the "Compile and show code" text) and answers <out>/export.json.
 
 using System;
 using System.Collections.Generic;
@@ -26,7 +26,6 @@ public static class ParetoGpuExport
     {
         public string[] shaders = new string[0];
         public string[] platforms = { "gles3", "vulkan" };
-        public string @out = "";
     }
 
     [Serializable]
@@ -55,10 +54,11 @@ public static class ParetoGpuExport
         { "vulkan", ShaderCompilerPlatform.Vulkan },
     };
 
-    // run_script entry point (open editor); returns export.json content
+    // run_script entry point (open editor)
     public static string Run(string configPath)
     {
-        return ToJson(Export(configPath));
+        Export(configPath);
+        return "ok";
     }
 
     // -executeMethod entry point (batchmode)
@@ -78,9 +78,8 @@ public static class ParetoGpuExport
 
     static Result Export(string configPath)
     {
-        var cfg = JsonUtility.FromJson<Config>(File.ReadAllText(configPath));
+        var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         var res = new Result { unity = Application.unityVersion, project = Path.GetDirectoryName(Application.dataPath) };
-        Directory.CreateDirectory(cfg.@out);
 
         int mask = 0;
         foreach (var p in cfg.platforms)
@@ -103,7 +102,7 @@ public static class ParetoGpuExport
                 res.items.Add(item);
                 try
                 {
-                    item.file = CompileOne(open, shader, mask, cfg.@out);
+                    item.file = CompileOne(open, shader, mask, ParetoGpuJob.Folder);
                 }
                 catch (Exception e)
                 {
@@ -111,25 +110,13 @@ public static class ParetoGpuExport
                 }
             }
         }
-        File.WriteAllText(Path.Combine(cfg.@out, "export.json"), ToJson(res));
+        ParetoGpuJob.Done(ToJson(res));
         return res;
     }
 
     // JsonUtility does not serialize lists of this script's own types when run_script
     // compiles it into an in-memory assembly, so the result is written by hand
-    static string Str(string v)
-    {
-        if (v == null)
-            return "null";
-        var sb = new System.Text.StringBuilder("\"");
-        foreach (var c in v)
-        {
-            if (c == '"' || c == '\\') sb.Append('\\').Append(c);
-            else if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
-            else sb.Append(c);
-        }
-        return sb.Append('"').ToString();
-    }
+    static string Str(string v) => ParetoGpuJob.Str(v);
 
     static string ToJson(Result r)
     {
