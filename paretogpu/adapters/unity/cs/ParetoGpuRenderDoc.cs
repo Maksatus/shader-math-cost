@@ -76,7 +76,9 @@ public static class ParetoGpuRenderDoc
         catch { }
         fdOn = false;
     }
-    static DateTime started, limitChanged;
+    static DateTime started, limitChanged, phase;
+
+    static double Waited() => (DateTime.Now - phase).TotalSeconds;
 
     public static string Start(string configPath)
     {
@@ -93,10 +95,11 @@ public static class ParetoGpuRenderDoc
         fdOn = false;
         wasPaused = EditorApplication.isPaused;
         if (cfg.pause && EditorApplication.isPlaying) EditorApplication.isPaused = true;
+        ParetoGpuJob.KeepRenderingInBackground();
         token = Guid.NewGuid().ToString();
         SessionState.SetString(TokenKey, token);
         state = 0; ticks = 0;
-        started = DateTime.Now;
+        started = phase = DateTime.Now;
         EditorApplication.update -= Tick;
         EditorApplication.update += Tick;
         return "started";
@@ -133,6 +136,7 @@ public static class ParetoGpuRenderDoc
                     }
                     fdOn = true;
                     ticks = 0;
+                    phase = DateTime.Now;
                     return;
                 }
                 EditorApplication.QueuePlayerLoopUpdate();
@@ -141,7 +145,9 @@ public static class ParetoGpuRenderDoc
                 int n = FdCount();
                 if (n == 0 || ticks < 10)
                 {
-                    if (ticks > 600)
+                    if (ticks % 50 == 0)
+                        ParetoGpuJob.Progress($"waiting for the Frame Debugger: {n} events, {Waited():0} s");
+                    if (Waited() > 60)
                         throw new ParetoGpuJob.Failure("no_frame", "the Frame Debugger did not capture a frame: enter Play " +
                                                        "Mode and make the Game view visible");
                     return;
@@ -152,7 +158,7 @@ public static class ParetoGpuRenderDoc
                 ChangeLimit(Math.Max(1, n - 1));
                 frame = n;
                 state = 1; ticks = 0;
-                limitChanged = DateTime.Now;
+                limitChanged = phase = DateTime.Now;
                 return;
             }
             if (state == 1)
@@ -164,7 +170,7 @@ public static class ParetoGpuRenderDoc
                 gameView.Repaint();
                 // editor ticks can be a few ms apart: give the replay at the previous event real time too
                 if (ticks < 5 || (DateTime.Now - limitChanged).TotalSeconds < 0.3) return;
-                if (!RenderInRepaint() && ticks < 300) return;
+                if (!RenderInRepaint() && Waited() < 10) return;
                 ChangeLimit(frame);
                 // write the capture straight into the output folder (the previous template is restored after)
                 oldTemplate = RdApi.GetTemplate();
@@ -173,6 +179,7 @@ public static class ParetoGpuRenderDoc
                 host.GetType().GetMethod("CaptureRenderDocScene", I).Invoke(host, null);
                 gameView.Repaint();
                 state = 2; ticks = 0;
+                phase = DateTime.Now;
                 return;
             }
             // find the new capture: RenderDoc writes it to its temp folder
@@ -183,12 +190,13 @@ public static class ParetoGpuRenderDoc
                 .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
             if (cap == null)
             {
-                if (ticks > 600) throw new ParetoGpuJob.Failure("renderdoc", "no new .rdc capture found in " + string.Join(", ", dirs));
+                if (Waited() > 60) throw new ParetoGpuJob.Failure("renderdoc", "no new .rdc capture found in " + string.Join(", ", dirs));
                 return;
             }
             EditorApplication.update -= Tick;
             RestoreFrameDebugger();
             RestoreTemplate();
+            ParetoGpuJob.RestoreBackground();
             File.WriteAllText(Path.Combine(outDir, "renderdoc.frames"), $"frame debugger events {frame}");
             ParetoGpuJob.Done("{\"capture\": " + ParetoGpuJob.Str(cap.FullName) + ", \"bytes\": " + cap.Length +
                               ", \"was_paused\": " + (wasPaused ? "true" : "false") + "}");
@@ -198,6 +206,8 @@ public static class ParetoGpuRenderDoc
             EditorApplication.update -= Tick;
             RestoreFrameDebugger();
             RestoreTemplate();
+            ParetoGpuJob.RestoreBackground();
+            if (EditorApplication.isPlaying) EditorApplication.isPaused = wasPaused;
             ParetoGpuJob.Fail(e);
         }
     }

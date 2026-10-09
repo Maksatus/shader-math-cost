@@ -9,6 +9,7 @@
 using System;
 using System.IO;
 using System.Text;
+using UnityEditor;
 using UnityEngine;
 
 public static class ParetoGpuJob
@@ -44,6 +45,23 @@ public static class ParetoGpuJob
         foreach (var ext in new[] { ".json", ".progress", ".error" })
             if (File.Exists(PathOf(ext))) File.Delete(PathOf(ext));
         return text;
+    }
+
+    static bool? background;
+
+    public static void KeepRenderingInBackground()
+    {
+        if (!EditorApplication.isPlaying || background != null)
+            return;
+        background = Application.runInBackground;
+        Application.runInBackground = true;
+    }
+
+    public static void RestoreBackground()
+    {
+        if (background != null && EditorApplication.isPlaying)
+            Application.runInBackground = background.Value;
+        background = null;
     }
 
     public static string PathOf(string ext) => Path.Combine(Folder, name + ext);

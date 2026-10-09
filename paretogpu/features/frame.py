@@ -23,11 +23,10 @@ from paretogpu.views.reporter import CONSOLE
 
 
 RD_MIN_MATCHED = 0.5  # share of the draws and dispatches a RenderDoc capture must hold to be the game frame
-# A capture of the Game view that holds only the editor UI (the repaint did not render the cameras: see
-# ParetoGpuRenderDoc.cs, state 1) is a few MB, the game frame hundreds: a small one is taken again at once, a big
-# one is checked by matching its calls. Since the capture waits for renderViewCallNeededInOnGUI this is a safety net.
+# A capture of the Game view can hold only the editor UI (the repaint did not render the cameras: see
+# ParetoGpuRenderDoc.cs, state 1): it is told by matching its calls and taken again. Its size tells nothing: the
+# game frame of a small scene is as small. Since the capture waits for renderViewCallNeededInOnGUI this is a safety net.
 RD_ATTEMPTS = 5
-RD_UI_ONLY_BYTES = 20e6
 
 
 def renderdoc_pixels(project, out, rd, events, rep=CONSOLE):
@@ -37,26 +36,22 @@ def renderdoc_pixels(project, out, rd, events, rep=CONSOLE):
     want = sum(1 for e in events if e["kind"] in ("draw", "compute"))
     rdc = os.path.join(out, "frame.rdc")
     for attempt in range(1, RD_ATTEMPTS + 1):
-        size = os.path.getsize(rd["capture"])
-        if size < RD_UI_ONLY_BYTES and want:
-            why = f"the RenderDoc capture is not the game frame ({size / 1e6:.1f} MB: only the editor UI)"
-        else:
-            rep.phase("rd_counters")
-            rep.log("  renderdoc counters")
-            if os.path.exists(rdc):
-                os.remove(rdc)
-            try:
-                shutil.move(rd["capture"], rdc)  # keep the capture next to the snapshot (not in git)
-                path = rdc
-            except OSError:
-                path = rd["capture"]
-            acts = rdoc.counters(path, os.path.join(out, "rd_actions.json"))
-            matched, missing, mismatched = match(events, acts["actions"], acts.get("counters"))
-            if not want or matched >= RD_MIN_MATCHED * want:
-                break
-            calls = sum(1 for a in acts["actions"] if "draw" in a["kinds"] or "dispatch" in a["kinds"])
-            why = (f"the RenderDoc capture is not the game frame: {matched} of {want} events found in it "
-                   f"({calls} calls, mostly the editor UI)")
+        rep.phase("rd_counters")
+        rep.log("  renderdoc counters")
+        if os.path.exists(rdc):
+            os.remove(rdc)
+        try:
+            shutil.move(rd["capture"], rdc)  # keep the capture next to the snapshot (not in git)
+            path = rdc
+        except OSError:
+            path = rd["capture"]
+        acts = rdoc.counters(path, os.path.join(out, "rd_actions.json"))
+        matched, missing, mismatched = match(events, acts["actions"], acts.get("counters"))
+        if not want or matched >= RD_MIN_MATCHED * want:
+            break
+        calls = sum(1 for a in acts["actions"] if "draw" in a["kinds"] or "dispatch" in a["kinds"])
+        why = (f"the RenderDoc capture is not the game frame: {matched} of {want} events found in it "
+               f"({calls} calls, mostly the editor UI)")
         if os.path.exists(rd["capture"]) and os.path.abspath(rd["capture"]) != rdc:
             os.remove(rd["capture"])
         if attempt == RD_ATTEMPTS:

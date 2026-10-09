@@ -47,7 +47,7 @@ public static class ParetoGpuFrame
     const string TokenKey = "paretogpu.frame.token";
     static object data;
     static List<string> events;
-    static double started;
+    static double started, asked;
 
     public static string Start(string configPath)
     {
@@ -66,6 +66,7 @@ public static class ParetoGpuFrame
         // enabling the Frame Debugger pauses Play Mode and the replay moves the limit: both are set back in Stop()
         wasPaused = EditorApplication.isPaused;
         wasLimit = wasEnabled && Safe(() => Prop("limit")) is int lim ? lim : 0;
+        ParetoGpuJob.KeepRenderingInBackground();
         if (!wasEnabled)
         {
             if (EditorApplication.isPlaying && !EditorApplication.isPaused) EditorApplication.isPaused = true;
@@ -118,7 +119,9 @@ public static class ParetoGpuFrame
                 int got = (int)dataType.GetField("m_FrameEventIndex", I).GetValue(data);
                 if (!ok || got != index)
                 {
-                    if (++waited > 300) throw new Exception($"no data for event {index}");
+                    if (++waited % 50 == 0) Progress($"waiting for event {index}: {waited} ticks");
+                    if (EditorApplication.timeSinceStartup - asked > 30)
+                        throw new Exception($"no data for event {index} of {count} in 30 s");
                     return;
                 }
                 waited = 0;
@@ -137,7 +140,11 @@ public static class ParetoGpuFrame
     }
 
     // replay up to event i (limit = i + 1); Tick reads its data once the replay is there
-    static void Request(int i) => SetLimit(i + 1);
+    static void Request(int i)
+    {
+        asked = EditorApplication.timeSinceStartup;
+        SetLimit(i + 1);
+    }
 
     static void Finish()
     {
@@ -172,6 +179,7 @@ public static class ParetoGpuFrame
         catch { }
         if (EditorApplication.isPlaying && EditorApplication.isPaused != wasPaused)
             EditorApplication.isPaused = wasPaused;
+        ParetoGpuJob.RestoreBackground();
     }
 
     static string EventJson(int i)
