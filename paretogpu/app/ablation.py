@@ -6,7 +6,7 @@ shader analysed again is measured only where it changed.
 """
 import hashlib
 
-from paretogpu.adapters import malioc as mali
+from paretogpu.adapters.gpu import backend
 from paretogpu.app.engine import Engine, Rule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
@@ -24,7 +24,8 @@ def measure(src, core, stage, n, forced_loops):
         if f is None:
             return {"error": "циклы не удалось прогнать n раз"}
         text = f
-    r = mali.measure(text, core, "gles", stage)
+    gpu = backend()
+    r = gpu.measure(text, core, "gles", stage)
     if not r["ok"]:
         return {"error": (r.get("error") or "malioc failed").strip().splitlines()[-1][:300]}
     c = heavy.combined(r)
@@ -46,7 +47,7 @@ class AblateRule(Rule):
 
     def memo_key(self, key):
         sid, core = key
-        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{mali.MALIOC}"
+        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{backend().tool}"
 
     def remember(self, value):
         return "error" not in value
@@ -63,7 +64,7 @@ def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None):
     parent, users = tree(p)
     targets = [s for s in p["statements"] if s["ablate"]]
     # does the base need its loops forced (longest path N/A)? the same for every copy
-    probe = {c: mali.measure(src, c, "gles", stage) for c in cores}
+    probe = {c: backend().measure(src, c, "gles", stage) for c in cores}
     forced = {c: bool(probe[c].get("ok")) and heavy.combined(probe[c])["longest"] is None for c in cores}
     base = {c: measure(src, c, stage, n, forced[c]) for c in cores}
     tasks = [(s["id"], c) for s in targets for c in cores if "error" not in base[c]]

@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from paretogpu.adapters.gpu import backend
 from paretogpu.app import rules, variants
 from paretogpu.model.variant import NOT_FINISHED, VariantKey
 from paretogpu.store import variant_store
@@ -51,7 +52,7 @@ class RunTest(unittest.TestCase):
         with mock.patch.object(rules.unity, "editor_ready", return_value=editor), \
                 mock.patch.object(rules, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
                 mock.patch.object(rules, "compile_variants", side_effect=self.compile_stub), \
-                mock.patch.object(rules.mali, "measure", return_value={"ok": False, "error": "stub"}):
+                mock.patch.object(backend(), "measure", return_value={"ok": False, "error": "stub"}):
             return variants.run([EV], "project", self.root, ["Mali-G78"], ["vulkan"], rep=QUIET, **kw)
 
     def test_current_variant_is_reused(self):

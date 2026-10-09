@@ -29,9 +29,13 @@ import threading
 import time
 import zlib
 
+from paretogpu.adapters.gpu import Backend, read_source, register
 from paretogpu.model import cores as core_names
 from paretogpu.model.errors import ParetoError
-from paretogpu.model.measurement import Measurement
+from paretogpu.model.measurement import MALI, Measurement
+from paretogpu.model.shaderfile import EXT, SPIRV_EXT, STAGES, stage_of
+
+__all__ = ["read_source", "stage_of", "STAGES", "EXT", "SPIRV_EXT"]
 
 
 def find_malioc():
@@ -53,9 +57,6 @@ MALIOC = find_malioc()
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "bench", ".cache")
 CACHE_VERSION = 3        # v3 = v2 fields + "raw" (malioc JSON without descriptions)
 LEGACY_VERSIONS = (2, 3)  # versions that carry the v2 fields
-STAGES = {".vert": "vertex", ".frag": "fragment", ".comp": "compute"}
-EXT = {v: k for k, v in STAGES.items()}
-SPIRV_EXT = ".spv"  # binary SPIR-V: shader.frag.spv (Vulkan only)
 PIPE_NAMES = {  # malioc pipeline name -> short name
     "arith_total": "arith", "arithmetic": "arith", "arith_fma": "fma", "arith_cvt": "cvt",
     "arith_sfu": "sfu", "load_store": "ls", "varying": "v", "texture": "t",
@@ -130,21 +131,6 @@ def version(malioc=MALIOC):
         if tok.startswith("v") and tok[1:2].isdigit():
             return tok[1:]
     return ""
-
-
-def stage_of(path):
-    """Shader stage from a file name (shader.frag, shader.vert.spv, ...), or None."""
-    base = path[:-len(SPIRV_EXT)] if path.endswith(SPIRV_EXT) else path
-    return STAGES.get(os.path.splitext(base)[1])
-
-
-def read_source(path):
-    """GLSL text, or bytes for a binary SPIR-V file."""
-    if path.endswith(SPIRV_EXT):
-        with open(path, "rb") as f:
-            return f.read()
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return f.read()
 
 
 def cache_key(src, core, api, stage="fragment", malioc=MALIOC):
@@ -364,3 +350,30 @@ def spills(rec):
     if "variants" in rec:
         return any(v["spilling"] for v in rec["variants"].values())
     return bool(rec["props"].get("has_stack_spilling"))
+
+
+class Mali(Backend):
+    """Arm Mali through malioc (adapters/gpu.py)."""
+    name = "mali"
+    pipes = MALI
+    tool = MALIOC
+    Error = MaliocError
+
+    def version(self):
+        return version()
+
+    def cores(self):
+        return list_cores()
+
+    def parse_cores(self, spec):
+        return parse_cores(spec)
+
+    def measure(self, src, core, api, stage="fragment"):
+        return measure(src, core, api, stage)
+
+    def spills(self, rec):
+        return spills(rec)
+
+
+BACKEND = Mali()
+register(BACKEND)

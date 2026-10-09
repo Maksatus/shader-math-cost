@@ -1,7 +1,22 @@
 """What malioc says about a shader on one core, and the prices made of it."""
+from dataclasses import dataclass
 from typing import TypedDict
 
 PIPES = ("arith", "fma", "cvt", "sfu", "ls", "v", "t")  # short names of malioc's pipelines
+
+
+@dataclass(frozen=True)
+class PipeModel:
+    """The pipes of a GPU family, as core/pricing.py prices them: the busiest pipe on the path is the price; the
+    arithmetic pipe `arith` may be broken down into sub-pipes that name the bound; a vertex shader's variants
+    (IDVS: position, varying) all run per vertex."""
+    pipes: tuple          # in the order bounds are named
+    arith: str = None
+    arith_sub: tuple = ()
+    main_variant: str = "main"
+
+
+MALI = PipeModel(pipes=("fma", "cvt", "sfu", "ls", "v", "t", "arith"), arith="arith", arith_sub=("fma", "cvt", "sfu"))
 Cycles = dict  # {pipe: cycles}
 
 

@@ -6,7 +6,7 @@ If a folder has manifest.json (from adapters/unity/split.py), shader, pass and
 keywords are taken from it.
 
 Output:
-  measurements.jsonl - one line per shader file x core, all variants (as mali.parse());
+  measurements.jsonl - one line per shader file x core, all variants (as the GPU backend measures them);
   measurements.csv   - one row per shader file x core x variant (main / position / varying);
                        vertex shaders get one more row, "position+varying", with the sums (IDVS).
 Cycles per pipe on the longest / shortest path and in total; the longest path
@@ -16,12 +16,12 @@ import csv
 import json
 import os
 
-from paretogpu.adapters import malioc as mali
 from paretogpu.app.engine import Engine
 from paretogpu.app.rules import MeasureRule
 from paretogpu.core import pricing as heavy
 from paretogpu.core import ranking
 from paretogpu.model.cores import MAIN_CORE
+from paretogpu.model.shaderfile import stage_of
 from paretogpu.views import tables
 from paretogpu.views.reporter import CONSOLE
 
@@ -35,7 +35,7 @@ def find_shaders(folder):
             with open(os.path.join(root, "manifest.json"), encoding="utf-8") as f:
                 man = {m["file"]: m for m in json.load(f)}
         for fn in files:
-            if mali.stage_of(fn) in ("vertex", "fragment", "compute"):
+            if stage_of(fn) in ("vertex", "fragment", "compute"):
                 path = os.path.join(root, fn)
                 out.append((path, os.path.relpath(path, folder).replace("\\", "/"), man.get(fn, {})))
     return sorted(out, key=lambda t: t[1])

@@ -8,7 +8,7 @@ import hashlib
 import os
 import threading
 
-from paretogpu.adapters import malioc as mali
+from paretogpu.adapters.gpu import backend, read_source
 from paretogpu.adapters.unity import cli as unity
 from paretogpu.adapters.unity import split as split_unity
 from paretogpu.adapters.unity import variants as unity_variants
@@ -16,6 +16,7 @@ from paretogpu.app.engine import MISSING, Rule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.model.measurement import LoopProfile, Measurement
+from paretogpu.model.shaderfile import api_of, stage_of
 from paretogpu.model.variant import COMPUTE_NOT_COMPILED, NOT_FINISHED
 from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
@@ -147,10 +148,6 @@ class CompileRule(Rule):
         store.save_index(self.root, self.index)
 
 
-def api_of(path, api):
-    return "vulkan" if path.endswith(mali.SPIRV_EXT) else api
-
-
 class _Hashes:
     """sha1 of files, each read once (a file is measured on several cores)."""
 
@@ -174,14 +171,15 @@ class MeasureRule(Rule):
     phase = "measure"
     memo = "measure/1"
 
-    def __init__(self, root, api="gles", info=None):
+    def __init__(self, root, api="gles", info=None, gpu=None):
         self.root, self.api, self.info = root, api, info or {}
         self.hash = _Hashes(root)
+        self.gpu = gpu or backend()
 
     def memo_key(self, key):
         rel, core = key
         try:
-            return f"{self.hash(rel)}|{core}|{api_of(rel, self.api)}|{mali.stage_of(rel)}|{mali.MALIOC}"
+            return f"{self.hash(rel)}|{core}|{api_of(rel, self.api)}|{stage_of(rel)}|{self.gpu.tool}"
         except OSError:
             return None
 
@@ -198,8 +196,8 @@ class MeasureRule(Rule):
         rel, core = key
         path = os.path.join(self.root, rel)
         try:
-            r = mali.measure(mali.read_source(path), core, api_of(path, self.api), mali.stage_of(path))
-        except (OSError, mali.MaliocError) as e:  # fails this file, not the run
+            r = self.gpu.measure(read_source(path), core, api_of(path, self.api), stage_of(path))
+        except (OSError, self.gpu.Error) as e:  # fails this file, not the run
             r = {"ok": False, "error": str(e)}
         if not r["ok"]:
             return {"file": rel, "ok": False, "core": core, "api": api_of(path, self.api), "error": r["error"]}
@@ -211,23 +209,24 @@ class MeasureRule(Rule):
         return {**self._hit(key[0], value), "cached": True}
 
 
-def parametric(forced, api, stage, core, cache=mali.CACHE) -> LoopProfile | None:
+def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
     """{"c": [cycles at n = 0, 1, 2] (combined variants, longest path), "work_regs", "spilling"} of the forced
     sources ([loops.force(src, n) for n in loops.NS]) on one core, or None (cannot be forced, malioc failed, still
     N/A)."""
     if any(f is None for f in forced):
         return None
+    gpu = gpu or backend()
     cs, regs, spill = [], 0, False
     for f in forced:
-        r = mali.measure(f, core, api, stage, cache=cache)
+        r = gpu.measure(f, core, api, stage)
         if not r["ok"]:
             return None
-        c = heavy.combined(r)["longest"]
+        c = heavy.combined(r, gpu.pipes)["longest"]
         if c is None:
             return None
         cs.append(c)
         regs = max(regs, max((v["work_regs"] or 0) for v in r["variants"].values()))
-        spill = spill or mali.spills(r)
+        spill = spill or gpu.spills(r)
     return {"c": cs, "work_regs": regs, "spilling": spill}
 
 
@@ -237,8 +236,9 @@ class LoopRule(Rule):
     phase = "loops"
     memo = "loops/1"
 
-    def __init__(self, root):
+    def __init__(self, root, gpu=None):
         self.root = root
+        self.gpu = gpu or backend()
         self.forced = {}
         self.locks = {}
         self.lock = threading.Lock()
@@ -247,7 +247,7 @@ class LoopRule(Rule):
     def memo_key(self, key):
         fn, core = key
         try:
-            return f"{self.hash(fn)}|{core}|{mali.stage_of(fn)}|{','.join(map(str, loops.NS))}|{mali.MALIOC}"
+            return f"{self.hash(fn)}|{core}|{stage_of(fn)}|{','.join(map(str, loops.NS))}|{self.gpu.tool}"
         except OSError:
             return None
 
@@ -256,11 +256,10 @@ class LoopRule(Rule):
             lock = self.locks.setdefault(fn, threading.Lock())
         with lock:
             if fn not in self.forced:
-                src = mali.read_source(os.path.join(self.root, fn))
+                src = read_source(os.path.join(self.root, fn))
                 self.forced[fn] = [loops.force(src, n) for n in loops.NS]
             return self.forced[fn]
 
     def build_one(self, key) -> LoopProfile | None:
         fn, core = key
-        api = "vulkan" if fn.endswith(mali.SPIRV_EXT) else "gles"
-        return parametric(self._forced(fn), api, mali.stage_of(fn), core)
+        return parametric(self._forced(fn), api_of(fn, "gles"), stage_of(fn), core, self.gpu)

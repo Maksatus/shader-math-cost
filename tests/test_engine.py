@@ -10,7 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from paretogpu.app import rules, variants
+from paretogpu.adapters.gpu import backend
+from paretogpu.app import variants
 from paretogpu.app.engine import MISSING, Engine, Rule
 from paretogpu.model.variant import VariantKey
 from paretogpu.store.memo import Memo
@@ -144,7 +145,7 @@ class MeasureOnlyRequestedTest(unittest.TestCase):
             return {"ok": False, "error": "stub"}
         ev = {"index": 0, "kind": "draw", "shader": "Test/Lit", "subshader": 0, "pass_index": 0, "pass": "Forward",
               "keywords": ["_A"]}
-        with mock.patch.object(rules.mali, "measure", side_effect=stub):
+        with mock.patch.object(backend(), "measure", side_effect=stub):
             st = variants.run([ev], None, self.root, ["Mali-G78", "Mali-G52"], ["vulkan"], compile_missing=False,
                               rep=Recorder())
         self.assertEqual(sorted(measured), [("fragment", "Mali-G52"), ("fragment", "Mali-G78"),

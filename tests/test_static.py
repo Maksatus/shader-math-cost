@@ -52,7 +52,8 @@ class StaticTest(unittest.TestCase):
                         imported[a.asname or a.name] = node.lineno
             used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
             for n, line in imported.items():
-                if n not in used and not os.path.basename(mod.__file__) == "__init__.py":
+                exported = getattr(mod, "__all__", ())
+                if n not in used and n not in exported and os.path.basename(mod.__file__) != "__init__.py":
                     problems.append(f"{name}:{line}: unused import {n}")
         self.assertEqual(sorted(set(problems)), [])
 

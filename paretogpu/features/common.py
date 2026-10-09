@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from paretogpu.adapters import malioc
+from paretogpu.adapters.gpu import backend
 from paretogpu.core.pricing import FP16_THRESHOLD
 from paretogpu.features.spec import Arg, Group
 from paretogpu.model.cores import MAIN_CORE, PRESETS
@@ -25,8 +25,8 @@ def fail(message, e=None, code=None):
 
 def parse_cores(args):
     try:
-        return malioc.parse_cores(args.core or args.cores)
-    except (ValueError, malioc.MaliocError) as e:
+        return backend().parse_cores(args.core or args.cores)
+    except (ValueError, backend().Error) as e:
         fail(str(e), e)
 
 

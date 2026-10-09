@@ -21,10 +21,10 @@ Flags:
   dynamic_loop longest path is N/A, the score is the total cycles (or the forced-loop price, see core/loops.py)
 """
 from paretogpu.core import loops
-from paretogpu.model.measurement import Measurement, Score
+from paretogpu.model.measurement import MALI, Measurement, PipeModel, Score
 
-PIPES = ("fma", "cvt", "sfu", "ls", "v", "t", "arith")
-ARITH_SUB = ("fma", "cvt", "sfu")
+PIPES = MALI.pipes
+ARITH_SUB = MALI.arith_sub
 FP16_THRESHOLD = 25
 FLAGS = ("regs_gt32", "spilling", "low_fp16", "sfu_bound", "dynamic_loop")
 LOOP_ITERS = 2            # default trip count of dynamic loops (lights per pixel, probes, ray steps)
@@ -37,12 +37,12 @@ def add_cycles(a, b):
     return {p: (a.get(p) or 0) + (b.get(p) or 0) for p in set(a) | set(b)}
 
 
-def combined(rec: Measurement):
+def combined(rec: Measurement, model: PipeModel = MALI):
     """{"longest", "shortest", "total"} cycles of the record: the main variant, or
     Position + Varying of a vertex shader (A1.4)."""
     vs = rec["variants"]
-    if "main" in vs:
-        v = vs["main"]
+    if model.main_variant in vs:
+        v = vs[model.main_variant]
         return {k: v[k] for k in ("longest", "shortest", "total")}
     out = None
     for v in vs.values():
@@ -51,21 +51,22 @@ def combined(rec: Measurement):
     return out
 
 
-def bottleneck(c):
+def bottleneck(c, model: PipeModel = MALI):
     """(cycles, [bound pipes]) of a cycles dict. Bifrost reports only 'arith'; on Valhall and later 'arith' is
     malioc's arithmetic total and fma / cvt / sfu are its breakdown."""
-    vals = {p: c[p] for p in PIPES if c.get(p) is not None}
-    sub = {p: vals.pop(p) for p in ARITH_SUB if p in vals}
-    if "arith" not in vals and sub:
-        vals["arith"] = max(sub.values())
+    arith = model.arith
+    vals = {p: c[p] for p in model.pipes if c.get(p) is not None}
+    sub = {p: vals.pop(p) for p in model.arith_sub if p in vals}
+    if arith not in vals and sub:
+        vals[arith] = max(sub.values())
     if not vals:
         return 0.0, []
     top = max(vals.values())
     bound = [p for p, v in vals.items() if v >= top - 1e-9]
-    if "arith" in bound and sub:
-        named = [p for p, v in sub.items() if v >= vals["arith"] - 1e-9]
+    if arith in bound and sub:
+        named = [p for p, v in sub.items() if v >= vals[arith] - 1e-9]
         if named:
-            i = bound.index("arith")
+            i = bound.index(arith)
             bound[i:i + 1] = named
     return top, bound
 
