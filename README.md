@@ -58,4 +58,6 @@ paretogpu/
 
 Новая команда — модуль в `features/` с `Command(...)` и строка в `features/__init__.py`: командная строка и формы интерфейса появятся сами.
 
-Тесты: `python -m unittest discover tests`.
+Тесты: `python -m unittest discover tests` (там же проверка слоёв и статическая проверка модулей; на GitHub их запускает `.github/workflows/tests.yml`).
+
+Регрессия на своих данных: `python tools/regression.py baseline` до изменения и `python tools/regression.py check` после. Сверка берёт два последних снимка проекта из `paretogpu/out`, копирует их и папку вариантов в `paretogpu/out/_regression` (сами снимки не трогает), прогоняет все команды без Unity и сравнивает результаты, вывод и ответы интерфейса.
