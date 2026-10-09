@@ -16,10 +16,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
-sys.path.insert(0, os.path.join(ROOT, "bench"))
 sys.path.insert(0, ROOT)
-from shadergen import build, header
 from paretogpu.adapters import malioc as mali
+from paretogpu.core.shadergen import build, header
 
 CORE, API = "Mali-G78", "gles"
 TOL = 0.10

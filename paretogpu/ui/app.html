@@ -315,13 +315,13 @@ const pct = x => x == null ? "—" : (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
 
 const PRESET_TEXT = {frame_cost: "Проверка кадра", cost: "Пересчёт снимка", site: "Обновление данных сайта",
   matcompare: "Сравнение материалов", matshader: "Разбор материала", hotspots: "Почему тяжёлые шейдеры"};
-const STEP_TEXT = {frame: "Снимок кадра", cost: "Цена кадра", bench_run: "Замер функций", bench_site: "Сборка сайта"};
+const STEP_TEXT = {frame: "Снимок кадра", cost: "Цена кадра", bench: "Замер функций и сборка сайта"};
 const PHASE_TEXT = {
   rd_capture: ["Захват кадра в RenderDoc"], snapshot: ["Снимок кадра (Frame Debugger)", "событий"],
   rd_counters: ["Подсчёт пикселей (RenderDoc)"], materials: ["Материалы проекта"],
   fingerprints: ["Проверка изменений шейдеров"], compile: ["Компиляция шейдеров в Unity", "вариантов"],
   measure: ["Замеры malioc", "замеров"], loops: ["Циклы в шейдерах (malioc)", "замеров"],
-  report: ["Расчёт и отчёт"], ablation: ["Разбор по строкам (malioc)", "замеров"], bench_compile: ["Замеры malioc", "шейдеров"], run: ["Выполнение"],
+  report: ["Расчёт и отчёт"], ablation: ["Разбор по строкам (malioc)", "замеров"], bench_compile: ["Замеры malioc", "шейдеров"], site: ["Сборка сайта"], run: ["Выполнение"],
 };
 const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
   "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
@@ -1087,7 +1087,7 @@ $("#repRecalc").onclick = () => {
 
 /* ---------- site ---------- */
 $("#siteUpdate").onclick = () => {
-  if (!confirm("Заново замерить все функции на всех Mali и пересобрать таблицу?\n\nЭто долго (десятки минут) и нужно только после обновления malioc или добавления функций в bench/functions.py. Ход будет виден на вкладке «Проверка кадра»."))
+  if (!confirm("Заново замерить все функции на всех Mali и пересобрать таблицу?\n\nЭто долго (десятки минут) и нужно только после обновления malioc или добавления функций в paretogpu/model/functions.py. Ход будет виден на вкладке «Проверка кадра»."))
     return;
   start("site", {});
 };

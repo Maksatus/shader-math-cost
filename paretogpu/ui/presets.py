@@ -1,7 +1,7 @@
 """What the UI can run: presets (one button = a chain of steps), the commands' forms, their command lines.
 
 A step is `python -m paretogpu <cmd>` (features/: its arguments, phases, the page it writes, the folders the UI fills
-in) or a bench script. plan(preset, values) -> the steps with their values.
+in). plan(preset, values) -> the steps with their values.
 """
 import os
 import sys
@@ -16,36 +16,19 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 PRESETS = [
     {"id": "frame_cost", "steps": [{"cmd": "frame", "hide": ["out"]}, {"cmd": "cost", "hide": ["frame", "out", "project"]}]},
     {"id": "cost", "steps": [{"cmd": "cost"}]},
-    {"id": "site", "steps": [{"cmd": "bench_run"}, {"cmd": "bench_site"}]},
+    {"id": "site", "steps": [{"cmd": "bench"}]},
     {"id": "matcompare", "steps": [{"cmd": "matcompare"}]},
     {"id": "matshader", "steps": [{"cmd": "matshader"}]},
     {"id": "hotspots", "steps": [{"cmd": "hotspots"}]},
 ]
-BENCH = {  # bench scripts are not paretogpu commands: their arguments by hand
-    "bench_run": {"help": "measure every function on every Mali GPU (bench/run.py) -> docs/mali_math_cost.csv",
-                  "args": [{"dest": "gpus", "flag": "--gpus", "kind": "value", "default": "",
-                            "help": "comma separated GPUs (default: all)"},
-                           {"dest": "jobs", "flag": "--jobs", "kind": "value", "default": None,
-                            "help": "parallel malioc runs (default: CPU count)"}]},
-    "bench_site": {"help": "docs/data.js and docs/summary_*.csv from docs/mali_math_cost.csv (bench/build_site.py)",
-                   "args": []},
-}
-BENCH_PHASES = {"bench_run": ["bench_compile"]}
-BENCH_SCRIPTS = {"bench_run": ("bench", "run.py"), "bench_site": ("bench", "build_site.py")}
-
-
 def schema():
-    """{command: {"help", "args": [...]}} of the commands (features/), plus the bench scripts."""
-    out = {c.name: c.schema() for c in COMMANDS}
-    out.update(BENCH)
-    return out
+    """{command: {"help", "args": [...]}} of the commands (features/)."""
+    return {c.name: c.schema() for c in COMMANDS}
 
 
 def phases_of(cmd, v):
     """Phases a step goes through, in order (the ids Reporter.phase() prints); [] = one phase, "run"."""
-    if cmd in BY_NAME:
-        return BY_NAME[cmd].phases_of(v)
-    return BENCH_PHASES.get(cmd, [])
+    return BY_NAME[cmd].phases_of(v) if cmd in BY_NAME else []
 
 
 def report_of(cmd, v):
@@ -54,10 +37,7 @@ def report_of(cmd, v):
 
 
 def argv_of(cmd, values, sch):
-    if cmd in BENCH_SCRIPTS:
-        argv = [sys.executable, "-u", os.path.join(ROOT, *BENCH_SCRIPTS[cmd])]
-    else:
-        argv = [sys.executable, "-u", "-m", "paretogpu", cmd]
+    argv = [sys.executable, "-u", "-m", "paretogpu", cmd]
     for a in sch[cmd]["args"]:
         v = values.get(a["dest"])
         if v in (None, "", [], False):
@@ -100,7 +80,7 @@ def plan(preset_id, values, sch):
         if cmd in BY_NAME:
             v = BY_NAME[cmd].ui_values_of(v)
         missing = [a["flag"] or a["dest"] for a in sch[cmd]["args"]
-                   if (a.get("required") or a["kind"] == "positional") and v.get(a["dest"]) in (None, "", [])]
+                   if (a["required"] or a["kind"] == "positional") and v.get(a["dest"]) in (None, "", [])]
         if missing:
             raise ValueError(f"{cmd}: не заполнено {', '.join(missing)}")
         steps.append((cmd, v))

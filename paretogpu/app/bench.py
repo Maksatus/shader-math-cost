@@ -1,35 +1,29 @@
-"""Mali shader math cost benchmark.
+"""Mali shader math cost benchmark (the function cost site, docs/).
 
-Compiles chained fragment shaders with malioc for every Mali GPU on both
-OpenGL ES and Vulkan, then derives the per-call cost of each function.
+Compiles chained fragment shaders (core/shadergen.py) of every function (model/functions.py) with malioc for every
+Mali GPU on both OpenGL ES and Vulkan, then derives the per-call cost of each function.
 
 Per-call cost = slope of arithmetic cycles between chain lengths N1 and N2
-(8 -> 24; falls back to 8 -> 16 or 4 -> 8 if the shader spills registers), minus the slope of the same chain without the function (only the '+ w_i'
-adds). The slope cancels fixed shader overhead, which matters on Bifrost.
-Cost is taken on the bottleneck arithmetic pipe (FMA / CVT / SFU run in
-parallel on Valhall and 5th Gen; Bifrost reports one pipe).
+(8 -> 24; falls back to 8 -> 16 or 4 -> 8 if the shader spills registers), minus the slope of the same chain without
+the function (only the '+ w_i' adds). The slope cancels fixed shader overhead, which matters on Bifrost.
+Cost is taken on the bottleneck arithmetic pipe (FMA / CVT / SFU run in parallel on Valhall and 5th Gen; Bifrost
+reports one pipe).
 
-malioc results are cached in .cache/ by shader source. Results that look like a
-corrupted cache (a strongly negative per-pipe cost, or a different FMA unit in
-GLES and Vulkan on the same GPU) are reported in errors.txt: delete .cache/ and rerun.
+malioc results come from its cache (adapters/malioc.py). Results that look like a corrupted cache (a strongly
+negative per-pipe cost, or a different FMA unit in GLES and Vulkan on the same GPU) are returned as warnings.
 
-Usage: python run.py [--jobs 16] [--gpus Mali-G57,Mali-G52] [--out ../docs]
+  run(gpus, jobs) -> (rows of mali_math_cost.csv, errors, warnings)
 """
-import argparse
 import concurrent.futures as cf
-import csv
 import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from shadergen import build
-from functions import FUNCS, HLSL_EXPR, glsl_type, glsl_expr, hlsl_type, prelude
 from paretogpu.adapters import malioc as mali
-from paretogpu.views.reporter import CONSOLE as progress
+from paretogpu.core.shadergen import build
+from paretogpu.model.functions import FUNCS, HLSL_EXPR, glsl_expr, glsl_type, hlsl_type, prelude
+from paretogpu.views.reporter import CONSOLE
 
 MALIOC_NEW = mali.MALIOC
-MALIOC_VERSION = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"
+CACHE = mali.CACHE
 
 PAIRS = [(8, 24), (8, 16), (4, 8)]  # chain lengths (N1, N2), tried in order
 VARIANTS = [  # name, precision, vector size
@@ -40,9 +34,6 @@ VARIANTS = [  # name, precision, vector size
 ]
 APIS = ["gles", "vulkan"]
 ARITH_PIPES = ("arith_fma", "arith_cvt", "arith_sfu", "arithmetic")
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-CACHE = os.path.join(HERE, ".cache")
 
 
 def list_gpus(malioc):
@@ -65,18 +56,14 @@ def slope(r1, r2, n1, n2, key="cycles"):
 spills = mali.spills
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--jobs", type=int, default=os.cpu_count())
-    ap.add_argument("--gpus", default="")
-    ap.add_argument("--out", default=os.path.join(HERE, "..", "docs"))
-    args = ap.parse_args()
-
+def run(gpu_names="", jobs=None, rep=CONSOLE):
+    """Measure every function; returns (rows of mali_math_cost.csv, errors, warnings)."""
+    malioc_version = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"
     gpus = [(MALIOC_NEW, n, a, apis) for n, a, apis in list_gpus(MALIOC_NEW)]
-    if args.gpus:
-        want = set(args.gpus.split(","))
+    if gpu_names:
+        want = set(gpu_names.split(","))
         gpus = [g for g in gpus if g[1] in want]
-    print(f"{len(gpus)} GPUs: " + ", ".join(g[1] for g in gpus), flush=True)
+    rep.log(f"{len(gpus)} GPUs: " + ", ".join(g[1] for g in gpus))
 
     plan = []  # one entry per measured (gpu, api, variant, func)
     for malioc, core, arch, apis in gpus:
@@ -105,20 +92,20 @@ def main():
 
     def compile_all(keys):
         keys = [k for k in dict.fromkeys(keys) if k not in results]
-        print(f"  compiling {len(keys)} shaders", flush=True)
-        progress.phase("bench_compile", len(keys))
-        tick = progress.counter(len(keys))
+        rep.log(f"  compiling {len(keys)} shaders")
+        rep.phase("bench_compile", len(keys))
+        tick = rep.counter(len(keys))
         done = 0
-        with cf.ThreadPoolExecutor(args.jobs) as ex:
+        with cf.ThreadPoolExecutor(jobs or os.cpu_count()) as ex:
             futs = {ex.submit(compile_one, *k): k for k in keys}
             for fut in cf.as_completed(futs):
                 results[futs[fut]] = fut.result()
                 done += 1
                 tick()
                 if done % 5000 == 0:
-                    print(f"  {done}/{len(keys)}", flush=True)
+                    rep.log(f"  {done}/{len(keys)}")
 
-    print(f"{len(plan)} measurements", flush=True)
+    rep.log(f"{len(plan)} measurements")
     # Measure with the first chain-length pair whose shaders do not spill registers.
     rows, errors = [], []
     slopes = {}
@@ -157,7 +144,7 @@ def main():
             p["slope"], p["r2"], p["rs"] = s, results[f2], results[fs]
             p["spill"] = any(spills(r) for r in rs_all)
         if retry:
-            print(f"  {len(retry)} measurements spill registers, retrying with shorter chains", flush=True)
+            rep.log(f"  {len(retry)} measurements spill registers, retrying with shorter chains")
         todo = retry
 
     # Corrupted cache entries (results of another shader) showed up as a different FMA unit
@@ -197,7 +184,7 @@ def main():
         rows.append({
             "api": "GLES" if p["api"] == "gles" else "Vulkan",
             "gpu": p["core"], "arch": p["arch"],
-            "malioc": MALIOC_VERSION,
+            "malioc": malioc_version,
             "variant": p["variant"], "type": hlsl_type(p["prec"], p["t"]),
             "category": p["category"], "func": p["fid"], "hlsl": p["hlsl"],
             "hlsl_expr": HLSL_EXPR[p["fid"]] or "— (нет в HLSL)",
@@ -224,27 +211,4 @@ def main():
             "driver": p["r2"]["driver"],
         })
 
-    os.makedirs(args.out, exist_ok=True)
-    out = os.path.join(args.out, "mali_math_cost.csv")
-    with open(out, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
-    print(f"wrote {len(rows)} rows -> {os.path.abspath(out)}")
-    epath = os.path.join(HERE, "errors.txt")
-    if errors or warnings:
-        with open(epath, "w", encoding="utf-8") as f:
-            for e in errors:
-                f.write(" | ".join(map(str, e[:4])) + "\n" + e[4] + "\n\n")
-            for w in warnings:
-                f.write("SUSPICIOUS " + w + "\n")
-        if errors:
-            print(f"{len(errors)} failed measurements -> {epath}")
-        if warnings:
-            print(f"{len(warnings)} suspicious results, the cache may be corrupted: delete {CACHE} and rerun -> {epath}")
-    elif os.path.exists(epath):
-        os.remove(epath)
-
-
-if __name__ == "__main__":
-    main()
+    return rows, errors, warnings

@@ -8,9 +8,9 @@ import concurrent.futures as cf
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from run import MALIOC_NEW, compile_one, list_gpus, slope, spills
-from shadergen import build
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from paretogpu.app.bench import MALIOC_NEW, compile_one, list_gpus, slope, spills
+from paretogpu.core.shadergen import build
 
 PAIRS = [(8, 24), (8, 16), (4, 8)]
 TYPES = {"float": ("highp", "float"), "half": ("mediump", "float"),

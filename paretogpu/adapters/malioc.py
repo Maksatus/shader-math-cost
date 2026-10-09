@@ -1,4 +1,4 @@
-"""malioc (Mali Offline Compiler) wrapper shared by bench/run.py and paretogpu.
+"""malioc (Mali Offline Compiler) wrapper: the frame and shader prices and the function cost table (app/bench.py).
 
 compile() runs malioc on GLSL source with a cache keyed by the source text,
 parse() turns malioc JSON into a flat record: every variant (Main for fragment

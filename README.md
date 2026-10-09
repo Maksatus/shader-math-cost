@@ -23,11 +23,10 @@ python -m paretogpu ui
 Нужны Python 3 и [Arm Performance Studio](https://developer.arm.com/Tools%20and%20Software/Arm%20Performance%20Studio) (malioc).
 
 ```
-python bench/run.py
-python bench/build_site.py
+python -m paretogpu bench
 ```
 
-Функции задаются в `bench/functions.py`.
+Функции задаются в `paretogpu/model/functions.py`. Только пересобрать `data.js` и сводки из готового CSV: `python -m paretogpu bench --site-only`.
 
 ## Аппроксимации
 

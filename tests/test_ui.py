@@ -64,9 +64,9 @@ class PresetsTest(unittest.TestCase):
 
     def test_bench_steps(self):
         steps, _ = presets.plan("site", {"gpus": "Mali-G78"}, SCH)
-        self.assertEqual([c for c, _ in steps], ["bench_run", "bench_site"])
-        self.assertTrue(presets.argv_of("bench_run", steps[0][1], SCH)[2].endswith(os.path.join("bench", "run.py")))
-        self.assertEqual(presets.phases_of("bench_run", {}), ["bench_compile"])
+        self.assertEqual([c for c, _ in steps], ["bench"])
+        self.assertEqual(presets.argv_of("bench", steps[0][1], SCH)[3:], ["paretogpu", "bench", "--gpus", "Mali-G78"])
+        self.assertEqual(presets.phases_of("bench", {}), ["bench_compile", "site"])
 
 
 class HintTest(unittest.TestCase):
