@@ -4,7 +4,8 @@ The open editor's frame is captured with RenderDoc (adapters/renderdoc), its eve
 (adapters/unity/frame.py: <out>/frame.json) and turned into <out>/frame_events.json (core/events.py): one record per
 event with the shader variant, vertices, render target, frame stage and the pixels of its RenderDoc calls.
 
-The frame is whatever the Game view shows: its resolution and the current quality level.
+The frame is whatever the Game view shows in Play Mode (an Edit Mode frame is refused: no game code runs in it):
+its resolution and the current quality level.
 """
 import json
 import os

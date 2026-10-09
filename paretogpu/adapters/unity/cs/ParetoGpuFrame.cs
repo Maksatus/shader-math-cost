@@ -53,6 +53,8 @@ public static class ParetoGpuFrame
     {
         var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         maxEvents = cfg.max_events;
+        if (!EditorApplication.isPlaying)
+            return ParetoGpuJob.Fail("not_playing", "the editor is not in Play Mode: an Edit Mode frame is not the game's");
 
         util =AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("UnityEditorInternal.FrameDebuggerInternal.FrameDebuggerUtility"))
             .FirstOrDefault(t => t != null);
@@ -103,7 +105,7 @@ public static class ParetoGpuFrame
                 SceneRepaintDirty();
                 if (EditorApplication.timeSinceStartup - started > 60)
                     throw new ParetoGpuJob.Failure("no_frame", "the Frame Debugger did not capture a frame in 60 s: make " +
-                                                   "the Game view visible (or enter Play Mode) and retry");
+                                                   "the Game view visible and retry");
                 int c = (int)Prop("count");
                 stable = c > 0 && c == lastCount ? stable + 1 : 0;
                 lastCount = c;

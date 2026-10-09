@@ -84,6 +84,8 @@ public static class ParetoGpuRenderDoc
     {
         var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         outDir = ParetoGpuJob.Folder;
+        if (!EditorApplication.isPlaying)
+            return ParetoGpuJob.Fail("not_playing", "the editor is not in Play Mode: an Edit Mode frame is not the game's");
         rd = typeof(EditorWindow).Assembly.GetType("UnityEditorInternal.RenderDoc");
         if (rd == null || !(bool)rd.GetMethod("IsLoaded", S, null, Type.EmptyTypes, null).Invoke(null, null))
             return ParetoGpuJob.Fail("renderdoc", "RenderDoc is not loaded: Game tab menu -> Load RenderDoc");

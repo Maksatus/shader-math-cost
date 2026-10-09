@@ -292,6 +292,8 @@ HINTS = [
     ("rd_not_game_frame", "is not the game frame", "RenderDoc несколько раз подряд записал только окно редактора, а не "
      "кадр игры. Сделайте вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и запустите проверку "
      "ещё раз.", None),
+    ("not_playing", "is not in Play Mode", "Unity не в Play Mode: кадр в редакторе без запущенной игры не тот, что на "
+     "устройстве. Включите Play Mode, выставьте нужный кадр в окне Game и снимите кадр ещё раз.", None),
     ("no_frame", "did not capture a frame", "Frame Debugger не получил кадр игры. Включите в Unity Play Mode, сделайте "
      "вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и снимите кадр ещё раз.", None),
     ("renderdoc", "renderdoc", "Не получилось снять кадр через RenderDoc. В Unity на вкладке Game нажмите правой кнопкой "
