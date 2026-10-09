@@ -44,6 +44,13 @@ class GlslTest(unittest.TestCase):
         out = loops.force_glsl(src, 4)
         self.assertEqual(out.count("<4;"), 1)  # outer
         self.assertEqual(out.count("<1;"), 1)  # nested: once per outer iteration
+        word = loops.force_glsl(src, 1, nested=2)
+        self.assertEqual((word.count("<1;"), word.count("<2;")), (1, 1))
+
+    def test_nested_loop_is_out_of_the_slope(self):
+        c = [{"ls": 4.0}, {"ls": 10.0}, {"ls": 15.0}, {"ls": 12.0}]  # terrain probe loop on G78
+        self.assertEqual(loops.cycles_at({"c": c}, 3)["ls"], 10.0 + 2 * 3.0)
+        self.assertEqual(loops.cycles_at({"c": c[:3]}, 3)["ls"], 10.0 + 2 * 5.0)  # saved before word(1)
 
     def test_static_loop_is_kept(self):
         self.assertIsNone(loops.force_glsl("void main(){ for(int i = 0 ; i<4 ; i++){ x += 1.0; } }", 2))
@@ -73,9 +80,10 @@ class SpirvTest(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(mali.MALIOC), "malioc not installed")
     def test_price_is_linear_in_n(self):
         src = read(SPV, True)
-        p = rules.parametric([loops.force(src, n) for n in loops.NS], "vulkan", "fragment", "Mali-G78")
+        p = rules.parametric(loops.forced(src), "vulkan", "fragment", "Mali-G78")
         self.assertIsNotNone(p)
-        c0, c1, c2 = (c["sfu"] for c in p["c"])
+        c0, c1, c2, word = (c["sfu"] for c in p["c"])
+        self.assertEqual(word, c1)  # no nested loops
         self.assertLess(c0, c1)
         self.assertAlmostEqual(c2 - c1, c1 - c0, delta=0.25 * (c1 - c0))
         self.assertAlmostEqual(loops.cycles_at(p, 4)["sfu"], c1 + 3 * (c2 - c1))

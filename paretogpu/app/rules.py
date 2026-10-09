@@ -2,7 +2,7 @@
 
   CompileRule  VariantKey -> {"files": {(platform, stage): file}, "errors": [..]} in the variants folder
   MeasureRule  (file, core) -> malioc's Measurement of the file on the core
-  LoopRule     (file, core) -> LoopProfile: the file's dynamic loops forced to n = 0, 1, 2 and measured
+  LoopRule     (file, core) -> LoopProfile: the file's dynamic loops forced to n = 0, 1, 2 (and word 1) and measured
 """
 import hashlib
 import os
@@ -210,8 +210,8 @@ class MeasureRule(Rule):
 
 
 def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
-    """{"c": [cycles at n = 0, 1, 2] (combined variants, longest path), "work_regs", "spilling"} of the forced
-    sources ([loops.force(src, n) for n in loops.NS]) on one core, or None (cannot be forced, malioc failed, still
+    """{"c": [cycles at n = 0, 1, 2, word 1] (combined variants, longest path), "work_regs", "spilling"} of the
+    forced sources (loops.forced(src)) on one core, or None (cannot be forced, malioc failed, still
     N/A)."""
     if any(f is None for f in forced):
         return None
@@ -231,10 +231,10 @@ def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
 
 
 class LoopRule(Rule):
-    """The dynamic loops of a file forced to n = 0, 1, 2 iterations (core/loops.py) and measured on one core;
+    """The dynamic loops of a file forced to n = 0, 1, 2 iterations and word 1 (core/loops.py) measured on one core;
     None when its loops cannot be forced (it is priced by total cycles then; not remembered)."""
     phase = "loops"
-    memo = "loops/1"
+    memo = "loops/2"
 
     def __init__(self, root, gpu=None):
         self.root = root
@@ -257,7 +257,7 @@ class LoopRule(Rule):
         with lock:
             if fn not in self.forced:
                 src = read_source(os.path.join(self.root, fn))
-                self.forced[fn] = [loops.force(src, n) for n in loops.NS]
+                self.forced[fn] = loops.forced(src)
             return self.forced[fn]
 
     def build_one(self, key) -> LoopProfile | None:

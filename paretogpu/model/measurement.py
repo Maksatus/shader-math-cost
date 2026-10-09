@@ -64,6 +64,6 @@ class Score(TypedDict):
 
 class LoopProfile(TypedDict):
     """A shader whose dynamic loops are forced to n = 0, 1, 2 iterations (app/variants.parametric)."""
-    c: list           # [Cycles at n = 0, 1, 2], longest path
+    c: list           # [Cycles at n = 0, 1, 2, word 1 (nested loops twice)], longest path
     work_regs: int
     spilling: bool

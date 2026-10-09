@@ -3,16 +3,23 @@
 malioc reports the longest path of a shader with a dynamic loop (light / probe loops of Forward+, ray marching) as
 N/A; its total cycles count every instruction once (both sides of every branch, every loop body once), which is
 neither a lower nor an upper bound. Instead every dynamic loop is forced to run exactly n times and the shader is
-measured at n = 0, 1, 2:
-  price(0) = measured, price(n >= 1) = price(1) + (n - 1) * (price(2) - price(1))     (per pipe, longest path)
-Outer dynamic loops get n iterations, loops nested in them 1 (e.g. one word of a cluster mask per light), so n is
-"iterations of every outer dynamic loop" (lights, probes, ray steps). Loops with a constant bound are left alone.
+measured at n = 0, 1, 2, and once more at n = 1 with the nested loops run twice ("word"):
+  price(0) = measured, price(n >= 1) = price(1) + (n - 1) * (price(2) - price(1) - nested)    (per pipe, longest path)
+  nested = word(1) - price(1)
+Outer dynamic loops get n iterations, so n is "iterations of every outer dynamic loop" (lights, probes, ray steps);
+loops nested in them get 1 per outer iteration. In Forward+ the nested loop is the scan for the next word of the
+cluster mask: the real shader loads a word once per 32 lights / probes, so the nested loop is charged once (in
+price(1)) and one iteration of it is taken out of the slope (~2-3 LS cycles per light / probe loop on Mali; the
+terrain probe loop on G78: 3 LS per probe instead of 5, as with the loop peeled by hand). Other ways overshoot:
+nested loops run 0 times leave the mask empty and the compiler drops the outer body; peeling the first iteration
+off in the source doubles a light loop body, which then spills. Loops with a constant bound are left alone.
 
 Forcing keeps the loop body and its breaks: a counter (phi in SPIR-V, an int in GLSL) is added and the loop's exit
 test is replaced by `counter < n`, so malioc's longest path is n full iterations.
   force_spirv(bytes, n)  binary SPIR-V (glslang structured loops: OpLoopMerge, exit test in the header or the block
                          right after it), returns bytes or None if a loop has another shape;
   force_glsl(text, n)    GLSL text (`while(true){` and `for(init; cond; step){`), returns text or None.
+nested = 2 runs the nested loops twice per outer iteration. forced(src) is the list measured: n = 0, 1, 2, word(1).
 The forced sources are measured by app/variants.py (loops_of); cycles_at() is the price at any n.
 """
 import re
@@ -40,8 +47,8 @@ def _targets(inst):
     return []
 
 
-def force_spirv(data, n):
-    """Binary SPIR-V with every dynamic loop forced to n (nested: min(n, 1)) iterations, or None."""
+def force_spirv(data, n, nested=1):
+    """Binary SPIR-V with every dynamic loop forced to n (nested: min(n, 1) * nested) iterations, or None."""
     if len(data) % 4 or len(data) < 20:
         return None
     words = list(struct.unpack(f"<{len(data) // 4}I", data))
@@ -131,8 +138,8 @@ def force_spirv(data, n):
                 return None
             loops.append((n_, pos[merge], lm, exit_block))
         for n_, m_, lm, exit_block in loops:
-            nested = any(a < n_ < b for a, b, _, _ in loops if (a, b) != (n_, m_))
-            count = min(n, 1) if nested else n
+            inner = any(a < n_ < b for a, b, _, _ in loops if (a, b) != (n_, m_))
+            count = min(n, 1) * nested if inner else n
             lab, start, _ = fb[n_]
             preds = [b for b in fb if lab in _targets(insts[b[2]])]
             cnt, nxt, cond = new_id(), new_id(), new_id()
@@ -182,8 +189,8 @@ def _match(s, i, open_, close):
 _STATIC_COND = re.compile(r"^\s*[\w.]+\s*(<|<=|>|>=|!=)\s*-?\d+u?\s*$|^\s*-?\d+u?\s*(<|<=|>|>=|!=)\s*[\w.]+\s*$")
 
 
-def force_glsl(src, n):
-    """GLSL with every dynamic loop forced to n (nested: min(n, 1)) iterations, or None."""
+def force_glsl(src, n, nested=1):
+    """GLSL with every dynamic loop forced to n (nested: min(n, 1) * nested) iterations, or None."""
     loops = []  # (start, header end, body open brace, body close brace, kind, (init, step))
     for m in re.finditer(r"\b(while|for)\s*\(", src):
         close = _match(src, m.end() - 1, "(", ")")
@@ -209,8 +216,8 @@ def force_glsl(src, n):
     if not loops:
         return None
     for start, brace, end, kind, io in sorted(loops, key=lambda t: -t[0]):
-        nested = any(s < start and start < e for s, _, e, _, _ in loops)
-        count = min(n, 1) if nested else n
+        inner = any(s < start and start < e for s, _, e, _, _ in loops)
+        count = min(n, 1) * nested if inner else n
         var = f"_so_loop{start}"
         if kind == "while":
             head = f"for(int {var}=0;{var}<{count};{var}++){{"
@@ -220,13 +227,23 @@ def force_glsl(src, n):
     return src
 
 
-def force(src, n):
-    return force_spirv(src, n) if isinstance(src, bytes) else force_glsl(src, n)
+def force(src, n, nested=1):
+    return force_spirv(src, n, nested) if isinstance(src, bytes) else force_glsl(src, n, nested)
+
+
+def forced(src):
+    """The sources measured for a loop price: forced to n = 0, 1, 2 and word(1) (nested loops twice)."""
+    return [force(src, n) for n in NS] + [force(src, 1, nested=2)]
 
 
 def cycles_at(p, n):
-    """Cycles per pipe at trip count n from parametric() data of one core."""
-    c0, c1, c2 = p["c"]
+    """Cycles per pipe at trip count n from parametric() data of one core (without word(1), saved before it was
+    measured: the nested loops are charged in every iteration)."""
+    c0, c1, c2 = p["c"][:3]
     if n == 0:
         return dict(c0)
-    return {k: max(0.0, (c1.get(k) or 0) + (n - 1) * ((c2.get(k) or 0) - (c1.get(k) or 0))) for k in set(c1) | set(c2)}
+    word = p["c"][3] if len(p["c"]) > 3 else c1
+
+    def slope(k):
+        return (c2.get(k) or 0) - (c1.get(k) or 0) - max(0.0, (word.get(k) or 0) - (c1.get(k) or 0))
+    return {k: max(0.0, (c1.get(k) or 0) + (n - 1) * slope(k)) for k in set(c1) | set(c2)}
