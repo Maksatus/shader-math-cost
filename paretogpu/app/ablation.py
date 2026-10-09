@@ -16,30 +16,43 @@ from paretogpu.model.measurement import PIPES
 from paretogpu.views.reporter import CONSOLE
 
 
-def measure(src, core, stage, n, forced_loops):
-    """{"pipes", "price", "bound", "regs"} of a GLSL source on a core, dynamic loops forced to n; or {"error"}."""
-    text = src
-    if forced_loops:
-        f = loops.force_glsl(src, n)
-        if f is None:
-            return {"error": "циклы не удалось прогнать n раз"}
-        text = f
+def _measure(text, core, stage):
     gpu = backend()
     r = gpu.measure(text, core, "gles", stage)
     if not r["ok"]:
         return {"error": (r.get("error") or "malioc failed").strip().splitlines()[-1][:300]}
     c = heavy.combined(r)
-    pipes = c["longest"] if c["longest"] is not None else heavy.fallback(c)
+    return {"pipes": c["longest"] if c["longest"] is not None else heavy.fallback(c), "na": c["longest"] is None,
+            "regs": max((v["work_regs"] or 0) for v in r["variants"].values())}
+
+
+def measure(src, core, stage, n, forced_loops):
+    """{"pipes", "price", "bound", "regs"} of a GLSL source on a core, dynamic loops priced at n as in the frame
+    (core/loops.py: measured at n = 1, 2 and word(1), cycles_at(n)); or {"error"}."""
+    if forced_loops:
+        texts = [loops.force_glsl(src, n)] if n < 2 else loops.forced(src)[1:]
+        if any(t is None for t in texts):
+            return {"error": "циклы не удалось прогнать n раз"}
+    else:
+        texts = [src]
+    runs = {}
+    for t in texts:
+        if t not in runs:
+            runs[t] = _measure(t, core, stage)
+            if "error" in runs[t]:
+                return runs[t]
+    ms = [runs[t] for t in texts]
+    pipes = ms[0]["pipes"] if len(ms) == 1 else loops.cycles_at({"c": [None] + [m["pipes"] for m in ms]}, n)
     price, bound = heavy.bottleneck(pipes)
-    regs = max((v["work_regs"] or 0) for v in r["variants"].values())
     return {"pipes": {k: round(pipes.get(k) or 0.0, 4) for k in PIPES if pipes.get(k) is not None},
-            "price": round(price, 4), "bound": bound, "regs": regs, "na": c["longest"] is None}
+            "price": round(price, 4), "bound": bound, "regs": max(m["regs"] for m in ms),
+            "na": any(m["na"] for m in ms)}
 
 
 class AblateRule(Rule):
-    """(statement id, core) -> measure() of the shader with that statement ablated, its loops forced to n."""
+    """(statement id, core) -> measure() of the shader with that statement ablated, its loops priced at n."""
     phase = "ablation"
-    memo = "ablation/1"
+    memo = "ablation/2"
 
     def __init__(self, src, parsed, stage, n, forced):
         self.src, self.p, self.stage, self.n, self.forced = src, parsed, stage, n, forced

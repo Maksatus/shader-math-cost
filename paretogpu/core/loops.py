@@ -20,7 +20,7 @@ test is replaced by `counter < n`, so malioc's longest path is n full iterations
                          right after it), returns bytes or None if a loop has another shape;
   force_glsl(text, n)    GLSL text (`while(true){` and `for(init; cond; step){`), returns text or None.
 nested = 2 runs the nested loops twice per outer iteration. forced(src) is the list measured: n = 0, 1, 2, word(1).
-The forced sources are measured by app/variants.py (loops_of); cycles_at() is the price at any n.
+The forced sources are measured by app/variants.py (loops_of) and app/ablation.py; cycles_at() is the price at any n.
 """
 import re
 import struct
