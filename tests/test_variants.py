@@ -14,6 +14,7 @@ from paretogpu.adapters.gpu import backend
 from paretogpu.app import rules, variants
 from paretogpu.model.variant import NOT_FINISHED, VariantKey
 from paretogpu.store import variant_store
+from paretogpu.store.memo import Memo
 from paretogpu.views.reporter import QUIET
 
 EV = {"index": 0, "kind": "draw", "shader": "Test/Lit", "subshader": 0, "pass_index": 0, "pass": "Forward",
@@ -112,6 +113,41 @@ class RunTest(unittest.TestCase):
         with open(os.path.join(self.root, "variants.json"), encoding="utf-8") as f:
             keys = [x["key"][0] for x in json.load(f)["variants"]]
         self.assertEqual(sorted(keys), ["Other", "Test/Lit"])
+
+
+
+class PassesTest(unittest.TestCase):
+    """shader_passes(): the passes of a shader are asked again only when its fingerprint changes."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.memo = Memo(os.path.join(self.dir, "memo.sqlite"))
+        self.fps = {"A": "fa", "B": "builtin", "C": "builtin", "Gone": None}
+        self.asked = []
+
+    def tearDown(self):
+        self.memo.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def query(self, project, entry, shaders, root):
+        if entry == "Fingerprints":
+            return {n: self.fps[n] for n in shaders}
+        self.asked.append(sorted(shaders))
+        return {n: None if n == "Gone" else [{"pass": f"{n}-{self.fps[n]}"}] for n in shaders}
+
+    def passes(self):
+        with mock.patch.object(variants, "shader_query", self.query):
+            return variants.shader_passes("P", ["A", "B", "C", "Gone"], self.dir, self.memo)
+
+    def test_remembered_by_fingerprint(self):
+        first = self.passes()
+        self.assertEqual(first["A"], [{"pass": "A-fa"}])
+        self.assertEqual(first["C"], [{"pass": "C-builtin"}])
+        self.assertIsNone(first["Gone"])
+        self.assertEqual(self.passes(), first)
+        self.fps["A"] = "fa2"
+        self.assertEqual(self.passes()["A"], [{"pass": "A-fa2"}])
+        self.assertEqual(self.asked, [["A", "B", "C", "Gone"], ["Gone"], ["A", "Gone"]])
 
 
 if __name__ == "__main__":

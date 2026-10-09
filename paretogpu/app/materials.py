@@ -56,7 +56,7 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
     names = sorted({m["shader"] for m in mats})
     if compile_missing:
         if unity.editor_ready(project, allow_play=True):
-            editor = variants.shader_query(project, "Passes", names, root)
+            editor = variants.shader_passes(project, names, root)
     if editor is None:
         rep.log("passes are taken from the snapshots only "
                  + ("(--no-compile)" if not compile_missing else "(the editor does not answer Unity CLI)"))
@@ -112,7 +112,7 @@ def project_variants(project, events, folders, root, compile_missing=True, rep=C
     if names and compile_missing:
         if unity.editor_ready(project, allow_play=True):
             try:
-                editor = variants.shader_query(project, "Passes", names, root)
+                editor = variants.shader_passes(project, names, root)
             except VariantsError as e:
                 rep.log(f"passes of the materials' shaders: {e}")
     if editor is None:

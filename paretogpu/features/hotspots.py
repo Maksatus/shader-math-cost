@@ -1,7 +1,8 @@
 """Why the heaviest shaders of a frame are heavy (plan A3.5, report v2).
 
 For the costliest shader variants of a priced snapshot (frame_cost.json of `cost`, by share of the frame on the main
-core) the GLES file of the same variant (compiled next to the Vulkan one in the variants folder) is ablated
+core) the GLES file of the same variant (in the variants folder next to the Vulkan one; compiled now if the cost did
+not need it) is ablated
 statement by statement (core/ablation.py): its costliest parts with their pipes and what they do (texture
 reads, buffer reads in a light loop, sin, division, hash...), and the candidates for moving to the vertex shader
 (core/vertexmove.py). Dynamic loops at the frame's n.
@@ -12,12 +13,15 @@ import json
 import os
 import time
 
+from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import ablation as ablation_run
 from paretogpu.app import results
+from paretogpu.app import variants
 from paretogpu.core import ablation
 from paretogpu.core.pricing import LOOP_ITERS, loop_n
 from paretogpu.features.common import JOBS, fail, positive_int
 from paretogpu.features.spec import Arg, Command, ResultKind
+from paretogpu.model.variant import VariantKey
 from paretogpu.views.reporter import CONSOLE
 
 VERTEX_SHARE = 0.25  # the vertex shader is ablated too when it is at least this part of the variant's cost
@@ -32,6 +36,23 @@ def gles_file(root, vulkan_file):
         name = name[:-len(".spv")]
     path = os.path.join(root, folder, name)
     return path if os.path.isfile(path) else None
+
+
+def compile_gles(frame_dir, c, root, items, rep=CONSOLE):
+    """Compile the GLES files the items lack in the open editor: None, or why they could not be."""
+    need = {it["variant"] for it in items if any(not gles_file(root, vf) for vf in it["files"].values())}
+    if not need:
+        return None
+    with open(os.path.join(frame_dir, "frame_events.json"), encoding="utf-8") as f:
+        events = json.load(f)["events"]
+    keys = {str(k): k for k in (VariantKey.of(e) for e in events if e["kind"] == "draw")}
+    rep.log(f"compiling the GLES files of {len(need)} variants ...")
+    try:
+        variants.compile_keys([keys[v] for v in sorted(need) if v in keys], (c.get("frame") or {}).get("project"),
+                              root, ["gles3"], rep)
+    except VariantsError as e:
+        return str(e)
+    return None
 
 
 def plan(c, top, core):
@@ -67,6 +88,7 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
     root = c.get("variants_dir") or os.path.join(frame_dir, "variants")
     loops_ = c.get("loops") or {}
     items = plan(c, top, core)
+    why = compile_gles(frame_dir, c, root, items, rep)
     work, warn = [], []
     for it in items:
         it["ablation"] = {}
@@ -77,7 +99,7 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
             vf = it["files"].get(stage)
             gf = vf and gles_file(root, vf)
             if not gf:
-                it["ablation"][stage] = {"error": "нет GLES-варианта: снимок посчитан только для Vulkan (--vulkan-only)"}
+                it["ablation"][stage] = {"error": f"нет GLES-варианта: {why or 'Unity его не скомпилировал'}"}
                 continue
             with open(gf, encoding="utf-8", errors="replace") as f:
                 src = f.read()

@@ -20,6 +20,7 @@ from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS
 from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
 from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.model.cores import main_core as main_core_of
+from paretogpu.model.variant import PLATFORM
 from paretogpu.store import cost_runs, workspace
 from paretogpu.views import html, tables
 from paretogpu.views.reporter import CONSOLE as rep
@@ -44,7 +45,7 @@ def run_command(args):
         overrides[name] = int(n)
     project = args.project or frame.get("project")
     root = args.variants or os.path.join(args.frame, "variants")
-    platforms = ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"]
+    platforms = [PLATFORM[args.api]]
     mat_keys = None
     if args.materials:
         if not project or not os.path.isdir(project):
@@ -150,7 +151,6 @@ COST = Command(
                              "else the first)"),
      Arg("--api", default="vulkan", choices=["vulkan", "gles"],
          help="prices of this API (default vulkan: the Android API of the target project)"),
-     Arg("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)"),
      Arg("--no-compile", action="store_true",
          help="use only the variants already in the folder (not checked against the shaders)"),
      Arg("--materials", action="store_true",

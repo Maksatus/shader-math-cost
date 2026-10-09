@@ -19,14 +19,32 @@ from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.model.frame import Event
 from paretogpu.model.variant import VariantKey, VariantState
+from paretogpu.store import memo as memo_store
 from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
 
 NOT_COMPILED_YET = "not compiled yet (--no-compile)"
+PASSES = "passes/1"
 
 
 def shader_query(project, entry, shaders, root):
     return unity_variants.shader_query(project, entry, shaders, store.raw_dir(root))
+
+
+def shader_passes(project, shaders, root, memo=None):
+    """{shader name: its passes (None: not found)} from the open editor. The passes of a shader are remembered with
+    its fingerprint (store/memo.py): only the shaders that changed since are asked for them."""
+    memo = memo or memo_store.default()
+    names = sorted(set(shaders))
+    fps = shader_query(project, "Fingerprints", names, root)
+    key = {n: f"{n}|{fps[n]}" for n in names if fps.get(n)}
+    out = {n: memo.get(PASSES, key[n]) for n in key}
+    ask = [n for n in names if out.get(n) is None]
+    if ask:
+        got = shader_query(project, "Passes", ask, root)
+        out.update({n: got.get(n) for n in ask})
+        memo.put_many(PASSES, [(key[n], got[n]) for n in ask if n in key and got.get(n) is not None])
+    return out
 
 
 def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
@@ -41,6 +59,8 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
     engine = Engine(rep, jobs)
     compiling = CompileRule(project, root, platforms, compile_missing, recompile, retry_failed, rep)
     compiled = engine.get(compiling, keys)
+    for v in compiled.values():
+        v["files"] = {ps: fn for ps, fn in v["files"].items() if ps[0] in platforms}
     files = sorted({fn for v in compiled.values() for fn in v["files"].values()})
     measurements = {}
     if files:
@@ -54,6 +74,12 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
     errors = {k: v["errors"] or ([NOT_COMPILED_YET] if v.get("pending") else []) for k, v in compiled.items()}
     return {"keys": keys, "files": {k: v["files"] for k, v in compiled.items()}, "errors": errors,
             "measurements": measurements, "checked": compiling.checked}
+
+
+def compile_keys(keys, project, root, platforms, rep=CONSOLE):
+    """Compile `keys` for `platforms` in the open editor, what is valid is kept: {key: {"files", "errors"}}."""
+    return Engine(rep).get(CompileRule(project and os.path.abspath(project), os.path.abspath(root), platforms, rep=rep),
+                           keys)
 
 
 def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
