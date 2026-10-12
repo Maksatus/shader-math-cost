@@ -17,7 +17,8 @@ import traceback
 import renderdoc as rd
 
 out_path = os.environ["PARETOGPU_OUT"]
-ONE = 0x3C00  # 1.0 as a half float: the alpha of the overlay where the call draws
+DRAWN = b"\x3c"  # the high byte of 1.0 as a half float: the alpha of the overlay where the call draws (0.5 elsewhere)
+DENSE = 0.02     # a call covering this share of the target is sampled by random tries, a smaller one by its list
 
 
 def ok(r):
@@ -41,15 +42,16 @@ def outer_loops(dis):
     return out
 
 
-def covered(controller, pipe):
-    """The pixels the current call draws: [(x, y)] of the Drawcall overlay of its first colour target."""
+def covered(controller, pipe, k, seed):
+    """(pixels the current call draws, k of them at random [(x, y)]) from the Drawcall overlay of its first colour
+    target. Only the high bytes of the alpha are looked at (a slice and a count in C, not a loop over the pixels)."""
     targets = [t for t in pipe.GetOutputTargets() if t.resource != rd.ResourceId.Null()]
     if not targets:
-        return []
+        return 0, []
     rt = targets[0].resource
     tex = next((t for t in controller.GetTextures() if t.resourceId == rt), None)
     if tex is None:
-        return []
+        return 0, []
     w, h = tex.width, tex.height
     out = controller.CreateOutput(rd.CreateHeadlessWindowingData(w, h), rd.ReplayOutputType.Texture)
     try:
@@ -62,9 +64,22 @@ def covered(controller, pipe):
     finally:
         out.Shutdown()
     if not w * h or len(data) != 8 * w * h:  # RGBA16F expected
-        return []
-    alpha = memoryview(bytes(data)).cast("H")[3::4]
-    return [(i % w, i // w) for i, a in enumerate(alpha) if a == ONE]
+        return 0, []
+    hi = bytes(data)[7::8]
+    count = hi.count(DRAWN)
+    rng = random.Random(seed)
+    if count >= DENSE * len(hi):
+        picked, tries = set(), 0
+        while len(picked) < min(k, count) and tries < 200 * k:
+            tries += 1
+            i = rng.randrange(len(hi))
+            if hi[i] == DRAWN[0]:
+                picked.add(i)
+        picked = list(picked)
+    else:
+        found = [m.start() for m in re.finditer(re.escape(DRAWN), hi)]
+        picked = rng.sample(found, min(k, len(found)))
+    return count, [(i % w, i // w) for i in picked]
 
 
 def iterations(controller, x, y, loops):
@@ -105,17 +120,16 @@ def main():
             res[eid] = {"error": "no pixel shader"}
             continue
         loops = outer_loops(controller.DisassembleShader(pipe.GetGraphicsPipelineObject(), refl, "DXBC"))
-        px = covered(controller, pipe) if loops else []
-        random.seed(eid)
+        n_px, pool = covered(controller, pipe, 4 * n, eid) if loops else (0, [])
         samples, tried = [], 0
-        for x, y in random.sample(px, min(len(px), 4 * n)):
+        for x, y in pool:
             if len(samples) >= n:
                 break
             tried += 1
             it = iterations(controller, x, y, loops)
             if it is not None:
                 samples.append(it)
-        res[eid] = {"loops": loops, "covered": len(px), "tried": tried, "samples": samples,
+        res[eid] = {"loops": loops, "covered": n_px, "tried": tried, "samples": samples,
                     "seconds": round(time.time() - t0, 2)}
         with open(out_path + ".progress", "w") as f:
             f.write(f"{len(res)}/{len(asked)}")

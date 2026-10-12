@@ -71,24 +71,69 @@ def counters(capture_path, out_json, timeout=900):
         return json.load(f)
 
 
-def loop_iterations(capture_path, asked, out_json, timeout=3600):
-    """{call event id: {"loops", "covered", "tried", "samples": [[iterations per outer loop]]} or {"error"}} of the
-    calls asked ([{"eid", "pixels"}]): rd_loops.py inside qrenderdoc."""
-    for p in (out_json, out_json + ".error", out_json + ".progress"):
-        if os.path.exists(p):
-            os.remove(p)
-    with open(out_json + ".in", "w", encoding="utf-8") as f:
-        json.dump(asked, f)
-    env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_IN=out_json + ".in", PARETOGPU_OUT=out_json)
+def free_memory():
+    """Bytes of physical memory free now (Windows), or None."""
+    import ctypes
+
+    class Status(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+    st = Status()
+    st.dwLength = ctypes.sizeof(Status)
     try:
-        subprocess.run([qrenderdoc(), "--python", LOOPS], env=env, timeout=timeout,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        raise RenderDocError(f"qrenderdoc did not count the loops in {timeout} s") from None
-    if os.path.exists(out_json + ".error"):
-        with open(out_json + ".error", encoding="utf-8") as f:
-            raise RenderDocError(f.read()[-2000:])
-    if not os.path.exists(out_json):
-        raise RenderDocError("qrenderdoc wrote no loop iterations")
-    with open(out_json, encoding="utf-8") as f:
-        return {int(k): v for k, v in json.load(f).items()}
+        return st.ullAvailPhys if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)) else None
+    except (AttributeError, OSError):
+        return None
+
+
+MAX_WORKERS = 4
+PROCESS_MEMORY = 128 << 20  # one qrenderdoc replaying a game frame: this + twice the capture (measured: 252 MB, 102 MB)
+
+
+def workers_for(capture_path, calls):
+    """How many qrenderdoc to run at once: one per core group of 4, within the free memory, at most MAX_WORKERS."""
+    free = free_memory()
+    per = PROCESS_MEMORY + 2 * os.path.getsize(capture_path)
+    by_memory = max(1, int(free // per)) if free else 1
+    return max(1, min(MAX_WORKERS, (os.cpu_count() or 4) // 4, by_memory, calls))
+
+
+def loop_iterations(capture_path, asked, out_json, timeout=3600, workers=None):
+    """{call event id: {"loops", "covered", "tried", "samples": [[iterations per outer loop]]} or {"error"}} of the
+    calls asked ([{"eid", "pixels"}]): rd_loops.py inside qrenderdoc, the calls in frame order split over `workers`
+    processes at once (default workers_for(): each replays the capture itself)."""
+    asked = sorted(asked, key=lambda a: a["eid"])
+    k = workers or workers_for(capture_path, len(asked))
+    parts = [asked[i * len(asked) // k:(i + 1) * len(asked) // k] for i in range(k)]
+    runs = []
+    for i, part in enumerate(p for p in parts if p):
+        out = f"{out_json}.{i}"
+        for x in (out, out + ".error", out + ".progress"):
+            if os.path.exists(x):
+                os.remove(x)
+        with open(out + ".in", "w", encoding="utf-8") as f:
+            json.dump(part, f)
+        env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_IN=out + ".in", PARETOGPU_OUT=out)
+        runs.append((out, subprocess.Popen([qrenderdoc(), "--python", LOOPS], env=env, stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL)))
+    res = {}
+    try:
+        for out, proc in runs:
+            try:
+                proc.wait(timeout)
+            except subprocess.TimeoutExpired:
+                raise RenderDocError(f"qrenderdoc did not count the loops in {timeout} s") from None
+            if os.path.exists(out + ".error"):
+                with open(out + ".error", encoding="utf-8") as f:
+                    raise RenderDocError(f.read()[-2000:])
+            if not os.path.exists(out):
+                raise RenderDocError("qrenderdoc wrote no loop iterations")
+            with open(out, encoding="utf-8") as f:
+                res.update({int(e): v for e, v in json.load(f).items()})
+    finally:
+        for _, proc in runs:
+            if proc.poll() is None:
+                proc.kill()
+    return res
