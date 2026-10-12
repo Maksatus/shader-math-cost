@@ -20,7 +20,7 @@ import os
 import time
 from collections import Counter
 
-from paretogpu.core import frame_cost, profile
+from paretogpu.core import frame_cost
 from paretogpu.model.cost import CostRun
 
 STAGES = (("fragment", "pixels", "px_price"), ("vertex", "vertices", "vtx_price"), ("compute", "threads", "cs_price"))
@@ -28,11 +28,6 @@ EVENTS_SHOWN = 12  # events of a variant listed in its details
 
 
 # --- comparison --------------------------------------------------------------------------------------------------
-def resolution(c):
-    """The frame size: the size the scene is rendered at (core/profile.frame_size)."""
-    return profile.frame_size(c.get("events"))
-
-
 INFO = ("snapshot", "frame_dir", "project", "computed_at", "api", "malioc", "main_core", "cores", "loops_n",
         "resolution", "checked", "unpriced_draws", "quality", "pipeline", "scale")
 

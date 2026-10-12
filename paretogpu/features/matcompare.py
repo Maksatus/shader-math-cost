@@ -50,18 +50,18 @@ MATCOMPARE = Command(
     "matcompare", "two materials of a Unity project against each other: their shader variants (material and pipeline "
                   "keywords, color passes) per pixel and vertex, dynamic loops at n = 0..8; needs the open editor to "
                   "compile",
-    [Arg("a", help="material A: .mat path, relative to the project or absolute"),
-     Arg("b", help="material B"),
-     Arg("--project", required=True, help="Unity project folder (its editor must be open to compile)"),
-     Arg("--variants", help="folder of the compiled variants (default: paretogpu/out/variants_<project>, the one the "
+    [Arg("a", label="Материал A", help="material A: .mat path, relative to the project or absolute"),
+     Arg("b", label="Материал B", help="material B"),
+     Arg("--project", label="Проект", required=True, help="Unity project folder (its editor must be open to compile)"),
+     Arg("--variants", label="Папка скомпилированных вариантов", help="folder of the compiled variants (default: paretogpu/out/variants_<project>, the one the "
                             "frames of the project share)"),
      cores_args(),
-     Arg("--api", default="vulkan", choices=["vulkan", "gles"], help="prices of this API (default vulkan)"),
+     Arg("--api", label="API цен", default="vulkan", choices=["vulkan", "gles"], help="prices of this API (default vulkan)"),
      Arg("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)", label="Только Vulkan"),
-     Arg("--no-compile", action="store_true", help="use only the variants already in the folder"),
-     Arg("--recompile", action="store_true", help="compile the materials' variants again"),
+     Arg("--no-compile", label="Не компилировать", action="store_true", help="use only the variants already in the folder"),
+     Arg("--recompile", label="Скомпилировать заново", action="store_true", help="compile the materials' variants again"),
      JOBS,
-     Arg("--out", help="output folder (default: paretogpu/out/_matcompare/<time>)")],
+     Arg("--out", label="Папка результата", help="output folder (default: paretogpu/out/_matcompare/<time>)")],
     run_command, title="Сравнение материалов",
     phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "report"],
     report=lambda v: os.path.join(v["out"], RESULT.page),

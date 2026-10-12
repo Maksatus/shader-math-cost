@@ -47,9 +47,9 @@ def run_command(args):
 BENCH = Command(
     "bench", "measure every function on every Mali GPU -> docs/mali_math_cost.csv, then the site's data.js and "
              "summary_*.csv",
-    [Arg("--gpus", default="", help="comma separated GPUs (default: all)"),
-     Arg("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)"),
-     Arg("--out", default=DOCS, help="site folder (default: docs/)"),
-     Arg("--site-only", action="store_true", help="only rebuild data.js and summary_*.csv from mali_math_cost.csv")],
+    [Arg("--gpus", label="GPU", default="", help="comma separated GPUs (default: all)"),
+     Arg("--jobs", label="Потоков malioc", type=positive_int, help="parallel malioc runs (default: CPU count)"),
+     Arg("--out", label="Папка сайта", default=DOCS, help="site folder (default: docs/)"),
+     Arg("--site-only", label="Только пересобрать сайт", action="store_true", help="only rebuild data.js and summary_*.csv from mali_math_cost.csv")],
     run_command, phases=lambda v: (["site"] if v.get("site_only") else ["bench_compile", "site"]),
     title="Замер функций и сборка сайта")

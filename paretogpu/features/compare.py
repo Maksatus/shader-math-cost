@@ -48,7 +48,7 @@ RESULT = ResultKind("compare", lambda c: "Сравнение кадров", _bri
 COMPARE = Command(
     "compare", "compare two cost runs: the frame, its stages and shaders, every change split into price (the shaders), "
                "work (pixels, vertices) and mix (variants)",
-    [Arg("a", help="before: snapshot folder (its latest cost), frame_cost.json or <snapshot>/costs/<time>.json"),
-     Arg("b", help="after: the same kinds"),
-     Arg("--out", help="folder for compare.html and compare.json (default: B's folder)")],
+    [Arg("a", label="Расчёт A (до)", help="before: snapshot folder (its latest cost), frame_cost.json or <snapshot>/costs/<time>.json"),
+     Arg("b", label="Расчёт B (после)", help="after: the same kinds"),
+     Arg("--out", label="Папка результата", help="folder for compare.html and compare.json (default: B's folder)")],
     run_command, result=RESULT)

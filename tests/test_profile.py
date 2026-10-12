@@ -4,7 +4,7 @@ Run: python -m unittest discover tests   (from the repository root)
 """
 import unittest
 
-from paretogpu.core import compare, profile
+from paretogpu.core import profile
 from paretogpu.views import messages
 
 
@@ -61,7 +61,6 @@ class Profile(unittest.TestCase):
     def test_frame_size(self):
         rows = [{"rt_size": [100, 100], "pixels": 10}, {"rt_size": [50, 50], "pixels": 500}, {"rt_size": [None, None]}]
         self.assertEqual(profile.frame_size(rows), [50, 50])
-        self.assertEqual(compare.resolution({"events": rows}), [50, 50])
         self.assertIsNone(profile.frame_size([]))
         # a scene at 0.5 upscaled to a full-size screen with more pixels: the scene's size, not the screen's
         scaled = [{"rt_size": [1000, 500], "pixels": 400000, "stage": "opaque"},

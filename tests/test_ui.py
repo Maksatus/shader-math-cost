@@ -69,6 +69,14 @@ class PresetsTest(unittest.TestCase):
         self.assertEqual(presets.phases_of("bench", {}), ["bench_compile", "site"])
 
 
+class LabelsTest(unittest.TestCase):
+    def test_every_argument_has_a_label(self):
+        """The UI's forms name an argument by its label (features/spec.Arg): a new one without it shows its flag."""
+        for c in presets.COMMANDS:
+            for a, _ in c.flat_args():
+                self.assertTrue(a.label, f"{c.name} {a.flag}")
+
+
 class HintTest(unittest.TestCase):
     def job(self, log, codes=(), cmd="cost"):
         return {"log": log, "error": None, "steps": [{"cmd": cmd, **({"error_code": c} if c else {})} for c in

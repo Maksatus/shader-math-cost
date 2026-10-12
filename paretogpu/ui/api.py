@@ -86,6 +86,9 @@ def _cached_json(path):
     return d
 
 
+OLD_PAGES = {"cost": workspace.REPORT_PAGE, "hotspots": workspace.HOTSPOTS_PAGE}
+
+
 def snapshots():
     rows = []
     for name, d in workspace.snapshot_dirs():
@@ -100,8 +103,8 @@ def snapshots():
         row["runs"] = [m["id"] for m in rs]
         # the pages of the snapshot's results by their kind (every result describes itself: store/results.py)
         for m in store_results.of_folder(d):
-            page = os.path.join(d, m["page"])
-            if os.path.exists(page):
+            page = os.path.join(d, m["page"]) if m.get("page") else None
+            if page and os.path.exists(page):
                 row["pages"][m["kind"]] = out_url(page)
                 if m["kind"] == "cost":
                     row["cost_time"] = os.path.getmtime(page)
@@ -109,6 +112,12 @@ def snapshots():
                     row.update(main_core=t.get("main_core"), total=t.get("total"), fragment=t.get("fragment"),
                                vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"),
                                api_cost=t.get("api"))
+        # a snapshot priced before results described themselves: its pages by their file names
+        for kind, fn in OLD_PAGES.items():
+            if kind not in row["pages"] and os.path.exists(os.path.join(d, fn)):
+                row["pages"][kind] = out_url(os.path.join(d, fn))
+                if kind == "cost":
+                    row["cost_time"] = os.path.getmtime(os.path.join(d, fn))
         rows.append(row)
     return sorted(rows, key=lambda r: -r["time"])
 

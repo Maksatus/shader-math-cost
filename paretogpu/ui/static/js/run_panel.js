@@ -118,6 +118,8 @@ function renderJob(j) {
   card.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act(b.dataset.act, j));
 }
 
+const OLD_PAGE_KIND = {"frame_report.html": "cost", "hotspots.html": "hotspots"};
+
 async function act(a, j) {
   const dir = j.report_path ? j.report_path.replace(/[\\/][^\\/]+$/, "") : j.frame_dir;
   const cs = costStep(j);
@@ -126,8 +128,10 @@ async function act(a, j) {
     // the run's page by its kind; the snapshot's other pages from the list of reports
     const name = dir.split(/[\\/]/).pop();
     const x = ((await api("/api/reports")).reports || []).find(r => r.name === name) || {name, path: dir, pages: {}};
-    if (j.report_kind) x.pages = {...x.pages, [j.report_kind]: j.report};
-    openReport(x, j.report_kind);
+    // a job saved before report_kind: its kind by the page's name, else the page itself under a kind of its own
+    const kind = j.report_kind || OLD_PAGE_KIND[(j.report_path || "").split(/[\\/]/).pop()] || "page";
+    if (j.report) x.pages = {...x.pages, [kind]: j.report};
+    openReport(x, kind);
   }
   if (a === "folder") api("/api/reveal", {path: dir});
   if (a === "hotspots") start("hotspots", {frame: dir});

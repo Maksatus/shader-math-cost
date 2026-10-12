@@ -91,29 +91,29 @@ def run_export(args):
 MEASURE = Command(
     "measure", "measure every .vert / .frag (GLSL) and .vert.spv / .frag.spv (SPIR-V, Vulkan only) in a folder with "
                "malioc, then write the report",
-    [Arg("folder"), MAIN_CORES, JOBS,
-     Arg("--api", default="gles", choices=["gles", "vulkan"], help="API for GLSL files (SPIR-V is always vulkan)"),
-     Arg("--out", help="output folder (default: the measured folder)"),
-     Arg("--no-report", action="store_true", help="skip report.csv"),
+    [Arg("folder", label="Папка"), MAIN_CORES, JOBS,
+     Arg("--api", label="API", default="gles", choices=["gles", "vulkan"], help="API for GLSL files (SPIR-V is always vulkan)"),
+     Arg("--out", label="Папка результата", help="output folder (default: the measured folder)"),
+     Arg("--no-report", label="Без report.csv", action="store_true", help="skip report.csv"),
      FP16],
     run_measure, phases=lambda v: ["measure"], title="Замер папки шейдеров")
 
 REPORT = Command(
     "report", "report.csv (variants ranked on the main core) from measurements.jsonl",
-    [Arg("folder"), Arg("--out", help="output folder (default: the folder)"), FP16],
+    [Arg("folder", label="Папка"), Arg("--out", label="Папка результата", help="output folder (default: the folder)"), FP16],
     run_report, title="Отчёт по замерам")
 
 EXPORT = Command(
     "export", "compile shaders of a Unity project into per-variant GLSL / SPIR-V files (in the open editor via Unity "
               "CLI, else in batchmode)",
-    [Arg("shaders", nargs="+", help="asset path (Assets/.../X.shadergraph), folder under Assets/ or shader name "
+    [Arg("shaders", label="Шейдеры", nargs="+", help="asset path (Assets/.../X.shadergraph), folder under Assets/ or shader name "
                                     "(Universal Render Pipeline/Lit)"),
-     Arg("--project", required=True, help="Unity project folder"),
-     Arg("--out", help="output folder (default: paretogpu/corpus/real/<project name>, not in git)"),
-     Arg("--platforms", default="gles3,vulkan", help="comma separated: gles3, vulkan"),
-     Arg("--mode", default="auto", choices=["auto", "editor", "batch"],
+     Arg("--project", label="Проект", required=True, help="Unity project folder"),
+     Arg("--out", label="Папка результата", help="output folder (default: paretogpu/corpus/real/<project name>, not in git)"),
+     Arg("--platforms", label="Платформы", default="gles3,vulkan", help="comma separated: gles3, vulkan"),
+     Arg("--mode", label="Режим Unity", default="auto", choices=["auto", "editor", "batch"],
          help="auto: the open editor if it answers Unity CLI, else batchmode"),
-     Arg("--timeout", type=int, default=1800, help="seconds"),
-     Arg("--measure", action="store_true", help="measure the output folder with malioc and write the report"),
+     Arg("--timeout", label="Таймаут, с", type=int, default=1800, help="seconds"),
+     Arg("--measure", label="Сразу замерить", action="store_true", help="measure the output folder with malioc and write the report"),
      MAIN_CORES, JOBS, FP16],
     run_export, phases=lambda v: ["unity_export"] + (["measure"] if v.get("measure") else []), title="Экспорт шейдеров")

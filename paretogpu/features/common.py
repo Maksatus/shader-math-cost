@@ -41,13 +41,13 @@ def default_variants(values):
 
 
 def cores_args(default="preset:mobile", help=None):
-    return Group(Arg("--cores", default=default,
+    return Group(Arg("--cores", default=default, label="Ядра",
                      help=help or f"comma separated cores and/or presets (default {default})"),
-                 Arg("--core", help="one core (same as --cores <core>)"))
+                 Arg("--core", help="one core (same as --cores <core>)", label="Одно ядро"))
 
 
 MAIN_CORES = cores_args(MAIN_CORE, "comma separated cores and/or presets; preset:mobile = " + ",".join(PRESETS["mobile"])
                         + f" (default {MAIN_CORE})")
 JOBS = Arg("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)", label="Потоков malioc")
 FP16 = Arg("--fp16-threshold", type=float, default=FP16_THRESHOLD,
-           help=f"low_fp16 flag below this percent (default {FP16_THRESHOLD})")
+           help=f"low_fp16 flag below this percent (default {FP16_THRESHOLD})", label="Порог fp16, %")

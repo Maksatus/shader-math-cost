@@ -52,10 +52,10 @@ HOTSPOTS = Command(
     "hotspots", "why the heaviest shaders of a priced snapshot are heavy: every line of their GLES variant ablated "
                 "(plan A3.5), the costliest parts and what they do, the candidates for moving to the vertex shader "
                 "-> hotspots.html",
-    [Arg("frame", help="snapshot folder with frame_cost.json (after `cost`)"),
-     Arg("--top", type=positive_int, default=10, help="how many of the costliest variants (default %(default)s)"),
-     Arg("--core", help="core to ablate on (default: the snapshot's main core)"),
+    [Arg("frame", label="Снимок", help="snapshot folder with frame_cost.json (after `cost`)"),
+     Arg("--top", label="Сколько шейдеров", type=positive_int, default=10, help="how many of the costliest variants (default %(default)s)"),
+     Arg("--core", label="Ядро", help="core to ablate on (default: the snapshot's main core)"),
      JOBS,
-     Arg("--out", help="output folder (default: the snapshot folder)")],
+     Arg("--out", label="Папка результата", help="output folder (default: the snapshot folder)")],
     run_command, phases=lambda v: ["ablation", "report"], title="Почему тяжёлые шейдеры",
     report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page), result=RESULT)

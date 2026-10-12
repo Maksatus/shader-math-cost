@@ -61,18 +61,18 @@ MATSHADER = Command(
     "matshader", "one material of a Unity project: its shader variants (material and pipeline keywords, color "
                  "passes), their prices and what every line of their code costs (ablation, plan A3.2); needs the open "
                  "editor to compile",
-    [Arg("material", help=".mat path, relative to the project or absolute"),
-     Arg("--project", required=True, help="Unity project folder (its editor must be open to compile)"),
-     Arg("--variants", help="folder of the compiled variants (default: paretogpu/out/variants_<project>)"),
+    [Arg("material", label="Материал", help=".mat path, relative to the project or absolute"),
+     Arg("--project", label="Проект", required=True, help="Unity project folder (its editor must be open to compile)"),
+     Arg("--variants", label="Папка скомпилированных вариантов", help="folder of the compiled variants (default: paretogpu/out/variants_<project>)"),
      cores_args(),
-     Arg("--ablate-cores", help="cores to ablate on, comma separated (default Mali-G78): every statement is one malioc "
+     Arg("--ablate-cores", label="Ядра для разбора по строкам", help="cores to ablate on, comma separated (default Mali-G78): every statement is one malioc "
                                 "run per core"),
-     Arg("--n", type=int, default=LOOP_ITERS, help="iterations of the dynamic loops in the ablation (default %(default)s)"),
-     Arg("--api", default="vulkan", choices=["vulkan", "gles"], help="main API of the prices (default vulkan)"),
-     Arg("--no-compile", action="store_true", help="use only the variants already in the folder"),
-     Arg("--recompile", action="store_true", help="compile the material's variants again"),
+     Arg("--n", label="Итераций динамических циклов", type=int, default=LOOP_ITERS, help="iterations of the dynamic loops in the ablation (default %(default)s)"),
+     Arg("--api", label="API цен", default="vulkan", choices=["vulkan", "gles"], help="main API of the prices (default vulkan)"),
+     Arg("--no-compile", label="Не компилировать", action="store_true", help="use only the variants already in the folder"),
+     Arg("--recompile", label="Скомпилировать заново", action="store_true", help="compile the material's variants again"),
      JOBS,
-     Arg("--out", help="output folder (default: paretogpu/out/_matshader/<time>)")],
+     Arg("--out", label="Папка результата", help="output folder (default: paretogpu/out/_matshader/<time>)")],
     run_command, title="Разбор материала",
     phases=lambda v: ["materials", "fingerprints", "compile", "measure", "loops", "ablation", "report"],
     report=lambda v: os.path.join(v["out"], RESULT.page),
