@@ -39,7 +39,7 @@ def run_command(args):
         c, state = cost.run(args.frame, root, cores, args.api, args.main_core, project, args.materials,
                             compile_missing=not args.no_compile, recompile=args.recompile,
                             retry_failed=args.retry_failed, jobs=args.jobs, loop_iters=args.loop_iters,
-                            loop_overrides=overrides)
+                            loop_overrides=overrides, loop_pixels=args.loop_pixels)
     except VariantsError as e:
         fail(f"variants failed: {e}", e)
     out = args.out or args.frame
@@ -74,13 +74,15 @@ def print_summary(c, n_variants, api):
         lp = c["loops"]
         if lp["events"]:
             by_n = lp["by_n"][mc]
-            print(f"dynamic loops (lights, probes, ray steps) in {lp['events']} events, priced at n = {lp['n']} "
-                  f"iterations" + (f", {', '.join(f'{k}={v}' for k, v in lp['overrides'].items())}" if lp["overrides"] else "")
-                  + "; frame at n = " + ", ".join(
-                      f"{n}: {v['total'] / 1e6:.0f} M ({100 * v['loop_share']:.0f}% in loops)" for n, v in by_n.items()))
-            top = sorted({k for v in by_n.values() for k in list(v["stages"])[:3]})
-            print("  stages by n: " + "; ".join(
-                f"{s} " + "/".join(f"{100 * v['stages'].get(s, 0):.0f}" for v in by_n.values()) + "%" for s in top))
+            print(f"dynamic loops (lights, probes, ray steps) in {lp['events']} events: repeats from the shader "
+                  f"parameters in {lp.get('bounded', 0)}, from the capture in {lp.get('measured', 0)}, the others at "
+                  f"n = {lp['n']} iterations" + (f", {', '.join(f'{k}={v}' for k, v in lp['overrides'].items())}" if lp["overrides"] else ""))
+            if lp.get("unknown", 1):  # the range of n only while some loop's repeats are a guess
+                print("  frame at n = " + ", ".join(
+                    f"{n}: {v['total'] / 1e6:.0f} M ({100 * v['loop_share']:.0f}% in loops)" for n, v in by_n.items()))
+                top = sorted({k for v in by_n.values() for k in list(v["stages"])[:3]})
+                print("  stages by n: " + "; ".join(
+                    f"{s} " + "/".join(f"{100 * v['stages'].get(s, 0):.0f}" for v in by_n.values()) + "%" for s in top))
     prof = c.get("profile") or {}
     print(profile.summary(prof))
     for w in prof.get("warnings") or []:
@@ -139,6 +141,9 @@ COST = Command(
          help="iterations of every dynamic loop (lights and probes per pixel, ray steps) of the shaders whose longest "
               "path is N/A; the report also shows the frame at n = " + ", ".join(map(str, LOOP_NS))
               + " (default %(default)s)", label="Итераций динамических циклов"),
+     Arg("--loop-pixels", type=int, default=16, label="Пикселей на draw для подсчёта циклов",
+         help="pixels of every draw with a loop of unknown trip count (lights / probes per pixel) debugged in the "
+              "snapshot's RenderDoc capture to count how many times its loops ran (0: none; default %(default)s)"),
      Arg("--loop-iters-shader", action="append", metavar="NAME=N",
          help="iterations for the shaders whose name contains NAME, e.g. Hidden/SSR=12 (repeatable)",
          label="Итерации по шейдерам (NAME=N через «;»)"),
@@ -146,6 +151,6 @@ COST = Command(
      Arg("--out", help="output folder (default: the snapshot folder)", label="Папка результата")],
     run_command, title="Цена кадра",
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
-                                                                         "report"],
+                                                                         "bounds", "rd_loops", "report"],
     report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page),
     ui_values=default_variants, result=RESULT)

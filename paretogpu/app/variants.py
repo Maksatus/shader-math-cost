@@ -8,11 +8,13 @@ while its shader's fingerprint is the same, a malioc run of the same text from i
 
 run() -> the state core/variants.match() reads: per draw event, the measurement records of its fragment and vertex
 shader (per compute event, of its kernel) on every core, or the reason there is none. loops_of() adds the prices of
-the dynamic loops (core/loops.py) of the files whose longest path is N/A.
+the dynamic loops (core/loops.py) of the files whose longest path is N/A; bounds_of() what bounds each of their outer
+loops (a function of the shader's uniforms, read from the GLES file of the same variant).
 """
 import os
 
 from paretogpu.adapters.unity import variants as unity_variants
+from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app.engine import Engine
 from paretogpu.app.rules import CompileRule, LoopRule, MeasureRule
 from paretogpu.core import loops
@@ -92,7 +94,7 @@ def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     if not dyn:
         rep.skip("loops")
         return {}
-    rep.log(f"pricing dynamic loops of {len(dyn)} files at n = {', '.join(map(str, loops.NS))} ...")
+    rep.log(f"pricing dynamic loops of {len(dyn)} files: every outer loop at 0 and 2 iterations, the others at 1 ...")
     res = Engine(rep, jobs).get(LoopRule(root), [(fn, c) for fn in dyn for c in cores])
     out = {fn: {} for fn in dyn}
     for (fn, core), p in res.items():
@@ -102,4 +104,37 @@ def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     if bad:
         rep.log(f"  loops not forced in {len(bad)} files (priced by total): " + ", ".join(bad[:5])
                 + (" ..." if len(bad) > 5 else ""))
+    return out
+
+
+def bounds_of(state: VariantState, project, root, compile_missing=True, rep=CONSOLE) -> dict:
+    """{file: [bound per outer loop (core/loops.glsl_bounds) or None]} of the files with loop prices: the bounds are
+    read from the GLES file of the same variant (HLSLcc keeps the uniform names; its outer loops are in the order of
+    the other APIs'), compiled now in the open editor when missing and compile_missing. A file whose GLES file is
+    missing or has another number of outer loops is left out: its loops keep the default n."""
+    looped = {fn: next(iter(p.values())) for fn, p in (state.get("loops") or {}).items() if p}
+    if not looped:
+        rep.skip("bounds")
+        return {}
+    rep.phase("bounds")
+    missing = [fn for fn in looped if not store.gles_file(root, fn)]
+    if missing and compile_missing and project:
+        key_of = {fn: k for k, files in state["files"].items() for fn in files.values()}
+        keys = list(dict.fromkeys(key_of[fn] for fn in missing if fn in key_of))
+        rep.log(f"compiling the GLES files of {len(keys)} variants with dynamic loops (their loop bounds) ...")
+        try:
+            compile_keys(keys, project, root, ["gles3"], rep)
+        except VariantsError as e:
+            rep.log(f"  not compiled: {e}")
+    out = {}
+    for fn, profile in looped.items():
+        gf = store.gles_file(root, fn)
+        if not gf:
+            continue
+        with open(gf, encoding="utf-8", errors="replace") as f:
+            b = loops.glsl_bounds(f.read())
+        if b is not None and len(b) == len(profile["loops"]):
+            out[fn] = b
+    rep.log(f"  loop bounds of {len(out)} of {len(looped)} files: "
+            f"{sum(1 for b in out.values() for x in b if x)} loops bounded by uniforms")
     return out

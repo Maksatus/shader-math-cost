@@ -86,19 +86,41 @@ function renderCost() {
   document.getElementById("costLink").href = SITE_REF + "#report";
   const pathNote = p => p === "total" ? " · total" : String(p || "").startsWith("loop") ? " · цикл " + esc(p.slice(5)) : "";
   // a dynamic loop (lights per pixel, ray steps): its price at 0, 1, 2, 4, 8 repeats; the used one is in px_path "loop n=2"
-  const loopN = c => (String(c.px_path || "").match(/n=(\d+)/) || [])[1];
+  const loopN = () => String((D.loops || {}).n ?? "");  // the default n: the column of the range that is the price
   const byN = c => c.px_price_by_n ? "цена пикселя при числе повторов цикла: " + Object.entries(c.px_price_by_n)
     .map(([n, v]) => `${n} → ${cyc(v)}${n === loopN(c) ? " (в итоге)" : ""}`).join(" · ") : "";
+  // what every outer loop of the shader costs at its number of repeats (core/pricing.loop_parts) and where that
+  // number is from (r.loop.loops: a uniform of the event, the event's pixels in the RenderDoc capture, the shader's
+  // override or the default n), in code order
+  const repeats = n => Number.isInteger(+n) ? plural(+n, "повтор", "повтора", "повторов") : `${(+n).toFixed(2)} повтора в среднем`;
+  const loopFrom = s => !s ? "" : s.from === "uniform" ? `: ${s.bound} = ${+Number(s.value).toFixed(3)}`
+    : s.from === "frame" ? `, из кадра: ${plural(s.pixels, "пиксель", "пикселя", "пикселей")} в RenderDoc`
+    : s.from === "override" ? ", задано для шейдера" : ", по умолчанию";
+  // the event still has a loop whose number of repeats the frame does not give: the prices at n = 0..8 mean something
+  const guessed = r => !r.loop || !(r.loop.loops || []).length || r.loop.loops.some(x => x.from === "default");
+  const loopParts = (r, c) => {
+    const parts = c.px_loops || c.cs_loops, src = (r.loop || {}).loops || [];
+    if (!parts || !parts.length) return "";
+    const price = c.px_loops ? c.px_price : c.cs_price;
+    return `из ${cyc(price)} циклов ${c.px_loops ? "пикселя" : "потока"} на циклы шейдера приходится: ` + parts.map((x, i) =>
+      `${i + 1}-й (${repeats(x.n)}${loopFrom(src[i])}) — ${cyc(x.cycles)}`).join(" · ");
+  };
+  const PARTS_TIP = "Циклы шейдера по порядку в коде. Для каждого — сколько раз он повторяется и откуда это взято: "
+    + "из параметра шейдера этого события (граница цикла — uniform), из кадра (пиксели события отлажены в RenderDoc, "
+    + "среднее по ним), заданное для шейдера число или n по умолчанию. "
+    + "Цена цикла — цена с ним минус цена без него; части узкого места не обязаны складываться в цену.";
   const loopTip = c => `В шейдере цикл, число повторов которого заранее неизвестно (например, по источникам света на пиксель). `
     + `Цена посчитана для ${loopN(c) ?? "n"} повторов. ` + (byN(c) ? byN(c)[0].toUpperCase() + byN(c).slice(1) : "");
   function loopsTable() {
     const L = D.loops, el = document.getElementById("loops");
-    if (!L || !L.events) { el.innerHTML = ""; return; }
+    // nothing to vary when the frame gives the repeats of every loop of every event with pixels
+    if (!L || !L.events || L.unknown === 0) { el.innerHTML = ""; return; }
     const by = L.by_n[st.core] || {}, ns = Object.keys(by);
     const names = [...new Set(ns.flatMap(n => Object.keys(by[n].stages)))];
     const cell = (n, k) => `<td class="num ${String(n) === String(L.n) ? "gl" : ""}">${k}</td>`;
-    el.innerHTML = `<h2 title="Весь кадр, если в каждом шейдере с ↻ цикл повторится n раз (например, n источников света на пиксель). В итоге кадра сейчас n = ${L.n}">`
+    el.innerHTML = `<h2 title="Весь кадр, если в каждом шейдере с ↻ цикл повторится n раз (например, n источников света на пиксель). В итоге кадра сейчас n = ${L.n}. Циклы, у которых число повторов взято из параметров события, не меняются.">`
       + `↻ Кадр при разном числе повторов циклов <small>${L.events} событий с циклами · в итоге n = ${L.n}`
+      + (L.bounded ? ` · у ${L.bounded} событий часть циклов с числом повторов из параметров — они не меняются` : "")
       + (Object.keys(L.overrides).length ? " · " + Object.entries(L.overrides).map(([k, v]) => esc(k) + " = " + v).join(", ") : "")
       + (L.unforced.length ? ` · ${L.unforced.length} файлов не удалось — цена по total` : "") + `</small></h2>`
       + `<div class="wrap"><table><thead><tr><th class="l">повторов цикла, n</th>${ns.map(n => `<th class="num">${n}</th>`).join("")}</tr></thead><tbody>`
@@ -205,7 +227,8 @@ function renderCost() {
     }
     const kws = r.kind === "compute" ? "" : r.keywords.length ? r.keywords.map(k => `<span class="kw">${esc(k)}</span>`).join("") : '<span class="kw">без keywords</span>';
     return `<tr class="det"><td colspan="6"><div class="dg num">${items.join("")}</div>`
-      + (byN(c) ? `<div class="dl" title="${esc(loopTip(c))}">↻ ${esc(byN(c))}</div>` : "")
+      + (byN(c) && guessed(r) ? `<div class="dl" title="${esc(loopTip(c))}">↻ ${esc(byN(c))}</div>` : "")
+      + (loopParts(r, c) ? `<div class="dl" title="${esc(PARTS_TIP)}">↻ ${esc(loopParts(r, c))}</div>` : "")
       + (r.pixel_note ? `<div class="dl note">${esc(r.pixel_note)}</div>` : "")
       + (c.flags.length ? `<div class="dl">${c.flags.map(flagTag).join(" ")}</div>` : "")
       + `<div class="dl">${tags.map(t => `<span class="kw">${esc(t)}</span>`).join("")}${kws}</div></td></tr>`;

@@ -207,6 +207,7 @@ public static class ParetoGpuFrame
         }
         sb.Append(", \"name\": ").Append(Str((string)Call("GetFrameEventInfoName", i)));
         sb.Append(", \"meshes\": ").Append(MeshNames());
+        sb.Append(", \"params\": ").Append(ParamsJson());
         sb.Append(", \"data\": ").Append(Value(data, 0)).Append("}");
         return sb.ToString();
     }
@@ -339,6 +340,32 @@ public static class ParetoGpuFrame
             }
         }
         return "[" + string.Join(", ", names.Select(Str)) + "]";
+    }
+
+    // {name: value} of the event's float, int and vector shader parameters (m_ShaderInfo: the values the draw used; a
+    // vector is [x, y, z, w]); a name met again (an array) gets a list of its values. Python reads the bounds of
+    // dynamic loops from them (core/loops.py). Matrices, textures and buffers are left out.
+    static string ParamsJson()
+    {
+        var info = dataType.GetField("m_ShaderInfo", I)?.GetValue(data);
+        if (info == null) return "{}";
+        var values = new Dictionary<string, List<string>>();
+        foreach (var list in new[] { "m_Floats", "m_Ints", "m_Vectors" })
+        {
+            if (!(info.GetType().GetField(list, I)?.GetValue(info) is Array arr)) continue;
+            foreach (var item in arr)
+            {
+                var t = item.GetType();
+                var name = t.GetField("m_Name", I)?.GetValue(item) as string;
+                var v = t.GetField("m_Value", I)?.GetValue(item);
+                if (string.IsNullOrEmpty(name) || v == null) continue;
+                var json = v is Vector4 x ? $"[{Value(x.x, 0)}, {Value(x.y, 0)}, {Value(x.z, 0)}, {Value(x.w, 0)}]" : Value(v, 0);
+                if (!values.TryGetValue(name, out var vs)) values[name] = vs = new List<string>();
+                if (vs.Count < 64) vs.Add(json);
+            }
+        }
+        return "{" + string.Join(", ", values.Select(kv => Str(kv.Key) + ": " +
+            (kv.Value.Count == 1 ? kv.Value[0] : "[" + string.Join(", ", kv.Value) + "]"))) + "}";
     }
 
     // shader property values (matrices, vectors, floats, buffers) bloat the snapshot and are not needed

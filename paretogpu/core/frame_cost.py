@@ -21,10 +21,11 @@ import os
 import re
 from collections import OrderedDict, defaultdict
 
+from paretogpu.core import loops
 from paretogpu.core import pixels as px
 from paretogpu.core import profile
 from paretogpu.core import variants
-from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, loop_n, price, price_draw
+from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, loop_n, loop_parts, price, price_draw
 from paretogpu.model.cores import MAIN_CORE
 from paretogpu.model.cost import CostRun, CostSummary
 from paretogpu.model.frame import Event
@@ -84,11 +85,55 @@ def _event_row(ev, pix, why):
     }
 
 
-def _price_compute(row, recs, n, fixed, loop_data, loop_ns):
+KNOWN = ("uniform", "frame")  # trip counts the frame gives: they stay in the range of n
+FRAG = (".frag", ".frag.spv")
+
+
+class _Counts:
+    """The trip counts of the outer dynamic loops of one event's files (plan K1.10), the first that is known of:
+    the shader's override (every loop of the shader), the event's parameters (a loop whose bound is a function of the
+    shader's uniforms, app/variants.bounds_of), the mean iterations of the event's pixels in the RenderDoc capture
+    (the fragment stage, app/frame_loops.py), else n.
+      at(file)        [n per outer loop] (or n when the file has no loop data)
+      at(file, m)     the same with the loops of unknown trip count at m (the frame at n = 0, 1, 2, 4, 8)
+      sources(file)   [{"n", "from": "override" | "uniform" | "frame" | "default", ...}] per outer loop"""
+
+    def __init__(self, ev, loop_data, bounds, n, fixed, iters=None):
+        self.ev, self.loop_data, self.bounds, self.n, self.fixed = ev, loop_data, bounds, n, fixed
+        self.iters = iters
+
+    def sources(self, fn):
+        p = next(iter((self.loop_data.get(fn) or {}).values()), None)
+        if not p:
+            return None
+        size = len(p["loops"])
+        measured = self.iters if self.iters and len(self.iters["n"]) == size and fn.endswith(FRAG) else None
+        out = []
+        for k, b in enumerate(self.bounds.get(fn) or [None] * size):
+            v = None if self.fixed else loops.bound_value(b, self.ev.get("params"))
+            if self.fixed:
+                out.append({"n": self.n, "from": "override"})
+            elif v is not None:
+                out.append({"n": max(0, int(v)), "from": "uniform", "bound": loops.bound_text(b), "value": v})
+            elif measured:
+                out.append({"n": measured["n"][k], "from": "frame", "pixels": measured["pixels"]})
+            else:
+                out.append({"n": self.n, "from": "default"})
+        return out
+
+    def at(self, fn, m=None):
+        src = self.sources(fn)
+        if src is None:
+            return self.n if m is None else m
+        return [x["n"] if m is None or x["from"] in KNOWN else m for x in src]
+
+
+def _price_compute(row, recs, counts, loop_data, loop_ns):
     """The cost of a dispatch on every core of its kernel: {core: arch} of the cores found."""
     fn = next(iter(recs["compute"].values()))["file"]
     row["files"] = {"compute": fn}
     found = {}
+    n = counts.at(fn)
     for c in recs["compute"]:
         sc = price(recs["compute"], fn, c, n, loop_data)
         found[c] = recs["compute"][c]["arch"]
@@ -99,16 +144,20 @@ def _price_compute(row, recs, n, fixed, loop_data, loop_ns):
             "fragment": 0.0, "vertex": 0.0, "compute": cc, "total": cc, "flags": sc["flags"],
             "px_regs": sc["work_regs"], "vtx_regs": None, "px_fp16": sc["fp16_pct"],
         }
-        if (loop_data.get(fn) or {}).get(c) and not fixed:
+        if (loop_data.get(fn) or {}).get(c):
+            row["cost"][c]["cs_loops"] = loop_parts(recs["compute"], fn, c, n, loop_data)
+        if (loop_data.get(fn) or {}).get(c) and not counts.fixed:
             row["cost"][c]["total_by_n"] = {
-                str(m): row["threads"] * price(recs["compute"], fn, c, m, loop_data)["cycles"] for m in loop_ns}
+                str(m): row["threads"] * price(recs["compute"], fn, c, counts.at(fn, m), loop_data)["cycles"]
+                for m in loop_ns}
     return found
 
 
-def _price_draw(row, recs, n, fixed, loop_data, loop_ns):
+def _price_draw(row, recs, counts, loop_data, loop_ns):
     """The cost of a draw on every core both its stages are measured on: {core: arch} of the cores found."""
     row["files"] = {s: next(iter(r.values()))["file"] for s, r in recs.items()}
     ff, fv = row["files"]["fragment"], row["files"]["vertex"]
+    n = {"fragment": counts.at(ff), "vertex": counts.at(fv)}
     found = {}
     for c in recs["fragment"]:
         if c not in recs["vertex"]:
@@ -123,11 +172,14 @@ def _price_draw(row, recs, n, fixed, loop_data, loop_ns):
             "fragment": cf, "vertex": cv, "compute": 0.0, "total": cf + cv, "flags": d["flags"],
             "px_regs": f["work_regs"], "vtx_regs": v["work_regs"], "px_fp16": f["fp16_pct"],
         }
+        if (loop_data.get(ff) or {}).get(c):
+            row["cost"][c]["px_loops"] = loop_parts(recs["fragment"], ff, c, n["fragment"], loop_data)
         looped = (loop_data.get(ff) or {}).get(c) or (loop_data.get(fv) or {}).get(c)
-        if looped and not fixed:
+        if looped and not counts.fixed:
             by_n, px_by_n = {}, {}
             for m in loop_ns:
-                fp, vp = price(recs["fragment"], ff, c, m, loop_data), price(recs["vertex"], fv, c, m, loop_data)
+                fp = price(recs["fragment"], ff, c, counts.at(ff, m), loop_data)
+                vp = price(recs["vertex"], fv, c, counts.at(fv, m), loop_data)
                 by_n[str(m)] = row["pixels"] * fp["cycles"] + row["vertices"] * vp["cycles"]
                 px_by_n[str(m)] = fp["cycles"]
             row["cost"][c]["total_by_n"], row["cost"][c]["px_price_by_n"] = by_n, px_by_n
@@ -168,9 +220,12 @@ def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", 
     """Cost of every event on every core. Returns the frame_cost.json structure.
     loop_iters: trip count of every outer dynamic loop (lights, probes, ray steps) of a shader whose longest path
     is N/A on some core (state["loops"], core/loops.py); loop_overrides: {part of a shader name: n};
-    loop_ns: the trip counts of the range shown in the report."""
+    loop_ns: the trip counts of the range shown in the report. A loop whose bound is a function of uniforms
+    (state["loop_bounds"], app/variants.bounds_of) runs as many times as the event's parameters say (_Counts)."""
     pix = px.resolve(events)
     loop_data = state.get("loops") or {}
+    bounds = state.get("loop_bounds") or {}
+    iters = state.get("loop_iters") or {}
     rows, missing = [], []
     found_cores = OrderedDict()
     for ev in events:
@@ -179,16 +234,18 @@ def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", 
         recs, why = variants.match(ev, state, api)
         row = _event_row(ev, pix, why)
         n_ev, fixed = loop_n(row["shader"], loop_iters, loop_overrides)
+        counts = _Counts(ev, loop_data, bounds, n_ev, fixed, iters.get(ev["index"]))
         if recs and "compute" in recs:
-            found_cores.update(_price_compute(row, recs, n_ev, fixed, loop_data, loop_ns))
+            found_cores.update(_price_compute(row, recs, counts, loop_data, loop_ns))
         elif recs and len(recs) == 2:
-            found_cores.update(_price_draw(row, recs, n_ev, fixed, loop_data, loop_ns))
+            found_cores.update(_price_draw(row, recs, counts, loop_data, loop_ns))
         else:
             missing.append({"index": ev["index"], "kind": ev["kind"], "stage": ev["stage"], "object": row["object"],
                             "shader": row["shader"], "pass": row["pass"], "reason": why or "not measured"})
         if any(str(x.get(k) or "").startswith("loop") for x in row["cost"].values()
                for k in ("px_path", "vtx_path", "cs_path")):
-            row["loop"] = {"n": n_ev, "fixed": fixed}
+            main = row["files"].get("fragment") or row["files"].get("compute")
+            row["loop"] = {"n": n_ev, "fixed": fixed, "loops": counts.sources(main)}
         rows.append(row)
 
     cores = [c for c in (cores or found_cores) if c in found_cores]
@@ -204,6 +261,13 @@ def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", 
         "totals": totals,
         "loops": {"n": loop_iters, "overrides": dict(loop_overrides or {}), "range": list(loop_ns),
                   "events": sum(1 for r in rows if r["loop"]), "files": len(loop_data),
+                  "bounded": sum(1 for r in rows if r["loop"] and any(x["from"] == "uniform"
+                                                                         for x in r["loop"]["loops"] or [])),
+                  "measured": sum(1 for r in rows if r["loop"] and any(x["from"] == "frame"
+                                                                          for x in r["loop"]["loops"] or [])),
+                  "unknown": sum(1 for r in rows if r["loop"] and (r["pixels"] or r["threads"]) and (
+                      not r["loop"]["loops"] or any(x["from"] not in KNOWN + ("override",)
+                                                    for x in r["loop"]["loops"]))),
                   "unforced": sorted(f for f, d in loop_data.items() if len(d) < len(cores)), "by_n": by_n},
         "coverage": {"draws": len(draws), "draws_priced": sum(1 for r in draws if r["cost"]),
                      "events": len(rows), "events_priced": sum(1 for r in rows if r["cost"])},

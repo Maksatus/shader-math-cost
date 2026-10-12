@@ -24,6 +24,8 @@ class StageCosts(TypedDict, total=False):
     vtx_regs: int
     px_fp16: int
     total_by_n: dict      # {n: total} with the dynamic loops at n iterations
+    px_loops: list        # core/pricing.loop_parts of the fragment stage: [{"n", "cycles"}] per outer loop
+    cs_loops: list        # the same of a compute kernel
     px_price_by_n: dict
 
 

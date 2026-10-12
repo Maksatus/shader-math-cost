@@ -2,7 +2,7 @@
 
   CompileRule  VariantKey -> {"files": {(platform, stage): file}, "errors": [..]} in the variants folder
   MeasureRule  (file, core) -> malioc's Measurement of the file on the core
-  LoopRule     (file, core) -> LoopProfile: the file's dynamic loops forced to n = 0, 1, 2 (and word 1) and measured
+  LoopRule     (file, core) -> LoopProfile: the file's dynamic loops forced as core/loops.plan says and measured
 """
 import hashlib
 import os
@@ -210,14 +210,15 @@ class MeasureRule(Rule):
 
 
 def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
-    """{"c": [cycles at n = 0, 1, 2, word 1] (combined variants, longest path), "work_regs", "spilling"} of the
-    forced sources (loops.forced(src)) on one core, or None (cannot be forced, malioc failed, still
-    N/A)."""
-    if any(f is None for f in forced):
+    """The loop profile (core/loops.profile: base and every outer loop at 0 and 2 iterations, word; combined variants,
+    longest path) with "work_regs" and "spilling" of the forced sources (loops.forced(src)) on one core, or None
+    (cannot be forced, malioc failed, still N/A)."""
+    if forced is None:
         return None
+    plan, srcs = forced
     gpu = gpu or backend()
     cs, regs, spill = [], 0, False
-    for f in forced:
+    for f in srcs:
         r = gpu.measure(f, core, api, stage)
         if not r["ok"]:
             return None
@@ -227,14 +228,15 @@ def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
         cs.append(c)
         regs = max(regs, max((v["work_regs"] or 0) for v in r["variants"].values()))
         spill = spill or gpu.spills(r)
-    return {"c": cs, "work_regs": regs, "spilling": spill}
+    return {**loops.profile(plan, cs), "work_regs": regs, "spilling": spill}
 
 
 class LoopRule(Rule):
-    """The dynamic loops of a file forced to n = 0, 1, 2 iterations and word 1 (core/loops.py) measured on one core;
-    None when its loops cannot be forced (it is priced by total cycles then; not remembered)."""
+    """The dynamic loops of a file forced as core/loops.plan says (every outer loop at 0 and 2 iterations, the others at
+    1) and measured on one core; None when its loops cannot be forced (it is priced by total cycles then; not
+    remembered)."""
     phase = "loops"
-    memo = "loops/2"
+    memo = "loops/3"
 
     def __init__(self, root, gpu=None):
         self.root = root
@@ -247,7 +249,7 @@ class LoopRule(Rule):
     def memo_key(self, key):
         fn, core = key
         try:
-            return f"{self.hash(fn)}|{core}|{stage_of(fn)}|{','.join(map(str, loops.NS))}|{self.gpu.tool}"
+            return f"{self.hash(fn)}|{core}|{stage_of(fn)}|{loops.MODEL}|{self.gpu.tool}"
         except OSError:
             return None
 

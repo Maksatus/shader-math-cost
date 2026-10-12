@@ -57,6 +57,32 @@ class CostTest(unittest.TestCase):
             self.assertAlmostEqual(sum(a["share"] for a in c["groups"]["Mali-G78"][g]), 1.0)
         self.assertEqual(c["coverage"], {"draws": 3, "draws_priced": 3, "events": 3, "events_priced": 3})
 
+    def test_loop_bounded_by_a_uniform_runs_as_the_event_says(self):
+        ev = event(0, "opaque", "L", 100, "renderdoc", vertices=3)
+        ev["params"] = {"_Count": [3.0, 9.0, 0.0, 0.0]}
+        st = state([ev], {"L": (10, 1)})
+        prof = {"base": {"fma": 10.0, "arith": 10.0},
+                "loops": [{"zero": {"fma": 6.0, "arith": 6.0}, "two": {"fma": 13.0, "arith": 13.0}, "word": None},
+                          {"zero": {"fma": 8.0, "arith": 8.0}, "two": {"fma": 12.0, "arith": 12.0}, "word": None}]}
+        st["loops"] = {"L.frag.spv": {"Mali-G78": prof}}
+        st["loop_bounds"] = {"L.frag.spv": [None, ["min", ["u", "_Count", 0], ["c", 8.0]]]}
+        c = cost.compute({}, [ev], st, loop_iters=2)
+        r = c["events"][0]
+        self.assertEqual(r["cost"]["Mali-G78"]["px_price"], 10.0 + 1 * 3.0 + 2 * 2.0)  # n = [2 (default), 3 (_Count.x)]
+        self.assertEqual([(x["n"], x["from"]) for x in r["loop"]["loops"]], [(2, "default"), (3, "uniform")])
+        self.assertEqual(r["loop"]["loops"][1]["bound"], "min(_Count.x, 8)")
+        # the frame at n = 0: only the loop of unknown bound changes
+        self.assertEqual(r["cost"]["Mali-G78"]["px_price_by_n"]["0"], 10.0 - 4.0 + 2 * 2.0)
+        self.assertEqual(c["loops"]["bounded"], 1)
+        # the capture gives the other loop: 1.5 iterations on average over the debugged pixels
+        st["loop_iters"] = {0: {"n": [1.5, 0.0], "pixels": 16, "calls": 1}}
+        c = cost.compute({}, [ev], st, loop_iters=2)
+        r = c["events"][0]
+        self.assertEqual([(x["n"], x["from"]) for x in r["loop"]["loops"]], [(1.5, "frame"), (3, "uniform")])
+        self.assertEqual(r["cost"]["Mali-G78"]["px_price"], 10.0 + 0.5 * 3.0 + 2 * 2.0)
+        self.assertEqual(c["loops"]["unknown"], 0)  # nothing left to vary
+        self.assertEqual(r["cost"]["Mali-G78"]["px_price_by_n"]["0"], r["cost"]["Mali-G78"]["px_price"])
+
     def test_renderdoc_vertices_and_compute(self):
         draw = event(0, "opaque", "A", 100, "renderdoc", vertices=50, rd={"ps_invocations": 100, "vs_invocations": 70})
         disp = {"index": 1, "kind": "compute", "type": "ComputeDispatch", "stage": "compute", "path": "X/Scatter",

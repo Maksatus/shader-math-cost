@@ -27,12 +27,14 @@ def _measure(text, core, stage, gpu):
 
 def measure(src, core, stage, n, forced_loops, gpu=None):
     """{"pipes", "price", "bound", "regs"} of a GLSL source on a core, dynamic loops priced at n as in the frame
-    (core/loops.py: measured at n = 1, 2 and word(1), cycles_at(n)); or {"error"}."""
+    (core/loops.py: the measurements of its plan, cycles_at(n)); or {"error"}."""
     gpu = gpu or backend()
+    plan = None
     if forced_loops:
-        texts = [loops.force_glsl(src, n)] if n < 2 else loops.forced(src)[1:]
-        if any(t is None for t in texts):
+        f = loops.forced(src)
+        if f is None:
             return {"error": "циклы не удалось прогнать n раз"}
+        plan, texts = f
     else:
         texts = [src]
     runs = {}
@@ -42,7 +44,7 @@ def measure(src, core, stage, n, forced_loops, gpu=None):
             if "error" in runs[t]:
                 return runs[t]
     ms = [runs[t] for t in texts]
-    pipes = ms[0]["pipes"] if len(ms) == 1 else loops.cycles_at({"c": [None] + [m["pipes"] for m in ms]}, n)
+    pipes = loops.cycles_at(loops.profile(plan, [m["pipes"] for m in ms]), n) if plan else ms[0]["pipes"]
     price, bound = heavy.bottleneck(pipes)
     return {"pipes": {k: round(pipes.get(k) or 0.0, 4) for k in PIPES if pipes.get(k) is not None},
             "price": round(price, 4), "bound": bound, "regs": max(m["regs"] for m in ms),
@@ -52,7 +54,7 @@ def measure(src, core, stage, n, forced_loops, gpu=None):
 class AblateRule(Rule):
     """(statement id, core) -> measure() of the shader with that statement ablated, its loops priced at n."""
     phase = "ablation"
-    memo = "ablation/2"
+    memo = "ablation/3"
 
     def __init__(self, src, parsed, stage, n, forced, gpu=None):
         self.src, self.p, self.stage, self.n, self.forced = src, parsed, stage, n, forced

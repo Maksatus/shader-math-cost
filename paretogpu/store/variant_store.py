@@ -91,3 +91,15 @@ def load_index(root):
 def save_index(root, index):
     with open(os.path.join(root, INDEX), "w", encoding="utf-8", newline="\n") as f:
         json.dump({"variants": list(index.values())}, f, indent=1, ensure_ascii=False)
+
+
+def gles_file(root, file):
+    """The GLES file of a variant from its file of any API (<shader>_vulkan/<name>.frag.spv -> <shader>/<name>.frag),
+    or None when it is not compiled."""
+    folder, name = os.path.split(file.replace("\\", "/"))
+    if folder.endswith("_vulkan"):
+        folder = folder[:-len("_vulkan")]
+    if name.endswith(".spv"):
+        name = name[:-len(".spv")]
+    path = os.path.join(root, folder, name)
+    return path if os.path.isfile(path) else None

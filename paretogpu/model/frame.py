@@ -19,7 +19,8 @@ Event = TypedDict("Event", {
     "pass_index": int, "keywords": list, "global_keywords": list, "vertices": int, "indices": int,
     "instances": int, "draw_calls": int, "rt": RenderTarget, "blend": str, "write_mask": int, "ztest": int,
     "zwrite": bool, "cull": int, "batch_break": int, "compute": Compute, "stage": str, "pixel_count": int,
-    "pixel_method": str, "rd": RdCounters}, total=False)
+    "pixel_method": str, "rd": RdCounters,
+    "params": dict}, total=False)  # params: {name: number or [x, y, z, w] or [values of an array]}
 
 
 class Snapshot(TypedDict, total=False):

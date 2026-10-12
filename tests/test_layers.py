@@ -1,4 +1,4 @@
-"""The layers of paretogpu import only downwards (README, "Как устроен код"):
+"""The layers of paretogpu import only downwards (README, "Код"):
 
   cli, ui, doctor, corpus  ->  features  ->  app  ->  adapters | store | views  ->  core  ->  model
 

@@ -13,7 +13,7 @@ import unittest
 
 import paretogpu
 
-SKIP = ("rd_counters", "__main__")
+SKIP = ("rd_counters", "rd_loops", "__main__")
 
 
 def _codes(co):

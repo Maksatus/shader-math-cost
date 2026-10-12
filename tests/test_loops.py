@@ -48,9 +48,69 @@ class GlslTest(unittest.TestCase):
         self.assertEqual((word.count("<1;"), word.count("<2;")), (1, 1))
 
     def test_nested_loop_is_out_of_the_slope(self):
-        c = [{"ls": 4.0}, {"ls": 10.0}, {"ls": 15.0}, {"ls": 12.0}]  # terrain probe loop on G78
-        self.assertEqual(loops.cycles_at({"c": c}, 3)["ls"], 10.0 + 2 * 3.0)
-        self.assertEqual(loops.cycles_at({"c": c[:3]}, 3)["ls"], 10.0 + 2 * 5.0)  # saved before word(1)
+        # terrain probe loop on G78: base 10, at 0 -> 4, at 2 -> 15, its nested scan twice -> 12
+        p = {"base": {"ls": 10.0}, "loops": [{"zero": {"ls": 4.0}, "two": {"ls": 15.0}, "word": {"ls": 12.0}}]}
+        self.assertEqual(loops.cycles_at(p, 3)["ls"], 10.0 + 2 * 3.0)
+        self.assertEqual(loops.cycles_at(p, 0)["ls"], 4.0)
+        p["loops"][0]["word"] = None  # no nested loop: the whole step is the slope
+        self.assertEqual(loops.cycles_at(p, 3)["ls"], 10.0 + 2 * 5.0)
+
+    def test_fractional_n_is_linear(self):
+        p = {"base": {"ls": 10.0}, "loops": [{"zero": {"ls": 4.0}, "two": {"ls": 15.0}, "word": None}]}
+        self.assertEqual(loops.cycles_at(p, 0.5)["ls"], 10.0 - 0.5 * 6.0)  # between 0 and 1 repeats
+        self.assertEqual(loops.cycles_at(p, 1.5)["ls"], 10.0 + 0.5 * 5.0)
+
+    def test_pixels_split_over_calls(self):
+        from paretogpu.app.frame_loops import _split
+        self.assertEqual(_split(16, [(1, 1225346), (2, 48044), (3, 0)]), [(1, 15), (2, 1)])
+        many = _split(16, [(i, 100 + i) for i in range(60)])
+        self.assertEqual(sum(n for _, n in many), 16)  # a batch of many calls: still 16 pixels
+        self.assertEqual(_split(16, [(1, 0)]), [])
+
+    def test_every_loop_has_its_n(self):
+        p = {"base": {"ls": 10.0, "fma": 5.0},
+             "loops": [{"zero": {"ls": 6.0, "fma": 4.0}, "two": {"ls": 13.0, "fma": 6.0}, "word": None},
+                       {"zero": {"ls": 9.0, "fma": 3.0}, "two": {"ls": 11.0, "fma": 7.0}, "word": None}]}
+        self.assertEqual(loops.cycles_at(p, [0, 3]), {"ls": 10.0 - 4.0 + 2 * 1.0, "fma": 5.0 - 1.0 + 2 * 2.0})
+        self.assertEqual(loops.cycles_at(p, 2), loops.cycles_at(p, [2, 2]))  # one n for all is the same formula
+        self.assertEqual(loops.cycles_at(p, 1), p["base"])
+
+    def test_plan_and_forcing_per_loop(self):
+        src = "void main(){ while(true){ if(a) break; while(true){ if(b) break; } } for(int i=0;i<uN;i++){ x+=1.0; } }"
+        self.assertEqual(loops.outer_loops(src), [{"nested": True}, {"nested": False}])
+        self.assertEqual([(m, k) for m, k, _, _ in loops.plan(src)],
+                         [("base", None), ("zero", 0), ("two", 0), ("word", 0), ("zero", 1), ("two", 1)])
+        out = loops.force_glsl(src, [3, 0])
+        self.assertEqual((out.count("<3;"), out.count("<1;"), out.count("<0;")), (1, 1, 1))  # nested: once
+        word = loops.force_glsl(src, 1, [2, 1])
+        self.assertEqual((word.count("<2;"), word.count("<1;")), (1, 2))
+        p = {"base": {"x": 1.0}, "loops": [{"zero": {"x": 0.5}, "two": {"x": 2.0}, "word": {"x": 1.0}},
+                                            {"zero": {"x": 0.8}, "two": {"x": 1.1}, "word": None}]}
+        self.assertEqual(loops.profile(loops.plan(src), [{"x": v} for v in (1.0, 0.5, 2.0, 1.0, 0.8, 1.1)])["loops"],
+                         p["loops"])
+
+    def test_bounds_traced_to_uniforms(self):
+        src = """uniform 	vec4 CR_Params0;
+uniform 	uint _WaveCount;
+UNITY_BINDING(0) uniform Block {
+	vec4                _Arr[16];
+	float                _Scale;
+};
+uvec4 u_xlatu1;
+void main(){
+    u_xlatu1.xw = uvec2(CR_Params0.zw);
+    if(c){ u_xlatu1.y = 7u; }
+    while(true){ if(a) break; while(true){ if(b) break; } }
+    u_xlatu1.x = min(u_xlatu1.w, 128u);
+    for(uint u_xlatu_loop_1 = 0u ; u_xlatu_loop_1<u_xlatu1.x ; u_xlatu_loop_1++){ x += 1.0; }
+    for(uint i = 0u ; i<=_WaveCount ; i++){ x += 1.0; }
+    for(uint j = 0u ; j<u_xlatu1.y ; j++){ x += 1.0; }
+}"""
+        b = loops.glsl_bounds(src)
+        self.assertEqual([loops.bound_text(x) for x in b], [None, "min(CR_Params0.w, 128)", "_WaveCount + 1", None])
+        params = {"CR_Params0": [1.0, 2.0, 0.0, 300.0], "_WaveCount": 4}
+        self.assertEqual([loops.bound_value(x, params) for x in b], [None, 128.0, 5.0, None])
+        self.assertIsNone(loops.bound_value(b[1], {}))  # the event has no such parameter: default n
 
     def test_static_loop_is_kept(self):
         self.assertIsNone(loops.force_glsl("void main(){ for(int i = 0 ; i<4 ; i++){ x += 1.0; } }", 2))
@@ -82,13 +142,14 @@ class SpirvTest(unittest.TestCase):
         src = read(SPV, True)
         p = rules.parametric(loops.forced(src), "vulkan", "fragment", "Mali-G78")
         self.assertIsNotNone(p)
-        c0, c1, c2, word = (c["sfu"] for c in p["c"])
-        self.assertEqual(word, c1)  # no nested loops
+        self.assertEqual(len(p["loops"]), 1)
+        lp = p["loops"][0]
+        c0, c1, c2 = lp["zero"]["sfu"], p["base"]["sfu"], lp["two"]["sfu"]
+        self.assertIsNone(lp["word"])  # no nested loops
         self.assertLess(c0, c1)
         self.assertAlmostEqual(c2 - c1, c1 - c0, delta=0.25 * (c1 - c0))
         self.assertAlmostEqual(loops.cycles_at(p, 4)["sfu"], c1 + 3 * (c2 - c1))
         self.assertEqual(loops.cycles_at(p, 0)["sfu"], c0)
-
 
 if __name__ == "__main__":
     unittest.main()

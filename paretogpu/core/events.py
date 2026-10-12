@@ -89,6 +89,8 @@ def normalize(raw) -> list[Event]:
             "zwrite": bool((x.get("m_DepthState") or {}).get("m_DepthWrite")),
             "cull": (x.get("m_RasterState") or {}).get("m_CullMode"),
             "batch_break": x.get("m_BatchBreakCause"),
+            # the float, int and vector shader parameters the event used: the bounds of its dynamic loops
+            "params": e.get("params") or {},
             "compute": {"shader": compute, "kernel": x.get("m_ComputeShaderKernelName"),
                         "groups": [x.get(f"m_ComputeShaderThreadGroups{a}") for a in "XYZ"],
                         "group_size": [x.get(f"m_ComputeShaderGroupSize{a}") for a in "XYZ"]} if compute else None,
@@ -98,6 +100,8 @@ def normalize(raw) -> list[Event]:
                 ev[k] = None
             ev["keywords"], ev["global_keywords"] = [], []
             ev["vertices"] = ev["indices"] = ev["instances"] = 0
+        if kind == "other":
+            ev["params"] = {}  # the data keeps the parameters of the last draw
         ev["stage"] = stage_of(ev)
         ev["pixel_count"], ev["pixel_method"] = pixel_count(ev)
         out.append(ev)

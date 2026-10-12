@@ -114,18 +114,39 @@ def loop_n(shader, loop_iters, overrides):
     return loop_iters, False
 
 
+def _n_text(n):
+    """'2' or, one per outer loop, '1.88/0/0'."""
+    return "/".join(f"{round(x, 2):g}" for x in n) if isinstance(n, (list, tuple)) else str(n)
+
+
 def price(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> Score:
-    """Score of one stage's record on one core; dynamic loops priced at n iterations when loop_data has them."""
+    """Score of one stage's record on one core; dynamic loops priced at n iterations when loop_data has them (n: one
+    number for every outer loop or one per loop, core/loops.py)."""
     p = (loop_data.get(file) or {}).get(core)
     if p:
-        return score(recs[core], fp16_threshold, loops.cycles_at(p, n), f"loop n={n}")
+        return score(recs[core], fp16_threshold, loops.cycles_at(p, n), f"loop n={_n_text(n)}")
     return score(recs[core], fp16_threshold)
+
+
+def loop_parts(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> list | None:
+    """What every outer dynamic loop of one stage costs at its trip count: [{"n", "cycles"}] in code order, cycles =
+    the price with the loop at n minus the price with it at 0 (the parts of a bottleneck need not add up to the
+    price); None without loop data."""
+    p = (loop_data.get(file) or {}).get(core)
+    if not p:
+        return None
+    ns = loops.per_loop(n, len(p["loops"]))
+    full = price(recs, file, core, ns, loop_data, fp16_threshold)["cycles"]
+    return [{"n": m, "cycles": round(full - price(recs, file, core, ns[:k] + [0] + ns[k + 1:], loop_data,
+                                                    fp16_threshold)["cycles"], 4)} for k, m in enumerate(ns)]
 
 
 def price_draw(recs: dict, files: dict, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> dict:
     """The scores of a draw's variant on one core, its dynamic loops at n iterations: {"px": Score of the fragment
     stage, "vtx": Score of the vertex stage, "flags": the fragment's and the vertex's except low_fp16 (a vertex shader
-    needs little fp16)}. recs: {stage: {core: Measurement}} of core/variants.match, files: {stage: its file}."""
-    px = price(recs["fragment"], files["fragment"], core, n, loop_data, fp16_threshold)
-    vtx = price(recs["vertex"], files["vertex"], core, n, loop_data, fp16_threshold)
+    needs little fp16)}. recs: {stage: {core: Measurement}} of core/variants.match, files: {stage: its file}; n: the
+    trip counts of both stages, or {"fragment": n, "vertex": n}."""
+    nf, nv = (n["fragment"], n["vertex"]) if isinstance(n, dict) else (n, n)
+    px = price(recs["fragment"], files["fragment"], core, nf, loop_data, fp16_threshold)
+    vtx = price(recs["vertex"], files["vertex"], core, nv, loop_data, fp16_threshold)
     return {"px": px, "vtx": vtx, "flags": sorted(set(px["flags"]) | {x for x in vtx["flags"] if x != "low_fp16"})}

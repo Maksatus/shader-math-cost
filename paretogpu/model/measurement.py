@@ -63,7 +63,9 @@ class Score(TypedDict):
 
 
 class LoopProfile(TypedDict):
-    """A shader whose dynamic loops are forced to n = 0, 1, 2 iterations (app/variants.parametric)."""
-    c: list           # [Cycles at n = 0, 1, 2, word 1 (nested loops twice)], longest path
+    """A shader whose dynamic loops are forced and measured (core/loops.profile, app/rules.parametric): longest path."""
+    model: str        # core/loops.MODEL
+    base: dict        # Cycles with every outer loop at 1 iteration
+    loops: list       # [{"zero", "two", "word"}] Cycles with outer loop k at 0 / 2 / 1 with its nested loops twice
     work_regs: int
     spilling: bool

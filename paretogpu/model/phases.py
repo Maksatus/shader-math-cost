@@ -12,6 +12,8 @@ PHASES = {
     "compile": ("Компиляция шейдеров в Unity", "вариантов"),
     "measure": ("Замеры malioc", "замеров"),
     "loops": ("Циклы в шейдерах (malioc)", "замеров"),
+    "bounds": ("Границы циклов (GLES)", None),
+    "rd_loops": ("Повторы циклов (RenderDoc)", None),
     "ablation": ("Разбор по строкам (malioc)", "замеров"),
     "report": ("Расчёт и отчёт", None),
     "unity_export": ("Экспорт шейдеров из Unity", None),

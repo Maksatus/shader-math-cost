@@ -16,24 +16,15 @@ from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import ablation as ablation_run
 from paretogpu.app import variants
 from paretogpu.core import ablation
+from paretogpu.core import loops
 from paretogpu.core.pricing import LOOP_ITERS, loop_n
 from paretogpu.model.errors import ParetoError
 from paretogpu.model.variant import VariantKey
 from paretogpu.store import workspace
+from paretogpu.store.variant_store import gles_file
 from paretogpu.views.reporter import CONSOLE
 
 VERTEX_SHARE = 0.25  # the vertex shader is ablated too when it is at least this part of the variant's cost
-
-
-def gles_file(root, vulkan_file):
-    """The GLES file of a variant from its Vulkan one: <shader>_vulkan/<name>.frag.spv -> <shader>/<name>.frag."""
-    folder, name = os.path.split(vulkan_file.replace("\\", "/"))
-    if folder.endswith("_vulkan"):
-        folder = folder[:-len("_vulkan")]
-    if name.endswith(".spv"):
-        name = name[:-len(".spv")]
-    path = os.path.join(root, folder, name)
-    return path if os.path.isfile(path) else None
 
 
 def compile_gles(frame_dir, c, root, items, rep=CONSOLE):
@@ -72,7 +63,8 @@ def plan(c, top, core):
             continue  # compute or unpriced
         out.append({"variant": g["key"], "shader": e.get("shader"), "pass": e.get("pass"), "keywords": e.get("keywords") or [],
                     "share": g.get("share"), "total": g.get("total"), "fragment": g.get("fragment"), "vertex": g.get("vertex"),
-                    "pixels": g.get("pixels"), "vertices": g.get("vertices"), "events": g.get("events"), "files": e["files"]})
+                    "pixels": g.get("pixels"), "vertices": g.get("vertices"), "events": g.get("events"), "files": e["files"],
+                    "loop": e.get("loop")})
         if len(out) >= top:
             break
     return out
@@ -96,6 +88,8 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
         stages = ["fragment"] + (["vertex"] if (it.get("vertex") or 0) >= VERTEX_SHARE * (it.get("total") or 1) else [])
         n, _ = loop_n(it["shader"], loops_.get("n", LOOP_ITERS), loops_.get("overrides"))
         it["n"] = n
+        # the fragment's loops at the trip counts the frame priced them with (one per outer loop, core/frame_cost)
+        frame_ns = [x["n"] for x in ((it.get("loop") or {}).get("loops") or [])]
         for stage in stages:
             vf = it["files"].get(stage)
             gf = vf and gles_file(root, vf)
@@ -109,7 +103,8 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
             except (ValueError, StopIteration) as e:
                 it["ablation"][stage] = {"error": f"не удалось разобрать main(): {e}"}
                 continue
-            work.append((it, stage, src, n, count))
+            ns = frame_ns if stage == "fragment" and frame_ns and len(loops.outer_loops(src) or []) == len(frame_ns) else n
+            work.append((it, stage, src, ns, count))
     rep.phase("ablation", sum(w[4] for w in work))
     tick = rep.counter(sum(w[4] for w in work))
     for it, stage, src, n, _ in work:

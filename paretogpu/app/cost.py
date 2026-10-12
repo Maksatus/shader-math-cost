@@ -11,6 +11,8 @@ import json
 import os
 import time
 
+from paretogpu.adapters.renderdoc import RenderDocError
+from paretogpu.app import frame_loops
 from paretogpu.app import materials as project_materials
 from paretogpu.app import variants
 from paretogpu.core import frame_cost
@@ -25,11 +27,12 @@ from paretogpu.views.reporter import CONSOLE
 
 
 def run(frame_dir, root, cores, api="vulkan", main_core=None, project=None, materials=False, compile_missing=True,
-        recompile=False, retry_failed=False, jobs=None, loop_iters=LOOP_ITERS, loop_overrides=None,
+        recompile=False, retry_failed=False, jobs=None, loop_iters=LOOP_ITERS, loop_overrides=None, loop_pixels=16,
         rep=CONSOLE) -> tuple[CostRun, VariantState]:
     """Price the snapshot in frame_dir on the cores: its variants compiled into root and measured, the frame priced
     with the dynamic loops at loop_iters iterations (loop_overrides: {part of a shader name: n}). project: the Unity
-    project to compile in (default: the snapshot's). Returns the document of frame_cost.json with everything the
+    project to compile in (default: the snapshot's). loop_pixels: pixels of every draw debugged in the snapshot's
+    RenderDoc capture to count the iterations of its loops of unknown trip count (app/frame_loops.py; 0: none). Returns the document of frame_cost.json with everything the
     report and the lists read, and the state of the variants (app/variants.run) it was priced from."""
     with open(os.path.join(frame_dir, workspace.SNAPSHOT_FILE), encoding="utf-8") as f:
         frame = json.load(f)
@@ -46,6 +49,12 @@ def run(frame_dir, root, cores, api="vulkan", main_core=None, project=None, mate
                          [PLATFORM[api]], jobs, compile_missing=compile_missing, rep=rep, recompile=recompile,
                          retry_failed=retry_failed)
     state["loops"] = variants.loops_of(state, root, cores, jobs, rep)
+    state["loop_bounds"] = variants.bounds_of(state, project, root, compile_missing, rep)
+    try:
+        state["loop_iters"] = frame_loops.iterations_of(frame_dir, frame, state, api, loop_pixels, rep)
+    except RenderDocError as e:
+        rep.log(f"  loop iterations not counted: {e}")
+        state["loop_iters"] = {}
     rep.phase("report")
     c = frame_cost.compute(frame, events, state, api, cores, main_core, loop_iters=loop_iters,
                            loop_overrides=loop_overrides)
