@@ -19,6 +19,7 @@ import os
 import time
 from collections import Counter
 
+from paretogpu.core import profile
 from paretogpu.model.cost import CostRun
 
 STAGES = (("fragment", "pixels", "px_price"), ("vertex", "vertices", "vtx_price"), ("compute", "threads", "cs_price"))
@@ -28,12 +29,7 @@ EVENTS_SHOWN = 12  # events of a variant listed in its details
 # --- comparison --------------------------------------------------------------------------------------------------
 def resolution(c):
     """The frame size: the render target with the most pixels shaded into it."""
-    px = Counter()
-    for e in c.get("events") or []:
-        w, h = (e.get("rt_size") or [None, None])[:2]
-        if w and h:
-            px[(w, h)] += e.get("pixels") or 0
-    return list(px.most_common(1)[0][0]) if px else None
+    return profile.frame_size(c.get("events"))
 
 
 def info(c):
@@ -44,7 +40,8 @@ def info(c):
             "cores": [x["name"] for x in c.get("cores") or []], "loops_n": (c.get("loops") or {}).get("n"),
             "resolution": resolution(c), "checked": c.get("variants_checked"),
             "unpriced_draws": sum(1 for m in c.get("missing") or [] if m.get("kind") == "draw"),
-            "quality": (c.get("frame") or {}).get("quality")}
+            "quality": (c.get("frame") or {}).get("quality"), "pipeline": (c.get("profile") or {}).get("pipeline"),
+            "scale": (c.get("profile") or {}).get("frame_scale")}
 
 
 def _side(c, core):
@@ -195,6 +192,11 @@ def compare(a: CostRun, b: CostRun) -> dict:
                     "пиксели несопоставимы.")
     if ia["quality"] != ib["quality"] and not same:
         warn.append(f"Разный уровень качества Unity (A {ia['quality']}, B {ib['quality']}).")
+    if ia["pipeline"] and ib["pipeline"] and ia["pipeline"] != ib["pipeline"] and not same:
+        warn.append(f"Разный ассет пайплайна (A {ia['pipeline']}, B {ib['pipeline']}): проходы и эффекты "
+                    "кадров могут отличаться.")
+    if ia["scale"] and ib["scale"] and ia["scale"] != ib["scale"] and not same:
+        warn.append(f"Разный масштаб рендера (A {ia['scale']:g}, B {ib['scale']:g} от Game view).")
     if ia["project"] and ib["project"] and os.path.normcase(ia["project"]) != os.path.normcase(ib["project"]):
         warn.append("Расчёты из разных проектов.")
     if ia["unpriced_draws"] or ib["unpriced_draws"]:

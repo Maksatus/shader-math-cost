@@ -1,7 +1,8 @@
 """The Frame Debugger snapshot of the open editor (cs/ParetoGpuFrame.cs, plan item K1.1).
 
 capture() runs ParetoGpuFrame.cs in the open editor (bridge.py) and waits for <out>/frame.json: the raw Frame Debugger
-data of every event of the frame the Game view shows (its resolution, the current quality level).
+data of every event of the frame the Game view shows and the settings it is drawn with (quality level, Game view size,
+render pipeline asset).
 """
 import os
 import re

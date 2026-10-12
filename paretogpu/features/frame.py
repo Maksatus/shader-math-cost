@@ -5,7 +5,7 @@ The open editor's frame is captured with RenderDoc (adapters/renderdoc), its eve
 event with the shader variant, vertices, render target, frame stage and the pixels of its RenderDoc calls.
 
 The frame is whatever the Game view shows in Play Mode (an Edit Mode frame is refused: no game code runs in it):
-its resolution and the current quality level.
+its resolution, the current quality level and render pipeline asset (core/profile.py).
 """
 import json
 import os
@@ -16,6 +16,7 @@ from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.adapters.renderdoc import RenderDocError
 from paretogpu.adapters.unity import frame as unity_frame
 from paretogpu.adapters.unity.frame import SnapshotError
+from paretogpu.core import profile
 from paretogpu.core.events import match, normalize, pixel_count
 from paretogpu.features.common import fail
 from paretogpu.features.spec import Arg, Command
@@ -103,6 +104,8 @@ def run_command(args):
     draws = [e for e in events if e["kind"] == "draw"]
     print(f"Unity {meta['unity']} ({meta['graphics_api']}, quality {meta['quality']}, "
           f"{'play' if meta['play_mode'] else 'edit'} mode): {len(events)} events in {meta['seconds']} s")
+    print(profile.summary(profile.describe(meta, profile.frame_size(
+        [{"rt_size": [e["rt"]["width"], e["rt"]["height"]], "pixels": e["pixel_count"]} for e in draws]))))
     stages = Counter(e["stage"] for e in events)
     print("stages: " + ", ".join(f"{s} {n}" for s, n in stages.most_common()))
     variants = {(e["shader"], e["pass"], tuple(e["keywords"])) for e in draws}

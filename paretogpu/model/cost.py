@@ -41,6 +41,7 @@ EventCost = TypedDict("EventCost", {
 class CostRun(TypedDict, total=False):
     """frame_cost.json and every costs/<time>.json (store/cost_runs.py)."""
     frame: dict           # the snapshot's meta (model/frame.Snapshot without the events)
+    profile: dict         # core/profile.describe of the snapshot and the frame size + "warnings": [text]
     api: str
     cores: list           # [{"name", "arch"}]
     main_core: str

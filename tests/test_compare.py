@@ -74,6 +74,16 @@ class Compare(unittest.TestCase):
         self.assertTrue(any("malioc" in w for w in c["warnings"]))
         self.assertTrue(any("API" in w for w in c["warnings"]))
 
+    def test_pipeline_of_one_side_unknown(self):
+        ev = [event(0, "Lit", 1000, 10.0)]
+        old = run(ev, frame_dir="F")
+        new = run(ev, frame_dir="G", profile={"pipeline": "RP", "frame_scale": 1.0})
+        self.assertFalse(any("пайплайна" in w for w in compare.compare(old, new)["warnings"]))
+        other = run(ev, frame_dir="H", profile={"pipeline": "RP2", "frame_scale": 0.5})
+        w = compare.compare(new, other)["warnings"]
+        self.assertTrue(any("пайплайна" in x for x in w))
+        self.assertTrue(any("масштаб" in x for x in w))
+
     def test_events_matched_by_object(self):
         a = run([event(0, "Lit", 100, 1.0, obj="x"), event(1, "Lit", 200, 1.0, obj="y")])
         b = run([event(5, "Lit", 200, 1.0, obj="y"), event(6, "Lit", 400, 1.0, obj="x")])

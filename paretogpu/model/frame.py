@@ -28,6 +28,10 @@ class Snapshot(TypedDict, total=False):
     unity: str
     graphics_api: str
     quality: str
+    quality_level: int
+    build_target: str
+    screen: list      # [width, height] of the Game view
+    pipeline: dict    # the render pipeline asset: {"name", "class", "fields": {path: value}, "refs": [alike]}
     play_mode: bool
     seconds: float
     renderdoc: dict   # capture, matched, missing, mismatched, counters, attempts

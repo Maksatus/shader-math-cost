@@ -15,6 +15,12 @@
 // pause Play Mode, SetEnabled(true, ProfilerDriver.connectedProfiler); a new limit: limit = n and a scene repaint;
 // DisableFrameDebugger: SetEnabled(false, GetRemotePlayerGUID())); no window is opened.
 //
+// The settings the frame is drawn with (plan item K1.12) go next to the events: build target, quality level, the Game
+// view size and the active render pipeline asset (QualitySettings.renderPipeline, else the Graphics settings' one) as
+// its SerializedObject shows it: every visible field, and the ScriptableObjects it refers to (renderers and their
+// features in URP) the same way, two levels down. Any SRP is written alike; a pipeline that takes its settings from
+// elsewhere at run time shows its asset's values, so Python compares the asset's render scale with the frame's.
+//
 // config: {"max_events": 0} (and the job's "out", "name": cs/ParetoGpuJob.cs)
 
 using System;
@@ -156,7 +162,11 @@ public static class ParetoGpuFrame
           .Append(", \"project\": ").Append(Str(Path.GetDirectoryName(Application.dataPath)))
           .Append(", \"graphics_api\": ").Append(Str(SystemInfo.graphicsDeviceType.ToString()))
           .Append(", \"quality\": ").Append(Str(QualitySettings.names[QualitySettings.GetQualityLevel()]))
-          .Append(", \"play_mode\": ").Append(EditorApplication.isPlaying ? "true" : "false")
+          .Append(", \"quality_level\": ").Append(QualitySettings.GetQualityLevel())
+          .Append(", \"build_target\": ").Append(Str(EditorUserBuildSettings.activeBuildTarget.ToString()))
+          .Append(", \"screen\": ").Append(GameViewSize())
+          .Append(",\n \"pipeline\": ").Append(PipelineJson())
+          .Append(",\n \"play_mode\": ").Append(EditorApplication.isPlaying ? "true" : "false")
           .Append(", \"total_events\": ").Append(evs?.Length ?? count)
           .Append(", \"seconds\": ").Append((EditorApplication.timeSinceStartup - started).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))
           .Append(",\n \"events\": [\n").Append(string.Join(",\n", events)).Append("\n]}\n");
@@ -199,6 +209,76 @@ public static class ParetoGpuFrame
         sb.Append(", \"meshes\": ").Append(MeshNames());
         sb.Append(", \"data\": ").Append(Value(data, 0)).Append("}");
         return sb.ToString();
+    }
+
+    // the size the Game view renders at (its resolution drop-down), else the Screen of the player loop
+    static string GameViewSize()
+    {
+        var view = typeof(EditorWindow).Assembly.GetType("UnityEditor.PlayModeView");
+        var size = Safe(() => view?.GetMethod("GetMainPlayModeViewTargetSize", S, null, Type.EmptyTypes, null)
+            ?.Invoke(null, null)) is Vector2 v && v.x > 0 ? v : new Vector2(Screen.width, Screen.height);
+        return $"[{(int)size.x}, {(int)size.y}]";
+    }
+
+    static string PipelineJson()
+    {
+        var rp = QualitySettings.renderPipeline != null ? QualitySettings.renderPipeline
+            : UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline;
+        if (rp == null) return "null";
+        var seen = new HashSet<UnityEngine.Object>();
+        return AssetJson(rp, 0, seen);
+    }
+
+    const int AssetDepth = 2, AssetFields = 400, AssetRefs = 32;
+
+    // {"name", "class", "fields": {property path: value}, "refs": [the ScriptableObjects it refers to, alike]}
+    static string AssetJson(ScriptableObject o, int depth, HashSet<UnityEngine.Object> seen)
+    {
+        seen.Add(o);
+        var fields = new List<string>();
+        var refs = new List<ScriptableObject>();
+        var so = new SerializedObject(o);
+        var p = so.GetIterator();
+        var enter = true;
+        while (p.NextVisible(enter) && fields.Count < AssetFields)
+        {
+            enter = p.propertyType != SerializedPropertyType.String;  // a string's characters are not fields
+            if (p.propertyPath == "m_Script") continue;
+            var v = PropertyJson(p);
+            if (v != null) fields.Add(Str(p.propertyPath) + ": " + v);
+            if (p.propertyType == SerializedPropertyType.ObjectReference && p.objectReferenceValue is ScriptableObject r
+                && r != null && !seen.Contains(r) && !refs.Contains(r) && seen.Count + refs.Count < AssetRefs)
+                refs.Add(r);
+        }
+        var nested = depth < AssetDepth ? refs.Where(r => !seen.Contains(r)).Select(r => AssetJson(r, depth + 1, seen)).ToList()
+            : new List<string>();
+        return $"{{\"name\": {Str(o.name)}, \"class\": {Str(o.GetType().Name)}, " +
+               $"\"fields\": {{{string.Join(", ", fields)}}}, \"refs\": [{string.Join(", ", nested)}]}}";
+    }
+
+    static string PropertyJson(SerializedProperty p)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        switch (p.propertyType)
+        {
+            case SerializedPropertyType.Integer:
+            case SerializedPropertyType.ArraySize:
+            case SerializedPropertyType.LayerMask: return p.longValue.ToString(inv);
+            case SerializedPropertyType.Boolean: return p.boolValue ? "true" : "false";
+            case SerializedPropertyType.Float: return Value(p.floatValue, 0);
+            case SerializedPropertyType.String: return Str(p.stringValue);
+            case SerializedPropertyType.Enum:
+                var names = p.enumDisplayNames;
+                return Str(p.enumValueIndex >= 0 && p.enumValueIndex < names.Length ? names[p.enumValueIndex] : p.intValue.ToString(inv));
+            case SerializedPropertyType.ObjectReference:
+                return p.objectReferenceValue == null ? "null" : Str(p.objectReferenceValue.name);
+            case SerializedPropertyType.Vector2: return Str(p.vector2Value.ToString());
+            case SerializedPropertyType.Vector3: return Str(p.vector3Value.ToString());
+            case SerializedPropertyType.Vector4: return Str(p.vector4Value.ToString());
+            case SerializedPropertyType.Vector2Int: return Str(p.vector2IntValue.ToString());
+            case SerializedPropertyType.Color: return Str(p.colorValue.ToString());
+            default: return null;
+        }
     }
 
     // JSON of any value: primitives, strings, enums, arrays, Unity objects (name + id), structs/classes (fields)

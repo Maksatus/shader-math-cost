@@ -16,6 +16,7 @@ from paretogpu.app import results
 from paretogpu.app import variants
 from paretogpu.core import frame_cost
 from paretogpu.core import materials as shaders
+from paretogpu.core import profile
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS
 from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
 from paretogpu.features.spec import Arg, Command, ResultKind
@@ -65,6 +66,8 @@ def run_command(args):
     c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
                            loop_iters=args.loop_iters, loop_overrides=overrides)
     c["variants_checked"] = state["checked"]
+    prof = profile.describe(frame, profile.frame_size(c["events"]))
+    c["profile"] = {**prof, "warnings": profile.warnings(prof)}
     if mat_keys is not None:
         c["project_shaders"] = shaders.rows(mat_keys, mat_skipped, state, c, args.api, args.loop_iters, overrides)
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
@@ -111,6 +114,10 @@ def print_summary(c, state, api):
             top = sorted({k for v in by_n.values() for k in list(v["stages"])[:3]})
             print("  stages by n: " + "; ".join(
                 f"{s} " + "/".join(f"{100 * v['stages'].get(s, 0):.0f}" for v in by_n.values()) + "%" for s in top))
+    prof = c.get("profile") or {}
+    print(profile.summary(prof))
+    for w in prof.get("warnings") or []:
+        print(f"  WARNING: {w}")
     if not state["checked"]:
         print("  compiled variants were NOT checked against the shaders (no editor or --no-compile): "
               "after a shader change run with the editor open")

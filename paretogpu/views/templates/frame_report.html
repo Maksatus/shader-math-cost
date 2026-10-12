@@ -92,6 +92,8 @@ td.bar { min-width: 120px; }
 .dots { display: inline-flex; gap: 3px; margin-right: 5px; } .dots .dot { margin-right: 0; }
 .kw .dot { width: 6px; height: 6px; margin-right: 4px; }
 .warnc { color: var(--medium); }
+.pwarn { border-left: 3px solid var(--medium); background: color-mix(in srgb, var(--medium) 10%, transparent); padding: 8px 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; max-width: 1100px; }
+.pwarn ul { margin: 0; padding-left: 18px; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
 .shn { color: var(--text); } .ev .pass { color: var(--muted); }
 .fc { display: inline-block; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; margin-left: 6px; cursor: help; }
@@ -121,6 +123,8 @@ td.bar { min-width: 120px; }
 <header>
   <h1 id="title"></h1>
   <p class="sub" id="meta"></p>
+  <p class="sub" id="profile"></p>
+  <div class="pwarn hide" id="profileWarn"></div>
   <p class="sub"><a class="costhelp" id="costLink" target="_blank">Как читать отчёт — справочник ↗</a></p>
 </header>
 <main>
@@ -169,6 +173,21 @@ document.getElementById("meta").textContent =
   `Unity ${f.unity} · ${f.graphics_api} в редакторе, quality ${f.quality}, ${f.play_mode ? "Play Mode" : "Edit Mode"} · ` +
   `цены: malioc ${D.malioc || ""}, ${D.api}` + (D.variants_checked === false ? " (варианты не сверены с шейдерами)" : "") + ` · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
   Object.entries(D.pixel_methods).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${D.frame_dir || ""}`;
+
+// the settings the frame is drawn with (core/profile.py): quality, build target, pipeline asset, the frame's scale
+const PR = D.profile || {recorded: false, warnings: []};
+const size = a => a ? a.join("×") : "?";
+document.getElementById("profile").textContent = !PR.recorded ? "" :
+  `Quality ${PR.quality} · платформа ${PR.build_target || "?"}`
+  + (PR.pipeline ? ` · пайплайн ${PR.pipeline} (${PR.pipeline_class}${PR.asset_scale ? ", RenderScale " + PR.asset_scale : ""})` : "")
+  + ` · Game view ${size(PR.screen)}, кадр ${size(PR.frame_size)}` + (PR.frame_scale ? ` (масштаб ${PR.frame_scale})` : "")
+  + (PR.features && PR.features.length ? " · features: " + PR.features.map(x => x.name + (x.active ? "" : " (выкл.)")).join(", ") : "");
+document.getElementById("profile").title = Object.entries(PR.fields || {}).map(([k, v]) => `${k} = ${v}`).join("\n");
+{
+  const w = PR.warnings || [], el = document.getElementById("profileWarn");
+  el.classList.toggle("hide", !w.length);
+  el.innerHTML = w.length ? `<ul>${w.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+}
 
 const coreSeg = document.getElementById("core");
 D.cores.forEach(c => { const b = document.createElement("button"); b.dataset.v = c.name;

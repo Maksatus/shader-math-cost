@@ -168,7 +168,8 @@ def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", 
     rows.sort(key=lambda r: -(r["cost"].get(main_core, {}).get("total", -1)))
     draws = [r for r in rows if r["kind"] == "draw"]
     return {
-        "frame": {k: v for k, v in meta.items() if k != "events"},
+        # the pipeline asset dump stays in the snapshot: the run keeps its summary (features/cost.py, "profile")
+        "frame": {k: v for k, v in meta.items() if k not in ("events", "pipeline")},
         "api": api, "cores": [{"name": c, "arch": found_cores[c]} for c in cores], "main_core": main_core,
         "totals": totals,
         "loops": {"n": loop_iters, "overrides": dict(loop_overrides or {}), "range": list(loop_ns),
