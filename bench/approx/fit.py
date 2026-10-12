@@ -3,8 +3,7 @@
 minimax(): coefficients c minimizing max |sum c_i * basis_i(x) - f(x)| over sample
 points, solved exactly as a linear program.
 horner_err(): max abs error of an odd polynomial x * P(x^2) evaluated by Horner with
-rounding to float32 / float16 after every operation (fma = one rounding is ignored,
-which only makes the estimate slightly pessimistic).
+rounding to float32 / float16 after every operation; fma=True rounds a*b+c once.
 """
 import numpy as np
 from scipy.optimize import linprog
@@ -30,12 +29,20 @@ def odd_poly(f, lo, hi, terms, n=20001):
     return minimax(f, basis, x)
 
 
-def eval_odd(c, x, dt):
+def mad(a, b, c, dt, fma=False):
+    """a*b+c in type dt (arrays a, b of type dt): two roundings, or one with fma
+    (the float64 product of float32/16 values is exact)."""
+    if fma:
+        return (a.astype(np.float64) * b + np.float64(dt(c))).astype(dt)
+    return ((a * b).astype(dt) + dt(c)).astype(dt)
+
+
+def eval_odd(c, x, dt, fma=False):
     x = x.astype(dt)
     x2 = (x * x).astype(dt)
-    p = dt(c[-1])
+    p = np.full_like(x2, c[-1])
     for ck in c[-2::-1]:
-        p = (p * x2 + dt(ck)).astype(dt)
+        p = mad(p, x2, ck, dt, fma)
     return (p * x).astype(dt)
 
 

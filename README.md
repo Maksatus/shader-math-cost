@@ -21,7 +21,7 @@
 ## Данные сайта
 
 - `python -m paretogpu bench` — пересчитать таблицу цен (`docs/`); функции в `paretogpu/model/functions.py`.
-- Аппроксимации (кнопка «≈ быстрее»): `bench/approx/build_approx.py` → `docs/approx.js`; нужны numpy, scipy.
+- Аппроксимации (кнопка «≈ быстрее»): `bench/approx/build_approx.py` → `docs/approx.js`; нужны numpy, scipy. Ошибки и цифры ловушек считает `bench/approx/check.py` полным перебором всех float и half (~3.5 мин на функцию, кеш в `bench/.cache/approx_check`); `--keep-cost` — цены malioc из текущего `approx.js`, `--fast` — черновик без записи `approx.js`; отчёт по функции — `python check.py FastSin`.
 
 ## Код
 
