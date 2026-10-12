@@ -61,6 +61,10 @@ class Profile(unittest.TestCase):
         self.assertEqual(profile.frame_size(rows), [50, 50])
         self.assertEqual(compare.resolution({"events": rows}), [50, 50])
         self.assertIsNone(profile.frame_size([]))
+        # a scene at 0.5 upscaled to a full-size screen with more pixels: the scene's size, not the screen's
+        scaled = [{"rt_size": [1000, 500], "pixels": 400000, "stage": "opaque"},
+                  {"rt_size": [2000, 1000], "pixels": 2000000, "stage": "post"}]
+        self.assertEqual(profile.frame_size(scaled), [1000, 500])
 
 
 if __name__ == "__main__":

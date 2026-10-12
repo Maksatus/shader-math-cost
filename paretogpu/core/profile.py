@@ -17,10 +17,13 @@ SCALE_SLACK = 0.1              # the asset's render scale and the frame's differ
 
 
 def frame_size(rows):
-    """[width, height] of the render target with the most pixels shaded into it, or None.
-    rows: [{"rt_size": [w, h], "pixels": n}] (the events of a cost run)."""
+    """[width, height] the scene is rendered at: of the render target with the most pixels of opaque draws (of all
+    draws if there are none), or None. Not of all draws: an upscale to the screen and the UI are drawn at full size and
+    can outweigh a scaled scene. rows: [{"rt_size": [w, h], "pixels": n, "stage"}] (the events of a cost run)."""
+    rows = rows or []
+    opaque = [r for r in rows if r.get("stage") == "opaque"]
     px = Counter()
-    for r in rows or []:
+    for r in opaque or rows:
         w, h = (r.get("rt_size") or [None, None])[:2]
         if w and h:
             px[(w, h)] += r.get("pixels") or 0

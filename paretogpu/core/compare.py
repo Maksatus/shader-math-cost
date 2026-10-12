@@ -28,7 +28,7 @@ EVENTS_SHOWN = 12  # events of a variant listed in its details
 
 # --- comparison --------------------------------------------------------------------------------------------------
 def resolution(c):
-    """The frame size: the render target with the most pixels shaded into it."""
+    """The frame size: the size the scene is rendered at (core/profile.frame_size)."""
     return profile.frame_size(c.get("events"))
 
 

@@ -105,7 +105,8 @@ def run_command(args):
     print(f"Unity {meta['unity']} ({meta['graphics_api']}, quality {meta['quality']}, "
           f"{'play' if meta['play_mode'] else 'edit'} mode): {len(events)} events in {meta['seconds']} s")
     print(profile.summary(profile.describe(meta, profile.frame_size(
-        [{"rt_size": [e["rt"]["width"], e["rt"]["height"]], "pixels": e["pixel_count"]} for e in draws]))))
+        [{"rt_size": [e["rt"]["width"], e["rt"]["height"]], "pixels": e["pixel_count"], "stage": e["stage"]}
+         for e in draws]))))
     stages = Counter(e["stage"] for e in events)
     print("stages: " + ", ".join(f"{s} {n}" for s, n in stages.most_common()))
     variants = {(e["shader"], e["pass"], tuple(e["keywords"])) for e in draws}
