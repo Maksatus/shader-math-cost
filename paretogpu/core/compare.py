@@ -13,13 +13,14 @@ p = cycles / work of the variant on that side; price + work = B - A exactly. A v
 (keywords changed, shader added or removed) is `mix`. Shader rows are the sums of their variants.
 
 compare(a, b) -> JSON-able dict for every common core; views/html.py puts it into result_view.html (the same
-page in the UI and in the file `python -m paretogpu compare` writes).
+page in the UI and in the file `python -m paretogpu compare` writes). Its warnings are {"code", ...params}:
+views/messages.py has their words.
 """
 import os
 import time
 from collections import Counter
 
-from paretogpu.core import profile
+from paretogpu.core import frame_cost, profile
 from paretogpu.model.cost import CostRun
 
 STAGES = (("fragment", "pixels", "px_price"), ("vertex", "vertices", "vtx_price"), ("compute", "threads", "cs_price"))
@@ -32,16 +33,14 @@ def resolution(c):
     return profile.frame_size(c.get("events"))
 
 
+INFO = ("snapshot", "frame_dir", "project", "computed_at", "api", "malioc", "main_core", "cores", "loops_n",
+        "resolution", "checked", "unpriced_draws", "quality", "pipeline", "scale")
+
+
 def info(c):
-    fd = c.get("frame_dir") or ""
-    return {"snapshot": os.path.basename(fd.rstrip("\\/")) or None, "frame_dir": fd,
-            "project": (c.get("frame") or {}).get("project"), "computed_at": c.get("computed_at"),
-            "api": c.get("api"), "malioc": c.get("malioc"), "main_core": c.get("main_core"),
-            "cores": [x["name"] for x in c.get("cores") or []], "loops_n": (c.get("loops") or {}).get("n"),
-            "resolution": resolution(c), "checked": c.get("variants_checked"),
-            "unpriced_draws": sum(1 for m in c.get("missing") or [] if m.get("kind") == "draw"),
-            "quality": (c.get("frame") or {}).get("quality"), "pipeline": (c.get("profile") or {}).get("pipeline"),
-            "scale": (c.get("profile") or {}).get("frame_scale")}
+    """What the comparison shows about a run and warns about: its part of core/frame_cost.summary."""
+    s = frame_cost.summary(c)
+    return {k: s[k] for k in INFO}
 
 
 def _side(c, core):
@@ -175,36 +174,32 @@ def compare(a: CostRun, b: CostRun) -> dict:
     same = bool(ia["frame_dir"]) and os.path.normcase(os.path.abspath(ia["frame_dir"])) == \
         os.path.normcase(os.path.abspath(ib["frame_dir"] or ""))
     warn = []
+    ab = lambda code, key, f=lambda x: x: warn.append({"code": code, "a": f(ia[key]), "b": f(ib[key])})
     if not cores:
-        warn.append("У расчётов нет общих ядер: сравнить нечего.")
+        warn.append({"code": "no_common_cores"})
     elif set(ia["cores"]) != set(ib["cores"]):
-        warn.append(f"Разные наборы ядер: сравниваются только общие ({', '.join(cores)}).")
+        warn.append({"code": "cores_differ", "cores": ", ".join(cores)})
     if ia["api"] != ib["api"]:
-        warn.append(f"Разный API цен: A {ia['api']}, B {ib['api']}. Цены Vulkan и GLES отличаются сами по себе.")
+        ab("api_differs", "api")
     if ia["malioc"] != ib["malioc"]:
-        warn.append(f"Разные версии malioc (A {ia['malioc']}, B {ib['malioc']}): часть разницы даёт компилятор, "
-                    "а не шейдеры.")
+        ab("malioc_differs", "malioc")
     if ia["loops_n"] != ib["loops_n"]:
-        warn.append(f"Разное число итераций динамических циклов (A n = {ia['loops_n']}, B n = {ib['loops_n']}).")
+        ab("loops_n_differs", "loops_n")
     if ia["resolution"] != ib["resolution"]:
-        fmt = lambda r: "×".join(map(str, r)) if r else "?"
-        warn.append(f"Разное разрешение кадра (A {fmt(ia['resolution'])}, B {fmt(ib['resolution'])}): "
-                    "пиксели несопоставимы.")
+        ab("resolution_differs", "resolution", lambda r: "×".join(map(str, r)) if r else "?")
     if ia["quality"] != ib["quality"] and not same:
-        warn.append(f"Разный уровень качества Unity (A {ia['quality']}, B {ib['quality']}).")
+        ab("quality_differs", "quality")
     if ia["pipeline"] and ib["pipeline"] and ia["pipeline"] != ib["pipeline"] and not same:
-        warn.append(f"Разный ассет пайплайна (A {ia['pipeline']}, B {ib['pipeline']}): проходы и эффекты "
-                    "кадров могут отличаться.")
+        ab("pipeline_differs", "pipeline")
     if ia["scale"] and ib["scale"] and ia["scale"] != ib["scale"] and not same:
-        warn.append(f"Разный масштаб рендера (A {ia['scale']:g}, B {ib['scale']:g} от Game view).")
+        ab("scale_differs", "scale", lambda x: f"{x:g}")
     if ia["project"] and ib["project"] and os.path.normcase(ia["project"]) != os.path.normcase(ib["project"]):
-        warn.append("Расчёты из разных проектов.")
+        warn.append({"code": "projects_differ"})
     if ia["unpriced_draws"] or ib["unpriced_draws"]:
-        warn.append(f"Draw без цены: в A {ia['unpriced_draws']}, в B {ib['unpriced_draws']}. Их стоимость не входит "
-                    "в сравнение.")
+        ab("unpriced_draws", "unpriced_draws")
     for side, i in (("A", ia), ("B", ib)):
         if i["checked"] is False:
-            warn.append(f"{side}: шейдеры не перекомпилировались перед расчётом, цены могут быть устаревшими.")
+            warn.append({"code": "unchecked", "side": side})
     return {"a": ia, "b": ib, "same_frame": same, "cores": cores, "main_core": main, "warnings": warn,
             "by_core": {c: compare_core(a, b, c) for c in cores}, "made_at": time.time()}
 

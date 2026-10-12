@@ -1,3 +1,4 @@
+"use strict";
 // tooltips of the terms: put on headers, labels and badges that have no title of their own (the reference has more)
 const AUTO_TIPS = {
   "цена": "Часть разницы от цены шейдера на пиксель / вершину: эффект правки шейдера",
@@ -59,4 +60,8 @@ function autoTips(root) {
     const t = el.textContent.trim().replace(/^[+−] /, "").replace(/:$/, "").replace(/ ★$/, "").replace(/[ ↑↓]+$/, "");
     if (AUTO_TIPS[t]) { el.title = AUTO_TIPS[t]; el.style.cursor = "help"; }
   }
+}
+function watchTips() {
+  new MutationObserver(() => autoTips(document.body)).observe(document.body, {childList: true, subtree: true});
+  autoTips(document.body);
 }

@@ -7,7 +7,7 @@ the frame was really drawn with is read from the frame itself: its scale is the 
 the Game view, and its effects are its passes.
 
 describe(meta, size) -> what the snapshot says (None where it says nothing); warnings(info) -> why the frame may not
-be drawn as on a Mali device, in the report's language.
+be drawn as on a Mali device, as {"code", ...params} (views/messages.py has the words).
 """
 import re
 from collections import Counter
@@ -81,20 +81,17 @@ def _size(s):
 
 
 def warnings(info):
-    """Why the frame may not be drawn as on a Mali device: [text]."""
+    """Why the frame may not be drawn as on a Mali device: [{"code", ...params}]."""
     if not info["recorded"]:
-        return ["Снимок сделан до записи настроек кадра: неизвестно, в каком качестве и разрешении он снят. "
-                "Снимите кадр заново."]
+        return [{"code": "settings_not_recorded"}]
     out = []
     bt = info["build_target"]
     if bt and bt not in MOBILE_TARGETS:
-        out.append(f"Платформа сборки в редакторе — {bt}, а не Android: качество, keywords и варианты кадра могут "
-                   "быть не те, что на устройстве.")
+        out.append({"code": "build_target_not_mobile", "target": bt})
     a, f = info["asset_scale"], info["frame_scale"]
     if a and f and abs(a - f) > SCALE_SLACK * max(a, f):
-        out.append(f"RenderScale в ассете пайплайна {a:g}, а кадр нарисован в масштабе {f:g} от Game view "
-                   f"({_size(info['frame_size'])} из {_size(info['screen'])}): масштаб задаётся не только ассетом, "
-                   "верен масштаб кадра.")
+        out.append({"code": "scale_not_from_asset", "asset": f"{a:g}", "frame": f"{f:g}",
+                    "frame_size": _size(info["frame_size"]), "screen": _size(info["screen"])})
     return out
 
 

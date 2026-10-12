@@ -15,15 +15,14 @@ function openReport(x, which) {
   $("#repList").style.display = "none";
   $("#repView").style.display = "flex";
   $("#repName").textContent = x.name;
-  showRep(which || (x.report && /hotspots\.html$/.test(x.report) ? "hotspots" : "report"));
+  showRep(which || "cost");
 }
-// the snapshot's frame report or its "why heavy" analysis (made on demand: every line of the top shaders in malioc)
+// the snapshot's pages by the kind of result (x.pages: /api/reports): the frame report ("cost") or its "why heavy"
+// analysis ("hotspots", made on demand: every line of the top shaders in malioc)
 function showRep(which) {
   const x = curRep;
-  const hs = x.hotspots || (x.report && /hotspots\.html$/.test(x.report) ? x.report : null);
-  const fr = x.report && !/hotspots\.html$/.test(x.report) ? x.report : (x.frame_report || (hs && hs.replace(/hotspots\.html$/, "frame_report.html")));
   document.querySelectorAll("#repWhich button").forEach(b => b.classList.toggle("on", b.dataset.w === which));
-  const url = which === "hotspots" ? hs : fr;
+  const url = (x.pages || {})[which];
   if (url) {
     $("#repFrame").src = url;
     $("#repOpen").href = url;
@@ -32,7 +31,7 @@ function showRep(which) {
   if (which === "hotspots") {
     if (confirm("Разобрать 10 самых дорогих шейдеров этого кадра по строкам?\n\nКаждая строка их кода — отдельный замер malioc; обычно до минуты. Ход будет виден на вкладке «Проверка кадра»."))
       start("hotspots", {frame: x.path || (OPT.snapshots.find(s => s.name === x.name) || {}).path});
-    else showRep("report");
+    else showRep("cost");
   }
 }
 document.querySelectorAll("#repWhich button").forEach(b => b.onclick = () => curRep && showRep(b.dataset.w));

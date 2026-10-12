@@ -16,8 +16,7 @@ from paretogpu.model.measurement import PIPES
 from paretogpu.views.reporter import CONSOLE
 
 
-def _measure(text, core, stage):
-    gpu = backend()
+def _measure(text, core, stage, gpu):
     r = gpu.measure(text, core, "gles", stage)
     if not r["ok"]:
         return {"error": (r.get("error") or "malioc failed").strip().splitlines()[-1][:300]}
@@ -26,9 +25,10 @@ def _measure(text, core, stage):
             "regs": max((v["work_regs"] or 0) for v in r["variants"].values())}
 
 
-def measure(src, core, stage, n, forced_loops):
+def measure(src, core, stage, n, forced_loops, gpu=None):
     """{"pipes", "price", "bound", "regs"} of a GLSL source on a core, dynamic loops priced at n as in the frame
     (core/loops.py: measured at n = 1, 2 and word(1), cycles_at(n)); or {"error"}."""
+    gpu = gpu or backend()
     if forced_loops:
         texts = [loops.force_glsl(src, n)] if n < 2 else loops.forced(src)[1:]
         if any(t is None for t in texts):
@@ -38,7 +38,7 @@ def measure(src, core, stage, n, forced_loops):
     runs = {}
     for t in texts:
         if t not in runs:
-            runs[t] = _measure(t, core, stage)
+            runs[t] = _measure(t, core, stage, gpu)
             if "error" in runs[t]:
                 return runs[t]
     ms = [runs[t] for t in texts]
@@ -54,36 +54,38 @@ class AblateRule(Rule):
     phase = "ablation"
     memo = "ablation/2"
 
-    def __init__(self, src, parsed, stage, n, forced):
+    def __init__(self, src, parsed, stage, n, forced, gpu=None):
         self.src, self.p, self.stage, self.n, self.forced = src, parsed, stage, n, forced
+        self.gpu = gpu or backend()
         self.sha = hashlib.sha1(src.encode("utf-8")).hexdigest()
 
     def memo_key(self, key):
         sid, core = key
-        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{backend().tool}"
+        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{self.gpu.tool}"
 
     def remember(self, value):
         return "error" not in value
 
     def build_one(self, key):
         sid, core = key
-        return measure(ablated(self.p, sid, self.stage), core, self.stage, self.n, self.forced[core])
+        return measure(ablated(self.p, sid, self.stage), core, self.stage, self.n, self.forced[core], self.gpu)
 
 
-def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None):
+def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None, gpu=None):
     """Ablation of every statement of main() on every core. Returns
     {"lines": main()'s lines [{"no", "text", "stmt"}], "statements": {id: {...}}, "by_core": {core: {"base", "stmts"}}}."""
+    gpu = gpu or backend()
     p = parse(src, stage)
     parent, users = tree(p)
     targets = [s for s in p["statements"] if s["ablate"]]
     # does the base need its loops forced (longest path N/A)? the same for every copy
-    probe = {c: backend().measure(src, c, "gles", stage) for c in cores}
+    probe = {c: gpu.measure(src, c, "gles", stage) for c in cores}
     forced = {c: bool(probe[c].get("ok")) and heavy.combined(probe[c])["longest"] is None for c in cores}
-    base = {c: measure(src, c, stage, n, forced[c]) for c in cores}
+    base = {c: measure(src, c, stage, n, forced[c], gpu) for c in cores}
     tasks = [(s["id"], c) for s in targets for c in cores if "error" not in base[c]]
     rep.log(f"ablation of {len(targets)} statements of the {stage} shader on {', '.join(cores)} ...")
     tick = tick or rep.counter(len(tasks))  # one counter may span several shaders
-    res = Engine(rep, jobs).get(AblateRule(src, p, stage, n, forced), tasks, tick)
+    res = Engine(rep, jobs).get(AblateRule(src, p, stage, n, forced, gpu), tasks, tick)
     children = {}
     for sid, par in parent.items():
         if par is not None:

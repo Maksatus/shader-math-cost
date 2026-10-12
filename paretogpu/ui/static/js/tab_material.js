@@ -44,9 +44,9 @@ function msMsg(html) {
   $("#msEmpty").innerHTML = `<div class="card" style="max-width:800px;margin:0 auto">${html}</div>`;
 }
 async function loadMsHist(select) {
-  const items = (await api("/api/matshaders")).items || [];
+  const items = ((await api("/api/results?kind=matshader")).items || []).filter(x => x.url);
   $("#msHist").innerHTML = (items.length ? "" : `<option value="">прошлых разборов нет</option>`) + items.map(x =>
-    `<option value="${esc(x.url)}">${when(x.computed_at)} · ${esc(x.m.material)}</option>`).join("");
+    `<option value="${esc(x.url)}">${when(x.created)} · ${esc(x.title)}</option>`).join("");
   const want = select || store.get("msHist");
   if (items.some(x => x.url === want)) $("#msHist").value = want;
   if (msJobId && job && job.id === msJobId && job.status === "running") return msProgress();
@@ -83,7 +83,7 @@ function msProgress() {
     const ph = j && flatPhases(j).find(x => x.status === "running");
     const {pct: p} = j ? overall(j, j.now || Date.now() / 1000) : {pct: 0};
     msMsg(`<h2>Разбираю материал <span class="spin"></span></h2>
-      <div class="now">${ph ? esc((PHASE_TEXT[ph.id] || [ph.id])[0]) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
+      <div class="now">${ph ? esc(phaseText(ph.id)) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
       <div class="bar"><i style="width:${p.toFixed(1)}%"></i></div><div class="small muted">Подробный ход и лог — во вкладке «Проверка кадра».</div>`);
     msTimer = setTimeout(msProgress, 700);
     return;

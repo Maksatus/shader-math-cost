@@ -5,6 +5,7 @@ Run: python -m unittest discover tests   (from the repository root)
 import unittest
 
 from paretogpu.core import compare, profile
+from paretogpu.views import messages
 
 
 def pipeline(scale=1.0, features=()):
@@ -33,12 +34,13 @@ class Profile(unittest.TestCase):
         self.assertEqual(info["frame_scale"], 0.588)
         w = profile.warnings(info)
         self.assertEqual(len(w), 1)
-        self.assertIn("0.588", w[0])
+        self.assertEqual((w[0]["code"], w[0]["frame"]), ("scale_not_from_asset", "0.588"))
+        self.assertIn("0.588", messages.text(w[0]))
 
     def test_build_target(self):
         w = profile.warnings(profile.describe(meta(build_target="StandaloneWindows64"), [2000, 1000]))
         self.assertEqual(len(w), 1)
-        self.assertIn("StandaloneWindows64", w[0])
+        self.assertEqual((w[0]["code"], w[0]["target"]), ("build_target_not_mobile", "StandaloneWindows64"))
 
     def test_no_pipeline_asset(self):
         m = meta()

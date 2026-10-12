@@ -22,6 +22,7 @@ from paretogpu.core import pricing as heavy
 from paretogpu.core import ranking
 from paretogpu.model.cores import MAIN_CORE
 from paretogpu.model.shaderfile import stage_of
+from paretogpu.store import workspace
 from paretogpu.views import tables
 from paretogpu.views.reporter import CONSOLE
 
@@ -52,7 +53,7 @@ def run(folder, cores=(MAIN_CORE,), api="gles", out=None, jobs=None, rep=CONSOLE
     results = Engine(rep, jobs).get(MeasureRule(folder, api, info), tasks)
     records, failures = [], []
     os.makedirs(out, exist_ok=True)
-    with open(os.path.join(out, "measurements.jsonl"), "w", encoding="utf-8", newline="\n") as fj, \
+    with open(os.path.join(out, workspace.MEASUREMENTS_FILE), "w", encoding="utf-8", newline="\n") as fj, \
             open(os.path.join(out, "measurements.csv"), "w", encoding="utf-8", newline="") as fc:
         w = csv.DictWriter(fc, fieldnames=tables.COLUMNS)
         w.writeheader()
@@ -78,7 +79,7 @@ def report(folder, out=None, fp16_threshold=heavy.FP16_THRESHOLD):
     """measurements.jsonl in `folder` -> report.csv in `out` (default: folder). The HTML view of shaders is the
     "project shaders" tab of the frame report (cost --materials)."""
     out = out or folder
-    records = load(os.path.join(folder, "measurements.jsonl"))
+    records = load(os.path.join(folder, workspace.MEASUREMENTS_FILE))
     rows, cores, failures = ranking.build_rows(records, fp16_threshold)
     os.makedirs(out, exist_ok=True)
     tables.write_report_csv(rows, cores, os.path.join(out, "report.csv"))

@@ -86,7 +86,7 @@ class Candidates(unittest.TestCase):
         c = vertexmove.candidates(ROTATE_PROPERTY)
         self.assertEqual(len(c), 1)
         self.assertEqual(c[0]["text"], "u_xlat1.xy = u_xlat1.xy + _Center.xy;")
-        self.assertIn("поворот", c[0]["label"])
+        self.assertEqual(c[0]["label"], "rotate")
         self.assertEqual(c[0]["varyings"], ["vs_TEXCOORD0"])
         self.assertEqual(len(c[0]["chain"]), 6)  # sin, cos and the rotation of (uv - center)
 
@@ -97,12 +97,12 @@ class Candidates(unittest.TestCase):
     def test_tiling_yes_normalize_no(self):
         c = vertexmove.candidates(TILING_AND_NORMAL)
         self.assertEqual([x["text"] for x in c], ["u_xlat0.xy = vs_TEXCOORD0.xy * _BaseMap_ST.xy + _BaseMap_ST.zw;"])
-        self.assertEqual(c[0]["label"], "Tiling / Offset")
+        self.assertEqual(c[0]["label"], "tiling_offset")
 
     def test_flipbook_by_time(self):
         c = vertexmove.candidates(FLIPBOOK)
         self.assertEqual([x["text"] for x in c], ["u_xlat1.xy = u_xlat1.xy / vec2(_Width);"])
-        self.assertIn("флипбук", c[0]["label"])
+        self.assertEqual(c[0]["label"], "flipbook")
 
     def test_budget(self):
         self.assertEqual(vertexmove.budget(ROTATE_PROPERTY), {"varyings": 2, "free_components": 1})

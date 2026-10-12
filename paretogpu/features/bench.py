@@ -51,4 +51,5 @@ BENCH = Command(
      Arg("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)"),
      Arg("--out", default=DOCS, help="site folder (default: docs/)"),
      Arg("--site-only", action="store_true", help="only rebuild data.js and summary_*.csv from mali_math_cost.csv")],
-    run_command, phases=lambda v: (["site"] if v.get("site_only") else ["bench_compile", "site"]))
+    run_command, phases=lambda v: (["site"] if v.get("site_only") else ["bench_compile", "site"]),
+    title="Замер функций и сборка сайта")

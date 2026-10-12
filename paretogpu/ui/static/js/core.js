@@ -1,6 +1,4 @@
 "use strict";
-const $ = s => document.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const api = async (path, body) => {
   const r = await fetch(path, body === undefined ? {} : {method: "POST", body: JSON.stringify(body),
     headers: {"Content-Type": "application/json", "X-ParetoGPU": "1"}});
@@ -24,32 +22,18 @@ function dur(s) {
   return `${Math.floor(s / 3600)} ч ${String(Math.floor(s / 60) % 60).padStart(2, "0")} мин`;
 }
 const approx = s => s == null ? "?" : s < 5 ? "несколько секунд" : "≈ " + dur(s);
-const when = t => new Date(t * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
-const M = x => x == null ? "—" : (x / 1e6).toFixed(1);
 const pct = x => x == null ? "—" : (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
 
-const PRESET_TEXT = {frame_cost: "Проверка кадра", cost: "Пересчёт снимка", site: "Обновление данных сайта",
-  matcompare: "Сравнение материалов", matshader: "Разбор материала", hotspots: "Почему тяжёлые шейдеры"};
-const STEP_TEXT = {frame: "Снимок кадра", cost: "Цена кадра", bench: "Замер функций и сборка сайта"};
-const PHASE_TEXT = {
-  rd_capture: ["Захват кадра в RenderDoc"], snapshot: ["Снимок кадра (Frame Debugger)", "событий"],
-  rd_counters: ["Подсчёт пикселей (RenderDoc)"], materials: ["Материалы проекта"],
-  fingerprints: ["Проверка изменений шейдеров"], compile: ["Компиляция шейдеров в Unity", "вариантов"],
-  measure: ["Замеры malioc", "замеров"], loops: ["Циклы в шейдерах (malioc)", "замеров"],
-  report: ["Расчёт и отчёт"], ablation: ["Разбор по строкам (malioc)", "замеров"], bench_compile: ["Замеры malioc", "шейдеров"], site: ["Сборка сайта"], run: ["Выполнение"],
-};
+// the names of presets, commands and phases come with the schema (/api/schema: features/, model/phases.py)
+const presetText = id => ((SCH.presets || []).find(p => p.id === id) || {}).title || id;
+const stepText = cmd => (SCHEMA[cmd] || {}).title || cmd;
+const phaseText = id => (SCH.phases[id] || {}).label || id;
+const phaseUnit = id => (SCH.phases[id] || {}).unit || "";
 const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
   "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
 // settings of the simple form; the rest of the flags are in "Дополнительно"
 const SIMPLE = new Set(["project", "frame", "out", "renderdoc", "cores", "core", "materials", "suffix"]);
-const ADV_LABEL = {
-  variants: "Папка скомпилированных вариантов", main_core: "Основное ядро", api: "API цен", vulkan_only: "Только Vulkan",
-  no_compile: "Не компилировать", recompile: "Скомпилировать всё заново", retry_failed: "Повторить упавшие варианты",
-  loop_iters: "Итераций динамических циклов", loop_iters_shader: "Итерации по шейдерам (NAME=N через «;»)",
-  jobs: "Потоков malioc", timeout: "Таймаут снимка, с", max_events: "Не больше событий",
-};
-
-let SCHEMA, OPT, recalc = null, edReady = null;
+let SCH = {phases: {}}, SCHEMA, OPT, recalc = null, edReady = null;
 
 /* ---------- tabs ---------- */
 function tab(name) {

@@ -4,6 +4,7 @@
   prepare(project, paths, root, cores, ...)  the materials' variants compiled and measured, dynamic loops priced
   common(prep, sides, ...)  the fields every result about materials has (features/matcompare.py, matshader.py)
   project_variants(project, events, ...)  the variants of every material of the project (cost --materials)
+  MaterialError  why a material cannot be priced (code "material")
 """
 import os
 import time
@@ -17,15 +18,21 @@ from paretogpu.core import materials as plan_
 from paretogpu.core.materials import NS
 from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.model.cores import main_core
+from paretogpu.model.errors import ParetoError
 from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
+
+
+class MaterialError(ParetoError):
+    """A material cannot be priced: no such file, no shader of it in the project, no pass to draw it with."""
+    code = "material"
 
 
 def resolve(project, path, guids=None):
     """A material file (absolute, or relative to the project) -> materials.parse_material() + path, shader."""
     full = path if os.path.isabs(path) else os.path.join(project, path)
     if not os.path.isfile(full):
-        raise ValueError(f"no material {path}")
+        raise MaterialError(f"no material {path}")
     m = materials.parse_material(full)
     m["path"] = os.path.relpath(full, project).replace("\\", "/")
     guids = guids if guids is not None else materials.shader_guids(project)
@@ -49,7 +56,7 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
     mats = [resolve(project, x, guids) for x in paths]
     for side, m in zip("AB" if len(mats) > 1 else [""], mats):
         if m.get("error"):
-            raise ValueError(f"{side + ' ' if side else ''}{m['path']}: {m['error']}")
+            raise MaterialError(f"{side + ' ' if side else ''}{m['path']}: {m['error']}")
     snaps = workspace.snapshots_of(project, list(snapshot_folders))
     info = plan_.snapshot_info(snaps)
     editor = None
@@ -69,7 +76,7 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
     for m in mats:
         keys, skipped = plan_.plan([m], info, editor)
         if not keys:
-            raise ValueError(f"{m['path']}: " + (skipped[0]["reason"] if skipped else "ни одного прохода"))
+            raise MaterialError(f"{m['path']}: " + (skipped[0]["reason"] if skipped else "ни одного прохода"))
         all_keys.update(keys)
         sides.append(sorted(keys, key=lambda k: (k.subshader, k.pass_index)))
     rep.log(f"materials: {len(all_keys)} variants, {len(snaps)} snapshots of the project for global keywords")
@@ -84,16 +91,15 @@ def common(prep, sides, cores, api, apis, ns=NS):
     state, snaps = prep["state"], prep["snaps"]
     found = [c for c in cores if any(c in p["prices"] for s in sides for p in s["passes"])]
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
-    warn = []
+    warn = []  # {"code", ...params}: views/messages.py has the words
     for side, s in zip("AB" if len(sides) > 1 else [""], sides):
         for p in s["passes"]:
             if p["error"]:
-                warn.append(f"{side + ', ' if side else ''}проход {p['pass']}: нет цены ({p['error']})")
+                warn.append({"code": "pass_unpriced", "side": side or None, "pass": p["pass"], "error": p["error"]})
     if not state["checked"]:
-        warn.append("Варианты не сверены с шейдерами (редактор не отвечал или --no-compile): цены могут быть устаревшими.")
+        warn.append({"code": "variants_unchecked"})
     if not snaps:
-        warn.append("В проекте нет снимков кадра: глобальные keywords пайплайна (свет, тени, Forward+) не добавлены, "
-                    "а проходы взяты все, кроме служебных.")
+        warn.append({"code": "no_snapshots"})
     return {"project": prep["project"], "api": api, "apis": apis, "cores": found,
             "main_core": main_core(found), "ns": list(ns),
             "default_n": LOOP_ITERS, "malioc": ", ".join(sorted({r["malioc"] for r in recs})),

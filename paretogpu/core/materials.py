@@ -15,7 +15,7 @@ from collections import Counter, defaultdict
 
 from paretogpu.core import pricing as heavy
 from paretogpu.core import loops
-from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, loop_n, price
+from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, loop_n, price, price_draw
 from paretogpu.core.variants import match
 from paretogpu.model.variant import API, VariantKey
 
@@ -128,11 +128,11 @@ def rows(keys, skipped, state, cost, api="vulkan", loop_iters=LOOP_ITERS, loop_o
             for c in cores:
                 if c not in recs["fragment"] or c not in recs["vertex"]:
                     continue
-                f = price(recs["fragment"], files["fragment"], c, n, loop_data)
-                v = price(recs["vertex"], files["vertex"], c, n, loop_data)
+                d = price_draw(recs, files, c, n, loop_data)
+                f, v = d["px"], d["vtx"]
                 prices[c] = {"px_price": f["cycles"], "px_bound": f["bound"], "px_path": f["path"],
                              "vtx_price": v["cycles"], "vtx_bound": v["bound"], "regs": f["work_regs"],
-                             "fp16": f["fp16_pct"], "flags": sorted(set(f["flags"]) | {x for x in v["flags"] if x != "low_fp16"})}
+                             "fp16": f["fp16_pct"], "flags": d["flags"]}
             fr = in_frame.get(code)
             row = out[code] = {"shader": k.shader, "pass": k.pass_name, "keyword_sets": [], "materials": [], "prices": prices,
                                "in_frame": dict(fr["share"]) if fr else {}, "frame_events": fr["events"] if fr else 0,
@@ -192,14 +192,13 @@ def _price_pass(k, state, cores, api, loop_data, ns):
             f = price(recs["fragment"], files["fragment"], c, n, loop_data)
             v = price(recs["vertex"], files["vertex"], c, n, loop_data)
             px[str(n)], vtx[str(n)] = f["cycles"], v["cycles"]
-        f = price(recs["fragment"], files["fragment"], c, LOOP_ITERS, loop_data)
-        v = price(recs["vertex"], files["vertex"], c, LOOP_ITERS, loop_data)
+        d = price_draw(recs, files, c, LOOP_ITERS, loop_data)
+        f, v = d["px"], d["vtx"]
         out[c] = {"px": px, "vtx": vtx, "looped": looped,
                   "px_pipes": _pipes(recs["fragment"][c], files["fragment"], c, ns, loop_data),
                   "vtx_pipes": _pipes(recs["vertex"][c], files["vertex"], c, ns, loop_data), "px_bound": f["bound"], "vtx_bound": v["bound"],
                   "px_path": f["path"], "vtx_path": v["path"], "px_regs": f["work_regs"], "vtx_regs": v["work_regs"],
-                  "px_fp16": f["fp16_pct"],
-                  "flags": sorted(set(f["flags"]) | {x for x in v["flags"] if x != "low_fp16"})}
+                  "px_fp16": f["fp16_pct"], "flags": d["flags"]}
     return {"files": files, "prices": out}, None
 
 

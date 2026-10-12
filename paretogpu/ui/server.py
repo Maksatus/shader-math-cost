@@ -36,7 +36,6 @@ from paretogpu.views import html
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
-PRESETS = presets.PRESETS
 
 
 RUNNER = None
@@ -165,7 +164,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     WINDOWS.alive(q["id"])
                 return self._json({"ok": True})
             if p == "/api/schema":
-                return self._json({"commands": SCHEMA, "presets": PRESETS})
+                return self._json(presets.ui_schema())
             if p == "/api/options":
                 return self._json(api.options())
             if p == "/api/job":
@@ -181,10 +180,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"runs": api.cost_runs()})
             if p == "/api/results":
                 return self._json({"items": api.results(q.get("kind"))})
-            if p == "/api/matcompares":
-                return self._json({"items": api.matcompares()})
-            if p == "/api/matshaders":
-                return self._json({"items": api.matshaders()})
             if p == "/api/materials":
                 if not os.path.isdir(os.path.join(q.get("project", ""), "Assets")):
                     return self._json({"error": "нет такого Unity-проекта", "materials": []}, 404)

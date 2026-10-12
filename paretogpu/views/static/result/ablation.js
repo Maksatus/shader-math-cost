@@ -48,7 +48,7 @@ function ablationBlock(key, a, opts = {}) {
   const partRow = (id, kid) => { const row = x.stmts[id], v = mInc(row, m), n = sub(id).length, ex = st(id).explain;
     return `<tr class="${kid ? "kid" : ""} ${String(sel) === String(id) ? "on" : ""}" data-part="${id}" data-key="${key}"><td class="n">${line(id)}</td>
       <td class="code" title="${esc(st(id).text)}">${kid ? "↳ " : ""}${esc(st(id).text)}</td>
-      <td class="small" title="${esc(ex ? ex.text : "")}">${esc(ex ? ex.text : "")}</td><td class="n">${n > 1 ? n : ""}</td>
+      <td class="small" title="${esc(explainText(ex))}">${esc(explainText(ex))}</td><td class="n">${n > 1 ? n : ""}</td>
       <td class="n"><b>${c1(v)}</b>${loopMark(id)}</td><td class="n">${share(v)}</td><td class="small muted">${pipesOf(row)}</td></tr>`; };
   const top = opts.top || 15;
   const rows = roots.slice(0, top).map(id => partRow(id) + (String(sel) === String(id)
@@ -65,7 +65,7 @@ function ablationBlock(key, a, opts = {}) {
       <th class="n" title="Доля от цены шейдера">Доля</th><th class="n" title="Строк в цепочке, которая переедет в вертекс">Строк</th></tr>
       ${cands.slice(0, top).map(v => { const val = mInc(v.row, m);
         return `<tr class="${mv && mv.id === v.id ? "on" : ""}" data-move="${v.id}" data-key="${key}"><td class="n">${v.line + 1}</td>
-        <td class="code" title="${esc(v.text)}">${esc(v.text)}</td><td class="small">${esc(v.label)}</td><td class="n">${v.width}</td>
+        <td class="code" title="${esc(v.text)}">${esc(v.text)}</td><td class="small">${esc(moveLabel(v.label))}</td><td class="n">${v.width}</td>
         <td class="n ${val > 0 ? "good" : "muted"}"><b>${c1(val)}</b></td><td class="n">${val > 0 ? share(val) : ""}</td><td class="n">${v.chain.length}</td></tr>`; }).join("")}</table>
     ${a.varyings ? `<div class="small muted" title="Mali интерполирует varyings по 4 компоненты; у vec3 и vec2 свободные компоненты можно занять без нового слота">varyings сейчас: ${a.varyings.varyings}, свободных компонент в них: ${a.varyings.free_components}</div>` : ""}` : "";
   const showCode = opts.code !== false || ablCode[key];

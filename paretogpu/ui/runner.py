@@ -93,16 +93,17 @@ class Runner:
             if self.job and self.job["status"] == "running":
                 raise ValueError("уже идёт запуск: дождитесь его конца или остановите")
         plan, frame_dir = presets.plan(preset_id, dict(values), sch)
-        steps, report = [], None
+        steps, report, kind = [], None, None
         for cmd, v in plan:
             steps.append({"cmd": cmd, "argv": presets.argv_of(cmd, v, sch), "values": v, "status": "pending",
                           "started": None, "finished": None, "rc": None,
                           "phases": [{"id": p, "status": "pending"} for p in (presets.phases_of(cmd, v) or ["run"])]})
-            report = presets.report_of(cmd, v) or report
+            if presets.report_of(cmd, v):
+                report, kind = presets.report_of(cmd, v), presets.kind_of(cmd)
         now = time.time()
         job = {"id": time.strftime("%Y%m%d_%H%M%S", time.localtime(now)), "preset": preset_id, "title": preset_id,
                "status": "running", "started": now, "finished": None, "steps": steps, "log": [], "log_start": 0,
-               "report_path": report, "report": None, "error": None, "frame_dir": frame_dir,
+               "report_path": report, "report_kind": kind, "report": None, "error": None, "frame_dir": frame_dir,
                "summary": None, "hint": None}
         os.makedirs(JOBS, exist_ok=True)
         with self.lock:

@@ -30,7 +30,7 @@ from paretogpu.store import workspace  # noqa: E402
 ROOT = os.path.join(workspace.OUT, "_regression")
 WORK = os.path.join(ROOT, "work")
 UI_PORT = 8799
-SNAP_FILES = ("frame_events.json", "frame.json")
+SNAP_FILES = (workspace.SNAPSHOT_FILE, "frame.json")
 
 
 def W(*p):
@@ -39,7 +39,7 @@ def W(*p):
 
 # --- inputs ------------------------------------------------------------------------------------------------------
 def pick_inputs(snapshots=None, mats=None):
-    snaps = sorted(workspace.snapshot_dirs(), key=lambda s: -os.path.getmtime(os.path.join(s[1], "frame_events.json")))
+    snaps = sorted(workspace.snapshot_dirs(), key=lambda s: -os.path.getmtime(os.path.join(s[1], workspace.SNAPSHOT_FILE)))
     if snapshots:
         names = snapshots.split(",")
     else:
@@ -54,7 +54,7 @@ def pick_inputs(snapshots=None, mats=None):
         mat_paths = mats.split(",")
     else:
         from paretogpu.adapters.unity import assets
-        with open(os.path.join(workspace.OUT, names[0], "frame_events.json"), encoding="utf-8") as f:
+        with open(os.path.join(workspace.OUT, names[0], workspace.SNAPSHOT_FILE), encoding="utf-8") as f:
             drawn = [e["shader"] for e in json.load(f)["events"] if e["kind"] == "draw" and e["stage"] == "opaque"]
         by_shader = {}
         for m in assets.scan(project):
@@ -147,7 +147,8 @@ def run(name, inputs, bench=True):
 
 def ui(res, inputs):
     gets = {"schema": "/api/schema", "options": "/api/options", "reports": "/api/reports", "costs": "/api/costs",
-            "matcompares": "/api/matcompares", "matshaders": "/api/matshaders", "doctor": "/api/doctor",
+            "matcompares": "/api/results?kind=matcompare", "matshaders": "/api/results?kind=matshader",
+            "doctor": "/api/doctor",
             "materials": "/api/materials?project=" + urllib.request.quote(inputs["project"]), "ping": "/api/ping"}
     d = os.path.join(res, "ui")
     os.makedirs(d)

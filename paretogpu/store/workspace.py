@@ -18,6 +18,11 @@ REAL = os.path.join(PKG, "corpus", "real")
 UI = os.path.join(OUT, "_ui")
 RESULTS = {"matcompare": "_matcompare", "matshader": "_matshader"}
 SNAPSHOT_FILE = "frame_events.json"
+COST_FILE = "frame_cost.json"
+COST_CSV = "frame_cost.csv"
+REPORT_PAGE = "frame_report.html"
+HOTSPOTS_PAGE = "hotspots.html"
+MEASUREMENTS_FILE = "measurements.jsonl"
 
 
 def time_id():

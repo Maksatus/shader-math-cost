@@ -9,11 +9,11 @@ function renderHotspots() {
     const kids = id => (a.statements[id].children || []).filter(k => x.stmts[k] && !x.stmts[k].error).sort((u, w) => (x.stmts[w].price || 0) - (x.stmts[u].price || 0));
     let id = roots[0];
     while (id != null && x.stmts[id].price > 0.75 * x.base.price && kids(id).length && x.stmts[kids(id)[0]].price > 0.25 * x.base.price) id = kids(id)[0];
-    return id == null ? null : {text: a.statements[id].explain.text, line: a.statements[id].line + 1, price: x.stmts[id].price, base: x.base.price};
+    return id == null ? null : {text: explainText(a.statements[id].explain), line: a.statements[id].line + 1, price: x.stmts[id].price, base: x.base.price};
   };
   const head = `<div class="card"><h1>Почему тяжёлые шейдеры</h1>
-    <div class="mode small muted">Снимок <b>${esc(D.snapshot)}</b> · ${esc(D.core)} · цены кадра — ${esc(D.api || "")}, разбор строк — GLES · malioc ${esc(D.malioc || "?")} · расчёт ${when(D.computed_at)}</div>
-    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <div class="mode small muted">Снимок <b>${esc(D.snapshot)}</b> · ${esc(D.core)} · цены кадра — ${esc(D.api || "")}, разбор строк — GLES · malioc ${esc(D.malioc || "?")} · расчёт ${when(D.computed_at, true)}</div>
+    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(msg(w))}</li>`).join("")}</ul></div>` : ""}
     <p class="small" style="margin:10px 0 0">${refLink("hotspots", "Как читать")} · ${costHelp}</p></div>`;
   const overview = `<div class="card"><h2>Самые дорогие шейдеры кадра</h2><table class="cmp parts">
     <colgroup><col style="width:40px"><col style="width:420px"><col style="width:80px"><col style="width:480px"><col style="width:90px"></colgroup>

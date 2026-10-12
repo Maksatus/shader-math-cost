@@ -1,96 +1,63 @@
 """The cost of a frame snapshot (plan items K1.4–K1.9, K1.13): `python -m paretogpu cost <snapshot>`.
 
-Every event's exact shader variant is compiled (app/variants.py: checked against the shaders in the open editor) and
-measured with malioc, dynamic loops are priced at n iterations, and the frame is priced (core/frame_cost.py):
-frame_cost.json / .csv, frame_report.html, and the run is kept in <snapshot>/costs/ (store/cost_runs.py) to compare
-with. --materials adds the shader variants of every material of the project ("project shaders" tab).
+The snapshot is priced by app/cost.py (every event's exact shader variant compiled and measured with malioc, dynamic
+loops at n iterations, the frame priced by core/frame_cost.py): frame_cost.json / .csv, frame_report.html, and the run
+is kept in <snapshot>/costs/ (store/cost_runs.py) to compare with. --materials adds the shader variants of every
+material of the project ("project shaders" tab).
 """
-import json
 import os
-import sys
-import time
 
 from paretogpu.adapters.unity.variants import VariantsError
-from paretogpu.app import materials as project_materials
+from paretogpu.app import cost
 from paretogpu.app import results
-from paretogpu.app import variants
 from paretogpu.core import frame_cost
-from paretogpu.core import materials as shaders
 from paretogpu.core import profile
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS
 from paretogpu.features.common import JOBS, cores_args, default_variants, fail, parse_cores
 from paretogpu.features.spec import Arg, Command, ResultKind
-from paretogpu.model.cores import main_core as main_core_of
-from paretogpu.model.variant import PLATFORM
 from paretogpu.store import cost_runs, workspace
-from paretogpu.views import html, tables
-from paretogpu.views.reporter import CONSOLE as rep
+from paretogpu.views import html, messages, tables
 
 
 def run_command(args):
-    path = os.path.join(args.frame, workspace.SNAPSHOT_FILE)
-    if not os.path.exists(path):
-        fail(f"no frame_events.json in {args.frame}: run `frame` first", code="no_snapshot")
-    with open(path, encoding="utf-8") as f:
-        frame = json.load(f)
-    events = frame["events"]
+    if not workspace.is_snapshot(args.frame):
+        fail(f"no {workspace.SNAPSHOT_FILE} in {args.frame}: run `frame` first", code="no_snapshot")
     cores = parse_cores(args)
     if args.main_core and args.main_core not in cores:
-        sys.exit(f"--main-core {args.main_core} is not one of the cores: {', '.join(cores)}")
-    main_core = args.main_core or main_core_of(cores)
+        fail(f"--main-core {args.main_core} is not one of the cores: {', '.join(cores)}", code="input")
     overrides = {}
     for spec in args.loop_iters_shader or []:
         name, _, n = spec.rpartition("=")
         if not name or not n.isdigit():
-            sys.exit(f"--loop-iters-shader wants NAME=N, got {spec!r}")
+            fail(f"--loop-iters-shader wants NAME=N, got {spec!r}", code="input")
         overrides[name] = int(n)
-    project = args.project or frame.get("project")
+    project = args.project or workspace.snapshot_project(args.frame)
     root = args.variants or os.path.join(args.frame, "variants")
-    platforms = [PLATFORM[args.api]]
-    mat_keys = None
-    if args.materials:
-        if not project or not os.path.isdir(project):
-            sys.exit(f"--materials needs the Unity project (--project), got {project}")
-        rep.phase("materials")
-        mat_keys, mat_skipped = project_materials.project_variants(
-            project, events, [os.path.dirname(os.path.abspath(args.frame)), workspace.OUT], root,
-            compile_missing=not args.no_compile)
+    if args.materials and not (project and os.path.isdir(project)):
+        fail(f"--materials needs the Unity project (--project), got {project}", code="input")
     try:
-        state = variants.run(events + ([k.as_event() for k in mat_keys] if mat_keys else []), project, root, cores,
-                             platforms, args.jobs, compile_missing=not args.no_compile,
-                             recompile=args.recompile, retry_failed=args.retry_failed)
+        c, state = cost.run(args.frame, root, cores, args.api, args.main_core, project, args.materials,
+                            compile_missing=not args.no_compile, recompile=args.recompile,
+                            retry_failed=args.retry_failed, jobs=args.jobs, loop_iters=args.loop_iters,
+                            loop_overrides=overrides)
     except VariantsError as e:
         fail(f"variants failed: {e}", e)
-    state["loops"] = variants.loops_of(state, root, cores, args.jobs)
-    rep.phase("report")
-    c = frame_cost.compute(frame, events, state, args.api, cores, main_core,
-                           loop_iters=args.loop_iters, loop_overrides=overrides)
-    c["variants_checked"] = state["checked"]
-    prof = profile.describe(frame, profile.frame_size(c["events"]))
-    c["profile"] = {**prof, "warnings": profile.warnings(prof)}
-    if mat_keys is not None:
-        c["project_shaders"] = shaders.rows(mat_keys, mat_skipped, state, c, args.api, args.loop_iters, overrides)
-    recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
-    c["malioc"] = ", ".join(sorted({r["malioc"] for r in recs}))
-    c["frame_dir"] = os.path.abspath(args.frame)
-    c["variants_dir"] = os.path.abspath(root)
-    c["computed_at"] = time.time()
     out = args.out or args.frame
     os.makedirs(out, exist_ok=True)
     tables.write_frame_cost(c, out)
     run_id = cost_runs.archive(c, out)  # every run is kept: a snapshot priced again is compared with its earlier runs
-    html.write_frame_report(c, os.path.join(out, "frame_report.html"), RESULT.title(c))
+    html.write_frame_report(c, os.path.join(out, RESULT.page), RESULT.title(c))
     results.publish(RESULT, c, out, os.path.basename(os.path.abspath(args.frame)))
-    print_summary(c, state, args.api)
-    for name in ("frame_report.html", "frame_cost.csv", "frame_cost.json", f"{cost_runs.COSTS}/{run_id}.json"):
+    print_summary(c, len(state["keys"]), args.api)
+    for name in (RESULT.page, workspace.COST_CSV, RESULT.data, f"{cost_runs.COSTS}/{run_id}.json"):
         print(f"-> {os.path.abspath(os.path.join(out, name))}")
     return 0
 
 
-def print_summary(c, state, api):
+def print_summary(c, n_variants, api):
     cov, t = c["coverage"], c["totals"].get(c["main_core"])
     print(f"{cov['draws_priced']} of {cov['draws']} draws and {cov['events_priced'] - cov['draws_priced']} of "
-          f"{cov['events'] - cov['draws']} dispatches priced, {len(state['keys'])} variants, {api}; pixels: "
+          f"{cov['events'] - cov['draws']} dispatches priced, {n_variants} variants, {api}; pixels: "
           + ", ".join(f"{k} {v}" for k, v in c["pixel_methods"].items())
           + "; vertices: " + ", ".join(f"{k} {v}" for k, v in c["vertex_methods"].items()))
     if t:
@@ -117,8 +84,8 @@ def print_summary(c, state, api):
     prof = c.get("profile") or {}
     print(profile.summary(prof))
     for w in prof.get("warnings") or []:
-        print(f"  WARNING: {w}")
-    if not state["checked"]:
+        print(f"  WARNING: {messages.text(w)}")
+    if not c["variants_checked"]:
         print("  compiled variants were NOT checked against the shaders (no editor or --no-compile): "
               "after a shader change run with the editor open")
     for m in c["missing"]:
@@ -134,47 +101,51 @@ def print_summary(c, state, api):
             print(f"  skipped {n}: {r}")
 
 
+TOTALS = ("main_core", "api", "total", "fragment", "vertex", "compute", "priced")
+
+
 def _totals(c):
-    mc = c.get("main_core")
-    t = (c.get("totals") or {}).get(mc) or {}
-    return {"main_core": mc, "api": c.get("api"), "total": t.get("total"), "fragment": t.get("fragment"),
-            "vertex": t.get("vertex"), "compute": t.get("compute"),
-            "priced": (c.get("coverage") or {}).get("draws_priced")}
+    """What the list of results says about a cost: its part of core/frame_cost.summary."""
+    s = frame_cost.summary(c)
+    return {k: s[k] for k in TOTALS}
 
 
 RESULT = ResultKind("cost", lambda c: f"Стоимость кадра {os.path.basename(os.path.normpath(c.get('frame_dir') or '.'))}",
-                    _totals, data="frame_cost.json", page="frame_report.html", own_page=True)
+                    _totals, data=workspace.COST_FILE, page=workspace.REPORT_PAGE, own_page=True)
 
 COST = Command(
     "cost", "cost of a frame snapshot: every event's shader variant measured with malioc, pixels x pixel price + "
             "vertices x vertex price, frame_report.html",
-    [Arg("frame", help="snapshot folder with frame_events.json (from `frame`)"),
+    [Arg("frame", help="snapshot folder with frame_events.json (from `frame`)", label="Снимок"),
      Arg("--project", help="Unity project to compile missing variants in (default: the snapshot's; its editor must be "
-                           "open)"),
+                           "open)", label="Проект"),
      Arg("--variants", help="folder of the compiled and measured variants (default: <frame>/variants; share one "
-                            "between frames of a project to compile less)"),
+                            "between frames of a project to compile less)", label="Папка скомпилированных вариантов"),
      cores_args(),
      Arg("--main-core", help="core shown first and printed (decision D-17; default Mali-G78 if it is among the cores, "
-                             "else the first)"),
+                             "else the first)", label="Основное ядро"),
      Arg("--api", default="vulkan", choices=["vulkan", "gles"],
-         help="prices of this API (default vulkan: the Android API of the target project)"),
+         help="prices of this API (default vulkan: the Android API of the target project)", label="API цен"),
      Arg("--no-compile", action="store_true",
-         help="use only the variants already in the folder (not checked against the shaders)"),
-     Arg("--materials", action="store_true",
+         help="use only the variants already in the folder (not checked against the shaders)", label="Не компилировать"),
+     Arg("--materials", action="store_true", label="Все материалы проекта",
          help="also price the shader variants of every material of the project (the \"project shaders\" tab): passes "
               "and global keywords from the project's snapshots, other shaders' passes from the open editor"),
-     Arg("--recompile", action="store_true", help="compile every variant of the frame again"),
-     Arg("--retry-failed", action="store_true", help="compile again the variants that failed before"),
+     Arg("--recompile", action="store_true", help="compile every variant of the frame again",
+         label="Скомпилировать всё заново"),
+     Arg("--retry-failed", action="store_true", help="compile again the variants that failed before",
+         label="Повторить упавшие варианты"),
      Arg("--loop-iters", type=int, default=LOOP_ITERS,
          help="iterations of every dynamic loop (lights and probes per pixel, ray steps) of the shaders whose longest "
               "path is N/A; the report also shows the frame at n = " + ", ".join(map(str, LOOP_NS))
-              + " (default %(default)s)"),
+              + " (default %(default)s)", label="Итераций динамических циклов"),
      Arg("--loop-iters-shader", action="append", metavar="NAME=N",
-         help="iterations for the shaders whose name contains NAME, e.g. Hidden/SSR=12 (repeatable)"),
+         help="iterations for the shaders whose name contains NAME, e.g. Hidden/SSR=12 (repeatable)",
+         label="Итерации по шейдерам (NAME=N через «;»)"),
      JOBS,
-     Arg("--out", help="output folder (default: the snapshot folder)")],
-    run_command,
+     Arg("--out", help="output folder (default: the snapshot folder)", label="Папка результата")],
+    run_command, title="Цена кадра",
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
                                                                          "report"],
-    report=lambda v: os.path.join(v.get("out") or v["frame"], "frame_report.html"),
+    report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page),
     ui_values=default_variants, result=RESULT)

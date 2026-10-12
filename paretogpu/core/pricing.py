@@ -11,7 +11,8 @@ frame comes from core/loops.py (the loops forced to n iterations); without it th
 (every instruction once: both sides of every branch, every loop body once — neither a lower nor an upper bound),
 raised per pipe to the shortest path where that is larger (total counts spill traffic once), and the shader gets
 the "dynamic_loop" flag. Vertex shaders (IDVS) count Position + Varying.
-price() is the score of one stage of a variant on one core, its dynamic loops at n iterations.
+price() is the score of one stage of a variant on one core, its dynamic loops at n iterations; price_draw() the
+fragment and vertex scores of a draw's variant with their flags merged.
 
 Flags:
   regs_gt32    more than 32 work registers in some variant: half thread occupancy
@@ -119,3 +120,12 @@ def price(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -
     if p:
         return score(recs[core], fp16_threshold, loops.cycles_at(p, n), f"loop n={n}")
     return score(recs[core], fp16_threshold)
+
+
+def price_draw(recs: dict, files: dict, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> dict:
+    """The scores of a draw's variant on one core, its dynamic loops at n iterations: {"px": Score of the fragment
+    stage, "vtx": Score of the vertex stage, "flags": the fragment's and the vertex's except low_fp16 (a vertex shader
+    needs little fp16)}. recs: {stage: {core: Measurement}} of core/variants.match, files: {stage: its file}."""
+    px = price(recs["fragment"], files["fragment"], core, n, loop_data, fp16_threshold)
+    vtx = price(recs["vertex"], files["vertex"], core, n, loop_data, fp16_threshold)
+    return {"px": px, "vtx": vtx, "flags": sorted(set(px["flags"]) | {x for x in vtx["flags"] if x != "low_fp16"})}

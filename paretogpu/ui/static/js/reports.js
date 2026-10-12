@@ -11,10 +11,10 @@ async function loadReports() {
       const t = x.total || 0, f = t ? x.fragment / t : 0, v = t ? x.vertex / t : 0;
       return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></td>
       <td>${esc(x.project || "—")}</td><td class="n">${x.draws}</td>
-      <td class="n">${x.total ? `<b>${M(x.total)}</b><div class="muted small">${esc(x.main_core)}</div>` : `<span class="muted">не посчитан</span>`}</td>
+      <td class="n">${x.total ? `<b>${M(x.total, 1)}</b><div class="muted small">${esc(x.main_core)}</div>` : `<span class="muted">не посчитан</span>`}</td>
       <td>${x.total ? `<div class="split" style="width:140px"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i></div><span class="muted small">${pct(f)} / ${pct(v)}</span>` : ""}</td>
-      <td style="white-space:nowrap;text-align:right">${x.report ? `<button class="btn sm primary" data-a="open" data-i="${i}">Открыть</button> ` : ""}
-        <button class="btn sm" data-a="recalc" data-i="${i}">${x.report ? "Пересчитать" : "Посчитать"}</button>
+      <td style="white-space:nowrap;text-align:right">${x.pages.cost ? `<button class="btn sm primary" data-a="open" data-i="${i}">Открыть</button> ` : ""}
+        <button class="btn sm" data-a="recalc" data-i="${i}">${x.pages.cost ? "Пересчитать" : "Посчитать"}</button>
         ${x.runs.length ? `<button class="btn sm" data-a="cmp" data-i="${i}">Сравнить</button>` : ""}
         <button class="btn sm" data-a="folder" data-i="${i}">Папка</button>
         <button class="btn sm danger" data-a="del" data-i="${i}" title="Удалить">✕</button></td></tr>`;

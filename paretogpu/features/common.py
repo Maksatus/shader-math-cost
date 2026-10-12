@@ -48,6 +48,6 @@ def cores_args(default="preset:mobile", help=None):
 
 MAIN_CORES = cores_args(MAIN_CORE, "comma separated cores and/or presets; preset:mobile = " + ",".join(PRESETS["mobile"])
                         + f" (default {MAIN_CORE})")
-JOBS = Arg("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)")
+JOBS = Arg("--jobs", type=positive_int, help="parallel malioc runs (default: CPU count)", label="Потоков malioc")
 FP16 = Arg("--fp16-threshold", type=float, default=FP16_THRESHOLD,
            help=f"low_fp16 flag below this percent (default {FP16_THRESHOLD})")

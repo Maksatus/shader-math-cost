@@ -7,7 +7,12 @@ import os
 import shutil
 import time
 
+from paretogpu.core import frame_cost
+from paretogpu.store import workspace
+
 COSTS = "costs"
+META = ("computed_at", "frame_dir", "project", "api", "malioc", "cores", "main_core", "totals", "loops_n", "checked",
+        "coverage")
 
 
 def archive(c, out):
@@ -17,19 +22,16 @@ def archive(c, out):
     rid = time.strftime("%Y%m%d_%H%M%S", time.localtime(c.get("computed_at") or time.time()))
     while os.path.exists(os.path.join(d, rid + ".json")):  # two runs in one second
         rid += "b"
-    shutil.copyfile(os.path.join(out, "frame_cost.json"), os.path.join(d, rid + ".json"))
+    shutil.copyfile(os.path.join(out, workspace.COST_FILE), os.path.join(d, rid + ".json"))
     with open(os.path.join(d, rid + ".meta.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(meta(c, rid), f, indent=1, ensure_ascii=False)
     return rid
 
 
 def meta(c, rid=None):
-    return {"id": rid, "computed_at": c.get("computed_at"), "frame_dir": c.get("frame_dir"),
-            "project": (c.get("frame") or {}).get("project"), "api": c.get("api"), "malioc": c.get("malioc"),
-            "cores": [x["name"] for x in c.get("cores") or []], "main_core": c.get("main_core"),
-            "totals": {k: v.get("total") for k, v in (c.get("totals") or {}).items()},
-            "loops_n": (c.get("loops") or {}).get("n"), "checked": c.get("variants_checked"),
-            "coverage": c.get("coverage")}
+    """What the list of runs says about one: its part of core/frame_cost.summary."""
+    s = frame_cost.summary(c)
+    return {"id": rid, **{k: s[k] for k in META}}
 
 
 def runs(folder):
@@ -54,6 +56,6 @@ def run_path(folder, rid):
 def load(path):
     """A cost run: frame_cost.json, a costs/<time>.json, or a snapshot folder (its latest run)."""
     if os.path.isdir(path):
-        path = os.path.join(path, "frame_cost.json")
+        path = os.path.join(path, workspace.COST_FILE)
     with open(path, encoding="utf-8") as f:
         return json.load(f)

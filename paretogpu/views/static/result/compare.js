@@ -5,7 +5,7 @@ function renderCompare() {
     <div class="mode">${D.same_frame
       ? "<b>Тот же снимок, посчитанный дважды.</b> Пиксели и вершины одинаковые, поэтому вся разница — это цена шейдеров."
       : "<b>Два разных снимка.</b> Разница складывается из цены шейдеров и объёма работы: ракурс, сцена, LOD, анимации. Ниже они разделены."}</div>
-    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(msg(w))}</li>`).join("")}</ul></div>` : ""}
     <p class="small" style="margin:10px 0 0">${refLink("compare-frames", "Как читать сравнение")}</p></div>`;
   if (!x) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;

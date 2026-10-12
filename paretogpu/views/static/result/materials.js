@@ -93,8 +93,8 @@ function renderMaterials() {
   const A = esc(D.a.material), B = esc(D.b.material);
   const head = `<div class="card"><h1>Сравнение материалов</h1>
     <div class="ab">${matSide(D.a, "A")}<div class="arrow">→</div>${matSide(D.b, "B")}</div>
-    <div class="mode small muted">Расчёт ${when(D.computed_at)} · ${esc(D.api)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
-    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <div class="mode small muted">Расчёт ${when(D.computed_at, true)} · ${esc(D.api)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
+    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(msg(w))}</li>`).join("")}</ul></div>` : ""}
     <p class="small" style="margin:10px 0 0">${refLink("compare-materials", "Как читать сравнение")} · ${costHelp}</p></div>`;
   if (!D.cores.length) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;

@@ -1,12 +1,7 @@
-const $ = s => document.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const M = x => x == null ? "—" : (x / 1e6).toFixed(Math.abs(x) < 1e7 ? 2 : 1);
 const sM = x => (x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x));
 const pct = (d, a) => !a ? (d ? "нов." : "0%") : (d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(100 * d / a).toFixed(Math.abs(d / a) < 0.1 ? 1 : 0) + "%";
 const cls = d => d < 0 ? "good" : d > 0 ? "bad" : "";
-const num = x => x == null ? "—" : Math.round(x).toLocaleString("ru-RU");
 const pr = x => x == null ? "—" : (+x).toFixed(2);
-const when = t => t ? new Date(t * 1000).toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit"}) : "—";
 const STAGE = {opaque: "непрозрачное", transparent: "прозрачное", post: "постобработка", shadow: "тени", prepass: "препасс",
   ui: "UI", compute: "compute", other: "прочее"};
 const PART = {fragment: "пиксели", vertex: "вершины", compute: "compute"};
@@ -39,9 +34,25 @@ function bar(d, max, w = 120) {
 
 function side(i, tag) {
   return `<div class="side ${tag === "B" ? "b" : ""}"><span class="tag">${tag}</span><b>${esc(i.snapshot || "?")}</b>
-    <div class="small muted">расчёт ${when(i.computed_at)} · ${esc(i.project || "")}</div>
+    <div class="small muted">расчёт ${when(i.computed_at, true)} · ${esc(i.project || "")}</div>
     <div class="small muted">${esc(i.api || "")} · malioc ${esc(i.malioc || "?")}${i.resolution ? " · " + i.resolution.join("×") : ""}${i.quality ? " · " + esc(i.quality) : ""}</div></div>`;
 }
+
+// the words of a warning {code, ...params}, of a part's explanation {ops, loop, n} and of a vertex candidate's
+// label (views/messages.py, embedded as MSG); an older result holds the words themselves
+const fill = (t, p) => t.replace(/\{(\w+)\}/g, (_, k) => p[k] ?? "?");
+const msg = w => typeof w === "string" ? w : (w.side ? w.side + ": " : "") + fill(MSG.warnings[w.code] || w.code || "", w);
+const plural = (n, one, few, many) => { const k = n % 100;
+  return `${n} ${k >= 11 && k <= 14 ? many : n % 10 === 1 ? one : n % 10 >= 2 && n % 10 <= 4 ? few : many}`; };
+function explainText(ex) {
+  if (!ex) return "";
+  if (typeof ex === "string") return ex;
+  const ops = ex.ops || {};
+  const words = MSG.ops.filter(([key]) => ops[key]).map(([key, one, few, many]) => one !== few ? plural(ops[key], one, few, many) : `${ops[key]} ${one}`);
+  const t = words.slice(0, 4).join(", ") || MSG.plain;
+  return ex.loop ? fill(MSG.in_loop, {n: ex.n ?? "n"}) + t : t;
+}
+const moveLabel = l => MSG.vertexmove[l] || l;
 
 const VIEWS = {};
 function render() {

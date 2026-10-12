@@ -2,7 +2,6 @@
 the shaders of a Unity project into such a folder (adapters/unity/export.py) and measure it.
 """
 import os
-import sys
 
 from paretogpu.adapters.unity import export as unity_export
 from paretogpu.adapters.unity.cli import UnityError
@@ -37,25 +36,25 @@ def measure_folder(folder, cores, api, out=None, jobs=None):
     for rel, err in failures:
         print(f"FAIL {rel}\n{err}\n")
     print(f"-> {os.path.abspath(os.path.join(out, 'measurements.csv'))}")
-    print(f"-> {os.path.abspath(os.path.join(out, 'measurements.jsonl'))}")
+    print(f"-> {os.path.abspath(os.path.join(out, workspace.MEASUREMENTS_FILE))}")
     return len(failures)
 
 
 def run_measure(args):
     if not os.path.isdir(args.folder):
-        sys.exit(f"not a folder: {args.folder}")
+        fail(f"not a folder: {args.folder}", code="input")
     cores = parse_cores(args)
     failed = measure_folder(args.folder, cores, args.api, args.out, args.jobs)
     if failed is None:
-        sys.exit(f"no .vert / .frag / .vert.spv / .frag.spv files in {args.folder}")
+        fail(f"no .vert / .frag / .vert.spv / .frag.spv files in {args.folder}", code="input")
     if not args.no_report:
         make_report(args.out or args.folder, None, args)
     return 1 if failed else 0
 
 
 def run_report(args):
-    if not os.path.exists(os.path.join(args.folder, "measurements.jsonl")):
-        sys.exit(f"no measurements.jsonl in {args.folder}: run `measure` first")
+    if not os.path.exists(os.path.join(args.folder, workspace.MEASUREMENTS_FILE)):
+        fail(f"no {workspace.MEASUREMENTS_FILE} in {args.folder}: run `measure` first", code="input")
     make_report(args.folder, args.out, args)
     return 0
 
@@ -97,12 +96,12 @@ MEASURE = Command(
      Arg("--out", help="output folder (default: the measured folder)"),
      Arg("--no-report", action="store_true", help="skip report.csv"),
      FP16],
-    run_measure, phases=lambda v: ["measure"])
+    run_measure, phases=lambda v: ["measure"], title="Замер папки шейдеров")
 
 REPORT = Command(
     "report", "report.csv (variants ranked on the main core) from measurements.jsonl",
     [Arg("folder"), Arg("--out", help="output folder (default: the folder)"), FP16],
-    run_report)
+    run_report, title="Отчёт по замерам")
 
 EXPORT = Command(
     "export", "compile shaders of a Unity project into per-variant GLSL / SPIR-V files (in the open editor via Unity "
@@ -117,4 +116,4 @@ EXPORT = Command(
      Arg("--timeout", type=int, default=1800, help="seconds"),
      Arg("--measure", action="store_true", help="measure the output folder with malioc and write the report"),
      MAIN_CORES, JOBS, FP16],
-    run_export, phases=lambda v: ["unity_export"] + (["measure"] if v.get("measure") else []))
+    run_export, phases=lambda v: ["unity_export"] + (["measure"] if v.get("measure") else []), title="Экспорт шейдеров")

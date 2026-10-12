@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from paretogpu.core import compare
+from paretogpu.views import messages
 from paretogpu.store import cost_runs
 from paretogpu.views import html
 
@@ -71,18 +72,20 @@ class Compare(unittest.TestCase):
         s = c["by_core"][CORE]["shaders"][0]
         self.assertEqual(s["flags_added"], ["low_fp16"])
         self.assertEqual(s["flags_removed"], ["spilling"])
-        self.assertTrue(any("malioc" in w for w in c["warnings"]))
-        self.assertTrue(any("API" in w for w in c["warnings"]))
+        codes = [w["code"] for w in c["warnings"]]
+        self.assertIn("malioc_differs", codes)
+        self.assertIn("api_differs", codes)
 
     def test_pipeline_of_one_side_unknown(self):
         ev = [event(0, "Lit", 1000, 10.0)]
         old = run(ev, frame_dir="F")
         new = run(ev, frame_dir="G", profile={"pipeline": "RP", "frame_scale": 1.0})
-        self.assertFalse(any("пайплайна" in w for w in compare.compare(old, new)["warnings"]))
+        self.assertNotIn("pipeline_differs", [w["code"] for w in compare.compare(old, new)["warnings"]])
         other = run(ev, frame_dir="H", profile={"pipeline": "RP2", "frame_scale": 0.5})
-        w = compare.compare(new, other)["warnings"]
-        self.assertTrue(any("пайплайна" in x for x in w))
-        self.assertTrue(any("масштаб" in x for x in w))
+        w = {x["code"]: x for x in compare.compare(new, other)["warnings"]}
+        self.assertEqual((w["pipeline_differs"]["a"], w["pipeline_differs"]["b"]), ("RP", "RP2"))
+        self.assertEqual((w["scale_differs"]["a"], w["scale_differs"]["b"]), ("1", "0.5"))
+        self.assertIn("RP2", messages.text(w["pipeline_differs"]))
 
     def test_events_matched_by_object(self):
         a = run([event(0, "Lit", 100, 1.0, obj="x"), event(1, "Lit", 200, 1.0, obj="y")])

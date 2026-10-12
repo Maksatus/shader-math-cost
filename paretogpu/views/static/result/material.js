@@ -6,8 +6,8 @@ function renderMaterial() {
     <div class="side"><b>${esc(M_.material)}</b>
       <div class="small muted" style="font-family:var(--mono);word-break:break-all">${esc(M_.path)}</div>
       <div class="small" style="margin-top:4px">${esc(M_.shader)}</div><div class="small" style="margin-top:4px">${kws(M_.keywords)}</div></div>
-    <div class="mode small muted">Расчёт ${when(D.computed_at)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
-    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    <div class="mode small muted">Расчёт ${when(D.computed_at, true)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
+    ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(msg(w))}</li>`).join("")}</ul></div>` : ""}
     <p class="small" style="margin:10px 0 0">${refLink("ablation", "Как читать")} · ${costHelp}</p></div>`;
   if (!D.cores.length) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;

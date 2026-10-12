@@ -5,7 +5,7 @@ async function loadCompare(a, b) {
   const groups = {};
   for (const r of RUNS) (groups[r.snapshot] = groups[r.snapshot] || []).push(r);
   const opts = Object.entries(groups).map(([snap, rs]) => `<optgroup label="${esc(snap)}${rs[0].project ? " · " + esc(rs[0].project) : ""}">` +
-    rs.map(r => `<option value="${esc(r.id)}">${when(r.computed_at)} · ${M(r.total)} млн · ${esc(r.main_core || "")}${r.api ? " · " + esc(r.api) : ""}</option>`).join("") + `</optgroup>`).join("");
+    rs.map(r => `<option value="${esc(r.id)}">${when(r.computed_at)} · ${M(r.total, 1)} млн · ${esc(r.main_core || "")}${r.api ? " · " + esc(r.api) : ""}</option>`).join("") + `</optgroup>`).join("");
   $("#cmpA").innerHTML = `<option value="">— выберите —</option>` + opts;
   $("#cmpB").innerHTML = `<option value="">— выберите —</option>` + opts;
   const saved = store.get("compare") || {};
@@ -132,9 +132,9 @@ function matMsg(html) {
   $("#cmpEmpty").innerHTML = `<div class="card" style="max-width:800px;margin:0 auto">${html}</div>`;
 }
 async function loadMatHist(select) {
-  const items = (await api("/api/matcompares")).items || [];
+  const items = ((await api("/api/results?kind=matcompare")).items || []).filter(x => x.url);
   $("#matHist").innerHTML = (items.length ? "" : `<option value="">прошлых сравнений нет</option>`) + items.map(x =>
-    `<option value="${esc(x.url)}">${when(x.computed_at)} · ${esc(x.a.material)} → ${esc(x.b.material)}</option>`).join("");
+    `<option value="${esc(x.url)}">${when(x.created)} · ${esc(x.title)}</option>`).join("");
   const want = select || store.get("matHist");
   if (items.some(x => x.url === want)) $("#matHist").value = want;
   if (matJobId && job && job.id === matJobId && job.status === "running") return matProgress();
@@ -172,7 +172,7 @@ function matProgress() {
     const ph = j && flatPhases(j).find(x => x.status === "running");
     const {pct: p} = j ? overall(j, j.now || Date.now() / 1000) : {pct: 0};
     matMsg(`<h2>Сравниваю материалы <span class="spin"></span></h2>
-      <div class="now">${ph ? esc((PHASE_TEXT[ph.id] || [ph.id])[0]) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
+      <div class="now">${ph ? esc(phaseText(ph.id)) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
       <div class="bar"><i style="width:${p.toFixed(1)}%"></i></div><div class="small muted">Подробный ход и лог — во вкладке «Проверка кадра».</div>`);
     matStatus();
     matTimer = setTimeout(matProgress, 700);

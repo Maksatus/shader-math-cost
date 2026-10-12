@@ -7,10 +7,11 @@ import re
 import time
 import urllib.parse
 
-from paretogpu.core import compare
+from paretogpu.core import compare, frame_cost
 from paretogpu.store import cost_runs as runs_store
 from paretogpu.store import results as store_results
 from paretogpu.store import workspace
+from paretogpu.views import messages
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 DOCS = os.path.join(ROOT, "docs")
@@ -44,16 +45,16 @@ def out_url(path):
     return "/out/" + urllib.parse.quote(os.path.relpath(path, out).replace("\\", "/"))
 
 
+PANEL = ("main_core", "api", "total", "fragment", "vertex", "compute", "coverage", "shaders", "unpriced_draws",
+         "unpriced_compute", "failed_reasons", "checked", "pixel_methods", "renderdoc")
+
+
 def cost_summary(folder):
-    """What the run panel shows after a cost: the frame on the main core, the costliest shaders, what has no price."""
-    c = load_json(os.path.join(folder, "frame_cost.json"), None)
+    """What the run panel shows after a cost: the frame on the main core, the costliest shaders, what has no price
+    (its part of core/frame_cost.summary) and the change since the run before."""
+    c = load_json(os.path.join(folder, workspace.COST_FILE), None)
     if not c:
         return None
-    mc = c.get("main_core")
-    t = (c.get("totals") or {}).get(mc) or {}
-    groups = (c.get("groups") or {}).get(mc) or {}
-    missing = c.get("missing") or []
-    failed = [m for m in missing if m.get("kind") == "draw"]
     prev = None
     rs = runs_store.runs(folder)
     if len(rs) >= 2:
@@ -62,17 +63,11 @@ def cost_summary(folder):
                                   runs_store.load(runs_store.run_path(folder, rs[-1]["id"])))
             name = os.path.basename(folder.rstrip("\\/"))
             prev = {**(compare.brief(cmp) or {}), "run_a": f"{name}/{rs[-2]['id']}", "run_b": f"{name}/{rs[-1]['id']}",
-                    "a_time": rs[-2].get("computed_at"), "warnings": cmp["warnings"]}
+                    "a_time": rs[-2].get("computed_at"), "warnings": [messages.text(w) for w in cmp["warnings"]]}
         except (OSError, ValueError):
             prev = None
-    return {"prev": prev, "main_core": mc, "api": c.get("api"), "total": t.get("total"), "fragment": t.get("fragment"),
-            "vertex": t.get("vertex"), "compute": t.get("compute"), "coverage": c.get("coverage"),
-            "shaders": [{"key": g.get("key"), "share": g.get("share"), "total": g.get("total")}
-                        for g in (groups.get("shader") or [])[:5]],
-            "unpriced_draws": len(failed), "unpriced_compute": len(missing) - len(failed),
-            "failed_reasons": sorted({(m.get("reason") or "")[:200] for m in failed})[:5],
-            "checked": c.get("variants_checked"), "pixel_methods": c.get("pixel_methods"),
-            "renderdoc": bool((c.get("frame") or {}).get("renderdoc"))}
+    s = frame_cost.summary(c)
+    return {"prev": prev, **{k: s[k] for k in PANEL}}
 
 
 _cache = {}
@@ -100,20 +95,20 @@ def snapshots():
         row = {"name": name, "path": d, "time": os.path.getmtime(ev), "project": meta.get("project"),
                "unity": meta.get("unity"), "api": meta.get("graphics_api"), "play_mode": meta.get("play_mode"),
                "events": len(events), "draws": sum(1 for e in events if e.get("kind") == "draw"),
-               "renderdoc": bool(meta.get("renderdoc")), "report": None, "cost_time": None}
+               "renderdoc": bool(meta.get("renderdoc")), "cost_time": None, "pages": {}}
         rs = runs_store.runs(d)
         row["runs"] = [m["id"] for m in rs]
-        rp = os.path.join(d, "frame_report.html")
-        if os.path.exists(rp):
-            row["report"] = out_url(rp)
-            row["cost_time"] = os.path.getmtime(rp)
-        hs = os.path.join(d, "hotspots.html")
-        row["hotspots"] = out_url(hs) if os.path.exists(hs) else None
-        cost = store_results.read_meta(d, "cost")
-        if cost:
-            t = cost.get("summary") or {}
-            row.update(main_core=t.get("main_core"), total=t.get("total"), fragment=t.get("fragment"),
-                       vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"), api_cost=t.get("api"))
+        # the pages of the snapshot's results by their kind (every result describes itself: store/results.py)
+        for m in store_results.of_folder(d):
+            page = os.path.join(d, m["page"])
+            if os.path.exists(page):
+                row["pages"][m["kind"]] = out_url(page)
+                if m["kind"] == "cost":
+                    row["cost_time"] = os.path.getmtime(page)
+                    t = m.get("summary") or {}
+                    row.update(main_core=t.get("main_core"), total=t.get("total"), fragment=t.get("fragment"),
+                               vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"),
+                               api_cost=t.get("api"))
         rows.append(row)
     return sorted(rows, key=lambda r: -r["time"])
 
@@ -150,18 +145,6 @@ def results(kind=None):
         page = os.path.join(m["folder"], m["page"]) if m.get("page") else None
         rows.append({**m, "url": out_url(page) if page and os.path.exists(page) else None})
     return rows
-
-
-def matcompares():
-    """Comparisons of two materials, newest first (the material tab's history)."""
-    return [{"id": r["id"], "url": r["url"], "project": r.get("project"), "computed_at": r.get("created"),
-             "a": r["summary"].get("a"), "b": r["summary"].get("b")} for r in results("matcompare") if r["url"]]
-
-
-def matshaders():
-    """Analyses of one material, newest first."""
-    return [{"id": r["id"], "url": r["url"], "project": r.get("project"), "computed_at": r.get("created"),
-             "m": r["summary"].get("m")} for r in results("matshader") if r["url"]]
 
 
 _materials = {}  # project -> (time, rows)
@@ -232,7 +215,7 @@ def options():
     return {"projects": projects, "unity_projects": unity, "snapshots": [{"path": s["path"], "name": s["name"], "project": s["project"]}
                                                 for s in snaps],
             "variants": variants, "folders": folders, "measured": [f for f in folders
-                                                                    if os.path.exists(os.path.join(f, "measurements.jsonl"))],
+                                                                    if os.path.exists(os.path.join(f, workspace.MEASUREMENTS_FILE))],
             "cores": [f"preset:{k}" for k in cores.PRESETS] + sorted({c for v in cores.PRESETS.values() for c in v}),
             "last": settings.get("last", {}), "out": OUT}
 

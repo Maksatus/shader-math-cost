@@ -83,6 +83,132 @@ def _uses(expr, vars_):
     return out
 
 
+class _Parser:
+    """main() line by line: its statements and the tree of its blocks (what parse() returns)."""
+
+    def __init__(self, lines, first, last, vars_):
+        self.lines, self.first, self.last, self.vars = lines, first, last, vars_
+        self.stmts, self.root = [], []
+        self.stack = [("plain", self.root, [])]  # (kind, children, ids of every statement inside)
+        self.pending = None        # a loop / if header waiting for its "{" on the next line
+        self.pending_owner = None  # the if header of a block waiting for its "{"
+        self.loop_depth = 0
+        self.if_owner = []         # the header of every open if block
+        self.loop_header = None    # (line, text, uses) of a for / while whose "{" is on the next line
+
+    def add(self, kind_, line_no, text, **kw):
+        s = {"id": len(self.stmts), "line": line_no, "text": text.strip(), "type": kind_, "loop": self.loop_depth > 0,
+             "depth": len(self.stack) - 1, "controls": [], **kw}
+        self.stmts.append(s)
+        self.stack[-1][1].append(("stmt", s["id"]))
+        for entry in self.stack[1:]:
+            entry[2].append(s["id"])
+        return s
+
+    def open_block(self, kind, owner=None):
+        children, ids = [], []
+        self.stack[-1][1].append(("block", kind, children))
+        self.stack.append((kind, children, ids))
+        if kind == "loop":
+            self.loop_depth += 1
+        if owner is not None:
+            owner["controls"].append(ids)
+        return ids
+
+    def close_block(self):
+        kind, _, ids = self.stack.pop()
+        if kind == "loop":
+            self.loop_depth -= 1
+        return kind
+
+    def nearest_loop(self):
+        return next((e[2] for e in reversed(self.stack) if e[0] == "loop"), None)
+
+    def brace(self):
+        """A "{" on its own line: the block of the pending header, or a plain block."""
+        owner = self.pending_owner if self.pending in ("if", "else") else None
+        ids = self.open_block(self.pending or "plain", owner)
+        if self.pending in ("if", "else"):
+            self.if_owner.append(owner)
+        if self.pending == "loop" and self.loop_header:
+            h = self.add("other", self.loop_header[0], self.loop_header[1], uses=self.loop_header[2])
+            h["controls"].append(ids)
+        self.pending, self.loop_header, self.pending_owner = None, None, None
+
+    def header(self, i, t, head):
+        """A while / for / if header: the loop runs with its header; an if controls its block."""
+        kind = "loop" if head.group(1) in ("while", "for") else "if"
+        cond, brace, rest = head.group(2), head.group(3), head.group(4)
+        if kind == "loop":
+            # the header runs with the loop: its uses are uses inside the loop; it controls the loop
+            if brace:
+                ids = self.open_block("loop")
+                self.add("other", i, t, uses=_uses(cond, self.vars))["controls"].append(ids)
+            else:
+                self.pending, self.loop_header = "loop", (i, t, _uses(cond, self.vars))
+            return
+        h = self.add("other", i, t, uses=_uses(cond, self.vars))
+        if brace and rest.rstrip().endswith("}"):  # if(c){break;} on one line: it controls its loop
+            loop_ids = self.nearest_loop()
+            if loop_ids is not None and re.search(r"\b(break|continue)\b", rest):
+                h["controls"].append(loop_ids)
+            return
+        if brace:
+            self.open_block("if", h)
+            self.if_owner.append(h)
+        else:
+            self.pending, self.pending_owner = "if", h
+
+    def line(self, i):
+        raw = self.lines[i]
+        t = raw.strip()
+        if not t or t.startswith("//") or t == ";":
+            return
+        if t == "{":
+            return self.brace()
+        if re.match(r"^}\s*else\s*{$", t):
+            self.close_block()
+            owner = self.if_owner.pop() if self.if_owner else None
+            self.open_block("else", owner)
+            self.if_owner.append(owner)
+            return
+        if re.match(r"^}\s*else\s*$", t):
+            self.close_block()
+            self.pending, self.pending_owner = "else", (self.if_owner.pop() if self.if_owner else None)
+            return
+        if t == "}":
+            if self.close_block() in ("if", "else") and self.if_owner:
+                self.if_owner.pop()
+            return
+        head = re.match(r"^(while|for|if)\s*\((.*)\)\s*(\{?)\s*(.*)$", t)
+        if head and not ASSIGN.match(t):
+            return self.header(i, t, head)
+        m = LOCAL.match(raw)
+        if m:
+            typ, name, expr = m.group(2), m.group(3), m.group(4)
+            kind, width = TYPES[typ]
+            prec = re.match(r"^\s*(highp|mediump|lowp)\s", raw)
+            self.vars[name] = {"kind": kind, "width": width, "prec": prec and prec.group(1), "io": None}
+            self.add("assign", i, raw, var=name, comps=list(range(width)), kind=kind, width=width,
+                     prec=prec and prec.group(1), local=True, swizzle=None, expr=expr, uses=_uses(expr, self.vars))
+            return
+        m = ASSIGN.match(raw)
+        if m and m.group(2) in self.vars or (m and OUTPUT_NAMES.match(m.group(2) or "")):
+            name, swz, expr = m.group(2), m.group(3), m.group(4)
+            v = self.vars.get(name) or {"kind": "f", "width": 4, "prec": "highp", "io": "out"}
+            comps = [COMP[c] for c in swz] if swz else list(range(v["width"]))
+            self.add("assign", i, raw, var=name, comps=comps, kind=v["kind"], width=len(comps), prec=v["prec"],
+                     local=False, swizzle=swz, expr=expr, uses=_uses(expr, self.vars),
+                     output=v["io"] == "out" or bool(OUTPUT_NAMES.match(name)))
+            return
+        self.add("other", i, t, uses=_uses(t, self.vars), ret=t.startswith("return"))
+
+    def run(self):
+        for i in range(self.first, self.last + 1):
+            self.line(i)
+        return self.stmts, self.root
+
+
 def parse(src, stage="fragment"):
     """Statements of main() and the tree of its blocks.
     statements: [{"id", "line" (0-based in src), "text", "var", "comps", "kind", "width", "prec", "local",
@@ -91,118 +217,7 @@ def parse(src, stage="fragment"):
     lines = src.split("\n")
     first, last = _main_span(lines)
     vars_ = _vars(lines, first)
-    stmts, root = [], []
-    stack = [("plain", root, [])]  # (kind, children, ids of every statement inside)
-    pending = None  # a loop / if header waiting for its "{" on the next line
-    pending_owner = None  # the if header of a block waiting for its "{"
-    last_if = None  # the header of the if block just closed: an else after it is controlled by it too
-    loop_depth = 0
-
-    def add(kind_, line_no, text, **kw):
-        s = {"id": len(stmts), "line": line_no, "text": text.strip(), "type": kind_, "loop": loop_depth > 0,
-             "depth": len(stack) - 1, "controls": [], **kw}
-        stmts.append(s)
-        stack[-1][1].append(("stmt", s["id"]))
-        for entry in stack[1:]:
-            entry[2].append(s["id"])
-        return s
-
-    def open_block(kind, owner=None):
-        nonlocal loop_depth
-        children, ids = [], []
-        stack[-1][1].append(("block", kind, children))
-        stack.append((kind, children, ids))
-        if kind == "loop":
-            loop_depth += 1
-        if owner is not None:
-            owner["controls"].append(ids)
-        return ids
-
-    def close_block():
-        nonlocal loop_depth, last_if
-        kind, _, ids = stack.pop()
-        if kind == "loop":
-            loop_depth -= 1
-        return kind
-
-    def nearest_loop():
-        return next((e[2] for e in reversed(stack) if e[0] == "loop"), None)
-
-    if_owner = []  # the header of every open if block
-
-    loop_header = None  # (line, text, uses) of a for / while whose "{" is on the next line
-    for i in range(first, last + 1):
-        raw = lines[i]
-        t = raw.strip()
-        if not t or t.startswith("//") or t == ";":
-            continue
-        if t == "{":
-            owner = pending_owner if pending in ("if", "else") else None
-            ids = open_block(pending or "plain", owner)
-            if pending in ("if", "else"):
-                if_owner.append(owner)
-            if pending == "loop" and loop_header:
-                h = add("other", loop_header[0], loop_header[1], uses=loop_header[2])
-                h["controls"].append(ids)
-            pending, loop_header, pending_owner = None, None, None
-            continue
-        if re.match(r"^}\s*else\s*{$", t):
-            close_block()
-            owner = if_owner.pop() if if_owner else None
-            open_block("else", owner)
-            if_owner.append(owner)
-            continue
-        if re.match(r"^}\s*else\s*$", t):
-            close_block()
-            pending, pending_owner = "else", (if_owner.pop() if if_owner else None)
-            continue
-        if t == "}":
-            if close_block() in ("if", "else") and if_owner:
-                if_owner.pop()
-            continue
-        head = re.match(r"^(while|for|if)\s*\((.*)\)\s*(\{?)\s*(.*)$", t)
-        if head and not ASSIGN.match(t):
-            kind = "loop" if head.group(1) in ("while", "for") else "if"
-            cond, brace, rest = head.group(2), head.group(3), head.group(4)
-            if kind == "loop":
-                # the header runs with the loop: its uses are uses inside the loop; it controls the loop
-                if brace:
-                    ids = open_block("loop")
-                    add("other", i, t, uses=_uses(cond, vars_))["controls"].append(ids)
-                else:
-                    pending, loop_header = "loop", (i, t, _uses(cond, vars_))
-                continue
-            h = add("other", i, t, uses=_uses(cond, vars_))
-            if brace and rest.rstrip().endswith("}"):  # if(c){break;} on one line: it controls its loop
-                loop_ids = nearest_loop()
-                if loop_ids is not None and re.search(r"\b(break|continue)\b", rest):
-                    h["controls"].append(loop_ids)
-                continue
-            if brace:
-                open_block("if", h)
-                if_owner.append(h)
-            else:
-                pending, pending_owner = "if", h
-            continue
-        m = LOCAL.match(raw)
-        if m:
-            typ, name, expr = m.group(2), m.group(3), m.group(4)
-            kind, width = TYPES[typ]
-            prec = re.match(r"^\s*(highp|mediump|lowp)\s", raw)
-            vars_[name] = {"kind": kind, "width": width, "prec": prec and prec.group(1), "io": None}
-            add("assign", i, raw, var=name, comps=list(range(width)), kind=kind, width=width,
-                prec=prec and prec.group(1), local=True, swizzle=None, expr=expr, uses=_uses(expr, vars_))
-            continue
-        m = ASSIGN.match(raw)
-        if m and m.group(2) in vars_ or (m and OUTPUT_NAMES.match(m.group(2) or "")):
-            name, swz, expr = m.group(2), m.group(3), m.group(4)
-            v = vars_.get(name) or {"kind": "f", "width": 4, "prec": "highp", "io": "out"}
-            comps = [COMP[c] for c in swz] if swz else list(range(v["width"]))
-            add("assign", i, raw, var=name, comps=comps, kind=v["kind"], width=len(comps), prec=v["prec"],
-                local=False, swizzle=swz, expr=expr, uses=_uses(expr, vars_), output=v["io"] == "out" or
-                bool(OUTPUT_NAMES.match(name)))
-            continue
-        add("other", i, t, uses=_uses(t, vars_), ret=t.startswith("return"))
+    stmts, root = _Parser(lines, first, last, vars_).run()
     outputs = {(n, c) for n, v in vars_.items() if v["io"] == "out" for c in range(v["width"])}
     if stage == "vertex":
         outputs |= {("gl_Position", c) for c in range(4)}
@@ -349,51 +364,36 @@ def ablated(p, sid, stage):
 
 
 # --- what a part does (plan A3.5) -------------------------------------------------------------------------------
-def _plural(n, one, few, many):
-    k = n % 100
-    w = many if 11 <= k <= 14 else one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many
-    return f"{n} {w}"
-
-
-# what makes code heavy, the heaviest first: (key, pattern, one, few, many)
+# what makes code heavy, the heaviest first: (key, pattern); views/messages.OPS has their names
 OPS = [
-    ("buffers", r"\b_\w+\[(?!\d+\])", "чтение буфера по индексу", "чтения буферов по индексу", "чтений буферов по индексу"),
-    ("tex", r"\b(?:texture(?:Lod|Grad|Offset|LodOffset|Proj|ProjLod)?|texelFetch)\s*\(", "выборка текстуры",
-     "выборки текстур", "выборок текстур"),
-    ("hash", None, "хэш на sin", "хэша на sin", "хэшей на sin"),
-    ("trig", r"\b(?:sin|cos|tan|asin|acos|atan)\s*\(", "sin/cos/atan", "sin/cos/atan", "sin/cos/atan"),
-    ("powexp", r"\b(?:pow|exp|exp2|log|log2)\s*\(", "pow/exp/log", "pow/exp/log", "pow/exp/log"),
-    ("roots", r"\b(?:sqrt|inversesqrt|normalize|length|distance)\s*\(", "корень или нормализация",
-     "корня или нормализации", "корней или нормализаций"),
-    ("div", r"(?<![/*])/(?![/*])", "деление", "деления", "делений"),
-    ("deriv", r"\b(?:dFdx|dFdy|fwidth)\s*\(", "производная", "производные", "производных"),
+    ("buffers", r"\b_\w+\[(?!\d+\])"),
+    ("tex", r"\b(?:texture(?:Lod|Grad|Offset|LodOffset|Proj|ProjLod)?|texelFetch)\s*\("),
+    ("hash", None),
+    ("trig", r"\b(?:sin|cos|tan|asin|acos|atan)\s*\("),
+    ("powexp", r"\b(?:pow|exp|exp2|log|log2)\s*\("),
+    ("roots", r"\b(?:sqrt|inversesqrt|normalize|length|distance)\s*\("),
+    ("div", r"(?<![/*])/(?![/*])"),
+    ("deriv", r"\b(?:dFdx|dFdy|fwidth)\s*\("),
     ("ints", r"\b(?:u?int_?bitfieldExtract|bitfieldExtract|findLSB|findMSB|bitCount)\s*\(|<<|>>|(?<![&])&(?![&])|"
-             r"(?<![|])\|(?![|])", "целочисленная операция", "целочисленные операции", "целочисленных операций"),
-    ("matrix", r"\bhlslcc_mtx\w+\[\d\]", "строка матрицы", "строки матриц", "строк матриц"),
-    ("select", r"\?|\b(?:lessThan|greaterThan|lessThanEqual|greaterThanEqual|equal|notEqual)\s*\(",
-     "сравнение / выбор", "сравнения / выбора", "сравнений / выборов"),
+             r"(?<![|])\|(?![|])"),
+    ("matrix", r"\bhlslcc_mtx\w+\[\d\]"),
+    ("select", r"\?|\b(?:lessThan|greaterThan|lessThanEqual|greaterThanEqual|equal|notEqual)\s*\("),
 ]
 HASH = re.compile(r"\bfract\s*\(.*\bsin\s*\(|\bsin\s*\(.*\d{4,}\.\d")
 
 
 def explain(texts, loop=False, n=None):
-    """{"ops": {key: count}, "text": short Russian summary} of the code of a part."""
+    """{"ops": {key: count}, "loop": in a dynamic loop, "n": its trip count} of the code of a part
+    (views/messages.explain_text says it in words)."""
     ops = {}
     for t in texts:
         rhs = t.split("=", 1)[1] if "=" in t else t
         if HASH.search(rhs):
             ops["hash"] = ops.get("hash", 0) + 1
             rhs = re.sub(r"\bsin\s*\(", "(", rhs)
-        for key, pat, *_ in OPS:
+        for key, pat in OPS:
             if pat:
                 k = len(re.findall(pat, rhs))
                 if k:
                     ops[key] = ops.get(key, 0) + k
-    words = []
-    for key, _, one, few, many in OPS:
-        if ops.get(key):
-            words.append(_plural(ops[key], one, few, many) if one != few else f"{ops[key]} {one}")
-    text = ", ".join(words[:4]) or "простая арифметика"
-    if loop:
-        text = f"в цикле (×{n if n is not None else 'n'}): " + text
-    return {"ops": ops, "text": text}
+    return {"ops": ops, "loop": bool(loop), "n": n}

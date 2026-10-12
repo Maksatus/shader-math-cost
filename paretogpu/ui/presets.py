@@ -7,6 +7,7 @@ import os
 import sys
 
 from paretogpu.features import BY_NAME, COMMANDS
+from paretogpu.model.phases import labels as phase_labels
 from paretogpu.store import workspace
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -14,15 +15,18 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 # a preset is what one button runs: its steps; `hide`: arguments the server fills in (the chain's own folders).
 # export, measure and report stay in the console: the UI is for checking a frame without knowing the CLI
 PRESETS = [
-    {"id": "frame_cost", "steps": [{"cmd": "frame", "hide": ["out"]}, {"cmd": "cost", "hide": ["frame", "out", "project"]}]},
-    {"id": "cost", "steps": [{"cmd": "cost"}]},
-    {"id": "site", "steps": [{"cmd": "bench"}]},
-    {"id": "matcompare", "steps": [{"cmd": "matcompare"}]},
-    {"id": "matshader", "steps": [{"cmd": "matshader"}]},
-    {"id": "hotspots", "steps": [{"cmd": "hotspots"}]},
+    {"id": "frame_cost", "title": "Проверка кадра",
+     "steps": [{"cmd": "frame", "hide": ["out"]}, {"cmd": "cost", "hide": ["frame", "out", "project"]}]},
+    {"id": "cost", "title": "Пересчёт снимка", "steps": [{"cmd": "cost"}]},
+    {"id": "site", "title": "Обновление данных сайта", "steps": [{"cmd": "bench"}]},
+    {"id": "matcompare", "title": "Сравнение материалов", "steps": [{"cmd": "matcompare"}]},
+    {"id": "matshader", "title": "Разбор материала", "steps": [{"cmd": "matshader"}]},
+    {"id": "hotspots", "title": "Почему тяжёлые шейдеры", "steps": [{"cmd": "hotspots"}]},
 ]
+
+
 def schema():
-    """{command: {"help", "args": [...]}} of the commands (features/)."""
+    """{command: {"help", "title", "args": [...]}} of the commands (features/)."""
     return {c.name: c.schema() for c in COMMANDS}
 
 
@@ -34,6 +38,12 @@ def phases_of(cmd, v):
 def report_of(cmd, v):
     """The page a step writes, or None."""
     return BY_NAME[cmd].report_of(v) if cmd in BY_NAME else None
+
+
+def kind_of(cmd):
+    """The kind of result a step leaves (ResultKind.name), or None."""
+    r = BY_NAME[cmd].result if cmd in BY_NAME else None
+    return r.name if r else None
 
 
 def argv_of(cmd, values, sch):
@@ -85,3 +95,8 @@ def plan(preset_id, values, sch):
             raise ValueError(f"{cmd}: не заполнено {', '.join(missing)}")
         steps.append((cmd, v))
     return steps, frame_dir
+
+
+def ui_schema():
+    """What /api/schema answers: the commands with their forms, the presets with their titles, the phases."""
+    return {"commands": schema(), "presets": PRESETS, "phases": phase_labels()}

@@ -1,7 +1,7 @@
 # ParetoGPU — как верстать страницы
 
-Обязательно для любой новой HTML-страницы или раздела ParetoGPU: окно (`ui/static/`: `index.html`, `app.css`, `js/`), отчёт кадра
-(`views/templates/frame_report.html`), сравнение (`views/templates/result_view.html`), таблица функций (`docs/index.html`) и всё новое.
+Обязательно для любой новой HTML-страницы или раздела ParetoGPU: окно (`ui/static/`: `index.html`, `app.css`, `js/`), страницы результатов —
+отчёт кадра, сравнение, материал (`views/templates/result_view.html`, по `views/static/result/<вид>.js`), таблица функций (`docs/index.html`) и всё новое.
 Цель — один вид везде: тёмная тема «Mint Editor», спокойные цвета, плотные, но читаемые таблицы.
 
 ## 1. Токены: `paretogpu/views/static/theme.css`

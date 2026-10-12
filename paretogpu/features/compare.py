@@ -4,22 +4,23 @@ The frame, its stages, shaders, variants and events; every change split into pri
 vertices) and mix (variants) by core/compare.py -> compare.html, compare.json.
 """
 import os
-import sys
 
 from paretogpu.app import results
 from paretogpu.core import compare
+from paretogpu.features.common import fail
 from paretogpu.features.spec import Arg, Command, ResultKind
 from paretogpu.store import cost_runs
+from paretogpu.views import messages
 
 
 def run_command(args):
     try:
         a, b = cost_runs.load(args.a), cost_runs.load(args.b)
     except (OSError, ValueError) as e:
-        sys.exit(f"cannot read a cost run: {e}")
+        fail(f"cannot read a cost run: {e}", e, "input")
     cmp = compare.compare(a, b)
     for w in cmp["warnings"]:
-        print(f"  ! {w}")
+        print(f"  ! {messages.text(w)}")
     x = cmp["by_core"].get(cmp["main_core"])
     if x:
         pct = f" ({100 * x['delta'] / x['a']:+.1f}%)" if x["a"] else ""

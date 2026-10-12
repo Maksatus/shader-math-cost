@@ -1,7 +1,8 @@
 """A command of `python -m paretogpu`, described once: the CLI parser and the UI's forms are made from it.
 
-  Command(name, help, args, run)  run(args) -> exit code; args: [Arg | Group]
-  Arg("--cores", default=..., help=...), Arg("folder") for a positional; Group(Arg, Arg): mutually exclusive
+  Command(name, help, args, run, title=...)  run(args) -> exit code; args: [Arg | Group]; title: its name in the UI
+  Arg("--cores", default=..., help=..., label=...), Arg("folder") for a positional; Group(Arg, Arg): mutually
+  exclusive; label: the argument's name in the UI's forms (help is the CLI's)
   phases(values) -> the progress phases (views/reporter.py) a run goes through, in order, for the UI
   report(values) -> the page the run writes (the UI opens it), or None
   ui_values(values) -> the values with the folders the UI does not ask for filled in
@@ -22,6 +23,7 @@ class Arg:
     nargs: str = None
     required: bool = False
     metavar: str = None
+    label: str = None           # the UI's name of it (the forms); None: the flag
 
     @property
     def positional(self):
@@ -56,7 +58,7 @@ class Arg:
                 "multi": self.nargs in ("+", "*"), "required": self.positional or self.required, "default": default,
                 "choices": list(self.choices) if self.choices else None,
                 "help": (self.help or "").replace("%(default)s", str(self.default)), "metavar": self.metavar,
-                "group": group}
+                "label": self.label, "group": group}
 
 
 @dataclass
@@ -94,6 +96,7 @@ class Command:
     report: object = None                           # report(values) -> path of the page the run writes
     ui_values: object = None                        # ui_values(values) -> values with the UI's own folders
     result: object = None                           # ResultKind
+    title: str = None                               # the command's name in the UI (None: its name)
 
     def flat_args(self):
         """[(Arg, index of its mutually exclusive group or None)] in the order they are declared."""
@@ -119,7 +122,7 @@ class Command:
         return p
 
     def schema(self):
-        return {"help": self.help, "args": [a.schema(g) for a, g in self.flat_args()]}
+        return {"help": self.help, "title": self.title or self.name, "args": [a.schema(g) for a, g in self.flat_args()]}
 
     def phases_of(self, values):
         return self.phases(values) if self.phases else []

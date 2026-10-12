@@ -14,7 +14,8 @@ value is read by something that is not A (the frontier of an affine chain): it w
 much it saves comes from the ablation of the same statement (core/ablation.py), which replaces it with a new
 varying — just what the move does in the fragment shader. Only a list: nothing is rewritten.
 
-  candidates(src, parsed=None) -> [{"id", "line", "text", "chain" (ids), "width", "label", "varyings"}]
+  candidates(src, parsed=None) -> [{"id", "line", "text", "chain" (ids), "width", "label" (a code of
+                                    views/messages.VERTEXMOVE), "varyings"}]
 """
 import re
 
@@ -207,19 +208,20 @@ class _Expr:
 
 
 def _label(texts, uniforms_read):
-    """What kind of affine value it is, by the functions and uniforms of its chain."""
+    """What kind of affine value it is, by the functions and uniforms of its chain: a code of
+    views/messages.VERTEXMOVE."""
     joined = " ".join(texts)
     if re.search(r"\b(sin|cos)\s*\(", joined):
-        return "поворот (Rotate с углом из свойства)"
+        return "rotate"
     if re.search(r"\b(floor|fract|mod|trunc)\s*\(", joined) and TIME.search(joined):
-        return "флипбук / анимация по времени"
+        return "flipbook"
     if TIME.search(joined):
-        return "смещение по времени"
+        return "time_offset"
     if re.search(r"_ST\b|_ST\.", joined):
-        return "Tiling / Offset"
+        return "tiling_offset"
     if not re.search(r"\b(?!float\b|[iu]?vec[234]\b)[a-z]\w*\s*\(", joined):
-        return "масштаб и сдвиг uv (смещения выборок)"
-    return "аффинное преобразование varying"
+        return "uv_affine"
+    return "affine"
 
 
 def candidates(src, parsed=None):

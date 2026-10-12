@@ -64,7 +64,7 @@ function advFields() {
 }
 function renderAdv() {
   $("#adv").innerHTML = `<p class="muted small">Обычно не нужны: значения по умолчанию подобраны под проверку кадра.</p>` + advFields().map(a => {
-    const id = "a-" + a.dest, lbl = esc(ADV_LABEL[a.dest] || a.flag);
+    const id = "a-" + a.dest, lbl = esc(a.label || a.flag);
     if (a.kind === "flag") return `<div class="row2"><label class="chk"><input type="checkbox" id="${id}"> ${lbl}<code>${esc(a.flag)}</code></label><div class="help">${esc(a.help)}</div></div>`;
     const ph = a.dest === "variants" ? "своя папка на проект (paretogpu/out/variants_<проект>)" : a.default != null && a.default !== "" ? `по умолчанию: ${a.default}` : "";
     const ctl = a.choices ? `<select id="${id}"><option value="">по умолчанию (${esc(a.default)})</option>${a.choices.map(c => `<option>${esc(c)}</option>`).join("")}</select>`

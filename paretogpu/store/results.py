@@ -46,13 +46,18 @@ def folders():
             yield d
 
 
+def of_folder(folder):
+    """[ResultMeta] of the results in one folder (a snapshot's cost and hotspots, ...)."""
+    out = []
+    for fn in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if fn.endswith(SUFFIX):
+            m = read_meta(folder, fn[:-len(SUFFIX)])
+            if m:
+                out.append(m)
+    return out
+
+
 def scan(kind=None):
     """[ResultMeta] of the results in out/ (of one kind), newest first."""
-    out = []
-    for d in folders():
-        for fn in os.listdir(d):
-            if fn.endswith(SUFFIX) and (kind is None or fn == kind + SUFFIX):
-                m = read_meta(d, fn[:-len(SUFFIX)])
-                if m:
-                    out.append(m)
+    out = [m for d in folders() for m in of_folder(d) if kind is None or m["kind"] == kind]
     return sorted(out, key=lambda m: -(m.get("created") or 0))
