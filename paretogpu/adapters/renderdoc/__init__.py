@@ -6,7 +6,9 @@ Frame Debugger snapshot reads right after. counters(): rd_counters.py inside qre
 with its marker path and GPU counters (PSInvocations = how many times the pixel shader ran); core/events.match()
 gives every Frame Debugger event its calls. loop_iterations(): rd_loops.py inside qrenderdoc debugs a few pixels of
 given calls and counts how many times every outer dynamic loop of their pixel shader ran (plan K1.10, stage C).
+memory(): rd_memory.py inside qrenderdoc lists every texture of the capture and how every call used it (plan K2.3).
 """
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = "ParetoGpuRenderDoc.cs"
 COUNTERS = os.path.join(HERE, "rd_counters.py")
 LOOPS = os.path.join(HERE, "rd_loops.py")
+MEMORY = os.path.join(HERE, "rd_memory.py")
 
 
 class RenderDocError(ParetoError):
@@ -54,21 +57,39 @@ def resume(project, paused):
     bridge.run(project, SCRIPT, "Pause", ["true" if paused else "false"], RenderDocError)
 
 
-def counters(capture_path, out_json, timeout=900):
-    """Per-call GPU counters of the capture (runs qrenderdoc --python)."""
+def _script(script, capture_path, out_json, timeout, what):
+    """Run a qrenderdoc --python script on the capture; returns the JSON it wrote."""
     for p in (out_json, out_json + ".error"):
         if os.path.exists(p):
             os.remove(p)
     env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_OUT=out_json)
-    subprocess.run([qrenderdoc(), "--python", COUNTERS], env=env, timeout=timeout,
+    subprocess.run([qrenderdoc(), "--python", script], env=env, timeout=timeout,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(out_json + ".error"):
         with open(out_json + ".error", encoding="utf-8") as f:
             raise RenderDocError(f.read()[-2000:])
     if not os.path.exists(out_json):
-        raise RenderDocError("qrenderdoc wrote no counters")
+        raise RenderDocError(f"qrenderdoc wrote no {what}")
     with open(out_json, encoding="utf-8") as f:
         return json.load(f)
+
+
+def counters(capture_path, out_json, timeout=900):
+    """Per-call GPU counters of the capture (runs qrenderdoc --python)."""
+    return _script(COUNTERS, capture_path, out_json, timeout, "counters")
+
+
+def memory(capture_path, out_json, timeout=900):
+    """{"textures": [...], "usage": {texture id: [[event id, usage]]}} of the capture (rd_memory.py)."""
+    return _script(MEMORY, capture_path, out_json, timeout, "textures")
+
+
+def signature(path):
+    """What identifies a capture file without reading all of it: its size, time and first megabyte."""
+    st = os.stat(path)
+    with open(path, "rb") as f:
+        head = hashlib.sha1(f.read(1 << 20)).hexdigest()[:16]
+    return f"{st.st_size}|{int(st.st_mtime)}|{head}"
 
 
 def free_memory():

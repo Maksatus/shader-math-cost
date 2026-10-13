@@ -13,6 +13,7 @@ import time
 
 from paretogpu.adapters.renderdoc import RenderDocError
 from paretogpu.app import frame_loops
+from paretogpu.app import frame_memory
 from paretogpu.app import materials as project_materials
 from paretogpu.app import variants
 from paretogpu.core import frame_cost
@@ -55,9 +56,15 @@ def run(frame_dir, root, cores, api="vulkan", main_core=None, project=None, mate
     except RenderDocError as e:
         rep.log(f"  loop iterations not counted: {e}")
         state["loop_iters"] = {}
+    try:
+        capture = frame_memory.read(frame_dir, rep)
+    except RenderDocError as e:
+        rep.log(f"  memory of the passes not read: {e}")
+        capture = None
     rep.phase("report")
     c = frame_cost.compute(frame, events, state, api, cores, main_core, loop_iters=loop_iters,
                            loop_overrides=loop_overrides)
+    c["memory"] = frame_memory.passes(capture, events, c["events"], [x["name"] for x in c["cores"]], rep)
     c["variants_checked"] = state["checked"]
     prof = profile.describe(frame, profile.frame_size(c["events"]))
     c["profile"] = {**prof, "warnings": profile.warnings(prof)}

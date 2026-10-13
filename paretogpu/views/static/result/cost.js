@@ -17,6 +17,7 @@ function renderCost() {
   <div class="stagebar" id="stagebar"></div>
   <div class="stages" id="stages"></div>
   <section id="loops"></section>
+  <section id="memory"></section>
   <section id="main"></section>
   <section id="missing"></section>
   <section id="project"></section>`;
@@ -27,14 +28,14 @@ function renderCost() {
     "события": "Каждое событие (draw / dispatch) отдельно",
   });
   const TOP = 50;
-  const CUM_HINT = "Сумма «% кадра» этой строки и всех выше: «первые N строк — это X% кадра». Только при сортировке по итогу.";
+  const CUM_HINT = "Сумма «% шейдерных циклов» этой строки и всех выше: «первые N строк — это X% циклов кадра». Только при сортировке по итогу.";
   const STAGE_NAMES = {post: "пост", opaque: "opaque", transparent: "transparent", shadow: "тени", prepass: "prepass",
                        ui: "UI", compute: "compute", other: "прочее"};
   const STAGE_COLORS = {post: "#a594f0", opaque: "#7fb2e5", transparent: "#6cc4c4", shadow: "#8b939c", prepass: "#d9b36e",
                         ui: "#e3a1c4", compute: "#b9a3e0", other: "#5f6873"};
   const BY = [["event", "события"], ["shader", "шейдер"], ["variant", "вариант"], ["object", "объект"], ["rt", "RT"]];
   const st = { core: D.main_core, by: "event", q: "", stage: "", all: false, sort: ["total", -1],
-               tab: "frame", pf: "all", psort: ["px", -1], open: new Set() };
+               tab: "frame", pf: "all", psort: ["px", -1], msort: ["time", -1], open: new Set() };
   const P = D.project_shaders;
   const cyc = v => v == null ? "—" : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2);
   const mc = v => v == null ? "—" : (v / 1e6).toFixed(v >= 1e8 ? 0 : v >= 1e7 ? 1 : 2);
@@ -129,6 +130,68 @@ function renderCost() {
       + names.map(k => `<tr><td class="l">${esc(STAGE_NAMES[k] || k)}</td>${ns.map(n => cell(n, pc(by[n].stages[k] || 0))).join("")}</tr>`).join("")
       + `</tbody></table></div>`;
   }
+  // memory traffic of the passes and the roofline on the core's device (core/memory.py, plan K2.3)
+  const MEM = D.memory;
+  const mb = v => v == null ? "—" : (v / 1048576).toFixed(v >= 10485760 ? 1 : 2);
+  const ms = v => v == null ? "—" : v.toFixed(v >= 10 ? 1 : 2);
+  // the pass of every event: its bound is shown in the event's details
+  const PASS_OF = new Map();
+  for (const p of (MEM || {}).passes || []) for (const i of p.events) if (!PASS_OF.has(i)) PASS_OF.set(i, p);
+  const passBound = p => ((p.roofline || {})[st.core] || {}).bound;
+  const boundWord = b => b === "memory" ? "память" : b === "alu" ? "шейдеры" : "—";
+  function memoryTable() {
+    const el = document.getElementById("memory");
+    if (!MEM || !MEM.passes.length) { el.innerHTML = ""; return; }
+    const dev = (MEM.assumptions.devices || {})[st.core], T = MEM.totals, R = (T.roofline || {})[st.core];
+    let h = `<h2>Проходы <small>${MEM.passes.length} · ${dev ? esc(dev.device) : short(st.core) + ": нет данных устройства"}</small></h2>`;
+    if (R) {
+      const memFrame = R.mem_ms > R.alu_ms;
+      const other = MEM.passes.filter(p => passBound(p) === (memFrame ? "alu" : "memory"));
+      h += `<p class="verdict"><b>Кадр упирается в ${memFrame ? "память" : "шейдеры"}</b>: шейдеры ${ms(R.alu_ms)} мс, память ${ms(R.mem_ms)} мс.`
+        + (other.length ? ` В ${memFrame ? "шейдеры" : "память"} упираются: ${other.map(p => esc(p.name)).join(", ")}`
+          + (memFrame ? "." : ` — это ${pc(R.memory_cycles_share)} циклов кадра.`) : "") + `</p>`;
+    }
+    const tgt = t => `<span class="kw" title="${t.width}×${t.height} ${esc(t.format)}, ${mb(t.bytes)} МБ">`
+      + `${esc(String(t.name).replace(/_\d+x\d+_.*$/, ""))}${t.depth ? " (глубина)" : ""} `
+      + `${t.cleared ? "clear" : t.load ? "<b>L</b>" : "—"}/${t.store ? "<b>S</b>" : "—"}</span>`;
+    const passMs = p => { const r = (p.roofline || {})[st.core]; return r ? Math.max(r.alu_ms, r.mem_ms) : null; };
+    const maxMs = Math.max(0, ...MEM.passes.map(p => passMs(p) || 0));
+    const val = (p, k) => { const r = (p.roofline || {})[st.core] || {};
+      return k === "index" ? p.index : k === "name" ? p.name.toLowerCase() : k === "bound" ? passBound(p) || ""
+        : k === "time" ? passMs(p) ?? -1 : k === "alu" ? r.alu_ms ?? -1 : k === "mem" ? r.mem_ms ?? -1
+        : k === "rt" ? p.targets.length : p.bytes[k] ?? -1; };
+    const [mk, md] = st.msort;
+    const rows = [...MEM.passes].sort((x, y) => { const a = val(x, mk), b = val(y, mk); return (a < b ? -1 : a > b ? 1 : 0) * md; });
+    const mth = (k, label, cls, tip) => `<th class="${cls} ${mk === k ? "sorted" : ""}" data-mk="${k}" title="${tip}">${label}${mk === k ? (md < 0 ? " ↓" : " ↑") : ""}</th>`;
+    h += `<div class="wrap ev mem"><table><colgroup><col style="width:4%"><col style="width:19%"><col style="width:8%"><col style="width:13%">`
+      + `<col style="width:8%"><col style="width:8%"><col style="width:22%"><col style="width:6%"><col style="width:6%"><col style="width:6%"></colgroup><thead><tr>`
+      + mth("index", "#", "num", "Порядок в кадре") + mth("name", "Проход", "l", "Имя прохода")
+      + mth("bound", "Упор", "l", "Что дольше: шейдеры или память") + mth("time", "% времени", "l", "Доля во времени кадра")
+      + mth("alu", "Шейдеры, мс", "num", "Циклы / (ядра × частота)") + mth("mem", "Память, мс", "num", "Байты / скорость памяти")
+      + mth("rt", "RT", "l", "L — читается из памяти, S — пишется в память, clear — очищается")
+      + mth("load", "Чтение", "num", "Чтение RT, МБ") + mth("store", "Запись", "num", "Запись RT, МБ")
+      + mth("textures", "Текстуры", "num", "Чтение текстур, МБ") + `</tr></thead><tbody>`;
+    for (const p of rows) {
+      const r = (p.roofline || {})[st.core], open = st.open.has("m:" + p.index), memb = passBound(p) === "memory";
+      const t = passMs(p), share = t != null && R && R.frame_ms ? t / R.frame_ms : null;
+      h += `<tr class="r ${open ? "open" : ""}" data-g="m:${p.index}">`
+        + `<td class="num st">${p.index + 1}</td><td class="l">${esc(p.name)}</td>`
+        + `<td class="l">${r ? (memb ? '<span class="warnc">память</span>' : "шейдеры") : "—"}</td>`
+        + `<td class="l">${share == null ? "—" : `<div class="pct"><span>${pc(share)}</span><i style="width:${Math.max(1, 100 * t / (maxMs || 1))}%"></i></div>`}</td>`
+        + `<td class="num ${r && !memb ? "big" : ""}">${r ? ms(r.alu_ms) : "—"}</td><td class="num ${memb ? "big" : ""}">${r ? ms(r.mem_ms) : "—"}</td>`
+        + `<td class="l tg">${p.targets.map(tgt).join("")}</td>`
+        + `<td class="num">${mb(p.bytes.load)}</td><td class="num">${mb(p.bytes.store)}</td><td class="num">${mb(p.bytes.textures)}</td></tr>`;
+      if (open) h += `<tr class="det"><td colspan="10"><div class="dl">${plural(p.calls, "вызов", "вызова", "вызовов")} · события ${p.events.map(i => i + 1).join(", ") || "—"}</div>`
+        + `<div class="dl">Тяжёлые текстуры: `
+        + (p.textures.length ? p.textures.map(t => `<span class="kw" title="${esc(t.format)}">${esc(t.name)} ${t.size.join("×")} — ${mb(t.bytes)} МБ</span>`).join("") : "нет")
+        + `</div></td></tr>`;
+    }
+    const A = MEM.assumptions;
+    h += `</tbody></table></div><p class="sub" title="Скорость памяти — пиковая, реальная ниже. Вершинные буферы не учтены.">`
+      + (dev ? `${dev.cores} ядер × ${dev.mhz} МГц, память ${dev.gbps} ГБ/с · ` : "")
+      + `за кадр ${mb(T.bytes.total)} МБ · RT сжаты ×${A.afbc} (AFBC), текстуры как ASTC 6×6</p>`;
+    el.innerHTML = h;
+  }
   function stages() {
     const g = (D.groups[st.core] || {}).stage || [];
     document.getElementById("stagebar").innerHTML = g.map(a =>
@@ -168,14 +231,14 @@ function renderCost() {
   }
   // tooltips of the column headers (the reference explains them in full)
   const HEAD_TIPS = {
-    share: "Доля в цене кадра на выбранном ядре", events: "Сколько событий (draw / dispatch) в группе",
+    share: "Доля в шейдерных циклах кадра", events: "Сколько событий (draw / dispatch) в группе",
     pixels: "Сколько раз выполнился фрагментный шейдер (метка рядом — откуда число)",
     price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
     px_price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
     total: "Пиксели × цена пикселя + вершины × цена вершины, млн циклов",
     px: "Цена одного пикселя на основном ядре", vtx: "Цена одной вершины (Position + Varying)",
     mats: "Сколько материалов проекта дают этот скомпилированный шейдер", regs: "Рабочие регистры: больше 32 — вдвое меньше потоков",
-    frame: "Доля кадра, которую дают события с тем же скомпилированным кодом",
+    frame: "Доля шейдерных циклов кадра, которую дают события с тем же скомпилированным кодом",
   };
   function th(k, label, cls = "", small = "") {
     const [sk, sd] = st.sort;
@@ -220,6 +283,8 @@ function renderCost() {
     items.push(item("Регистры", `${c.px_regs ?? "—"}${c.vtx_regs != null ? " / " + c.vtx_regs : ""}${c.px_fp16 != null ? ` · fp16 ${c.px_fp16}%` : ""}`));
     if (cum != null) items.push(item(`<span title="${CUM_HINT}">Накоплено</span>`, pc(cum)));
     const tags = [`событие ${r.index + 1}`, STAGE_NAMES[r.stage] || r.stage];
+    const ps = PASS_OF.get(r.index);
+    if (ps && passBound(ps)) tags.push(`проход ${ps.name}: упор в ${boundWord(passBound(ps))}`);
     if (r.kind === "compute") tags.push(`kernel ${r.kernel}`);
     else {
       tags.push(`RT ${String(r.rt || "").replace(/_\d+x\d+_.*$/, "")} ${r.rt_size[0]}×${r.rt_size[1]}`);
@@ -248,7 +313,7 @@ function renderCost() {
     let h = `<h2>События кадра <small>${shown.length} из ${n} · ${short(st.core)} · клик по строке — подробности</small></h2>`;
     h += `<div class="wrap ev"><table><colgroup><col style="width:15%"><col style="width:24%"><col style="width:29%">`
        + `<col style="width:11%"><col style="width:9%"><col style="width:12%"></colgroup><thead><tr>`
-       + th("share", "% кадра", "l") + th("name", "Объект", "l") + th("shader", "Шейдер · пасс", "l")
+       + th("share", "% шейдерных циклов", "l") + th("name", "Объект", "l") + th("shader", "Шейдер · пасс", "l")
        + th("pixels", "Пиксели") + th("price", "Цикл / пикс") + th("total", "Итог, млн") + `</tr></thead><tbody>`;
     for (const r of shown) {
       const c = cost(r); cum += c.share;
@@ -301,7 +366,7 @@ function renderCost() {
     let h = `<h2>По ${{shader: "шейдерам", variant: "вариантам", object: "объектам", rt: "render target"}[st.by]} <small>${shown.length} из ${rows.length} · ${short(st.core)} · клик по строке — подробности</small></h2>`;
     h += `<div class="wrap ev"><table><colgroup><col style="width:15%"><col style="width:44%"><col style="width:8%">`
        + `<col style="width:12%"><col style="width:9%"><col style="width:12%"></colgroup><thead><tr>`
-       + th("share", "% кадра", "l") + th("name", label[0].toUpperCase() + label.slice(1), "l") + th("events", "Событий")
+       + th("share", "% шейдерных циклов", "l") + th("name", label[0].toUpperCase() + label.slice(1), "l") + th("events", "Событий")
        + th("pixels", "Пиксели") + th("px_price", "Цикл / пикс") + th("total", "Итог, млн") + `</tr></thead><tbody>`;
     for (const a of shown) {
       cum += a.share;
@@ -318,10 +383,11 @@ function renderCost() {
     return h + "</tbody></table></div>";
   }
   const tabs = document.getElementById("tabs");
-  [["frame", "Кадр"], ["project", P ? `Шейдеры проекта · ${P.rows.length}` : ""]].forEach(([k, l]) => { if (!l) return;
+  [["frame", "Кадр"], ["passes", MEM && MEM.passes.length ? `Проходы · ${MEM.passes.length}` : ""],
+   ["project", P ? `Шейдеры проекта · ${P.rows.length}` : ""]].forEach(([k, l]) => { if (!l) return;
     const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
     b.onclick = () => { st.tab = k; draw(); }; tabs.appendChild(b); });
-  if (!P) tabs.classList.add("hide");
+  if (!P && !(MEM && MEM.passes.length)) tabs.classList.add("hide");
   const pfSeg = document.getElementById("pfilter");
   [["all", "все"], ["frame", "в кадре"], ["notframe", "не в кадре"]].forEach(([k, l]) => {
     const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
@@ -355,7 +421,7 @@ function renderCost() {
        + others.map(() => `<col style="width:${coreW}%">`).join("") + `<col style="width:8%"><col style="width:9%"></colgroup><thead><tr>`
        + pth("name", "Шейдер · пасс", "l") + pth("mats", "Материалы") + pth("px", "Цикл / пикс") + pth("vtx", "Цикл / верш")
        + others.map(c => pth("core:" + c.name, short(c.name))).join("")
-       + pth("regs", "Регистры") + pth("frame", "% кадра") + `</tr></thead><tbody>`;
+       + pth("regs", "Регистры") + pth("frame", "% шейдерных циклов") + `</tr></thead><tbody>`;
     for (const r of shown) {
       const p = r.prices[main] || {}, f = (r.in_frame || {})[main];
       const open = st.open.has("p:" + r._id);
@@ -395,17 +461,27 @@ function renderCost() {
   }
 
   function bindOpen() {
-    document.querySelectorAll("#main tr.r, #project tr.r").forEach(el => el.onclick = () => {
+    document.querySelectorAll("#main tr.r, #project tr.r, #memory tr.r").forEach(el => el.onclick = () => {
       const k = el.dataset.g ?? +el.dataset.i; st.open.has(k) ? st.open.delete(k) : st.open.add(k); draw(); });
   }
   function draw() {
     tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.tab));
     pfSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.pf));
-    const proj = st.tab === "project";
+    const proj = st.tab === "project", passes = st.tab === "passes";
     document.querySelectorAll(".project-only").forEach(el => el.classList.toggle("hide", !proj));
-    for (const id of ["stagebar", "stages", "loops", "main", "missing"]) document.getElementById(id).classList.toggle("hide", proj);
-    bySeg.closest(".group").classList.toggle("hide", proj);
+    for (const id of ["stagebar", "stages", "loops", "main", "missing"]) document.getElementById(id).classList.toggle("hide", st.tab !== "frame");
+    document.getElementById("memory").classList.toggle("hide", !passes);
+    bySeg.closest(".group").classList.toggle("hide", st.tab !== "frame");
+    for (const id of ["q", "all"]) document.getElementById(id).closest(".group").classList.toggle("hide", passes);
     document.getElementById("project").classList.toggle("hide", !proj);
+    if (passes) {
+      coreSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.core));
+      memoryTable();
+      document.querySelectorAll("thead th[data-mk]").forEach(el => el.onclick = () => {
+        const k = el.dataset.mk; st.msort = [k, st.msort[0] === k ? -st.msort[1] : (k === "name" || k === "index" ? 1 : -1)]; draw(); });
+      bindOpen();
+      return;
+    }
     if (proj) {
       coreSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.core));
       document.getElementById("all").textContent = st.all ? `Только топ-${TOP}` : "Показать все";

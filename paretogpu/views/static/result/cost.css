@@ -107,3 +107,8 @@ td.bar { min-width: 120px; }
                color: var(--muted); font: inherit; font-weight: 600; }
 .tabs button.on { color: var(--fg, inherit); border-bottom-color: var(--accent); }
 .hide { display: none !important; }
+.mem td.tg { white-space: normal; }
+.mem td.tg .kw { margin: 1px 4px 1px 0; }
+.mem .kw { white-space: normal; }
+.verdict { margin: 4px 0 10px; font-size: 13.5px; color: var(--muted); max-width: 1400px; }
+.verdict b { color: var(--text); }

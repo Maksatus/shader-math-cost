@@ -8,7 +8,6 @@ their PSInvocations, and so are the means. Remembered per capture and call (stor
 
   iterations_of(frame_dir, frame, state, api, pixels) -> {event index: {"n": [mean per outer loop], "pixels", "calls"}}
 """
-import hashlib
 import json
 import os
 
@@ -21,14 +20,6 @@ from paretogpu.views.reporter import CONSOLE
 MEMO = "rd_loops/1"
 CAPTURE = "frame.rdc"
 ACTIONS = "rd_actions.json"
-
-
-def _signature(path):
-    """What identifies a capture file without reading all of it: its size, time and first megabyte."""
-    st = os.stat(path)
-    with open(path, "rb") as f:
-        head = hashlib.sha1(f.read(1 << 20)).hexdigest()[:16]
-    return f"{st.st_size}|{int(st.st_mtime)}|{head}"
 
 
 def _unknown(ev, fn, state):
@@ -72,7 +63,7 @@ def iterations_of(frame_dir, frame, state, api="vulkan", pixels=16, rep=CONSOLE,
     with open(os.path.join(frame_dir, ACTIONS), encoding="utf-8") as f:
         ps = {a["event"]: a.get("ps_invocations") or 0 for a in json.load(f)["actions"]}
     memo = memo or memo_store.default()
-    sig = _signature(capture)
+    sig = rdoc.signature(capture)
     plan = {ev["index"]: _split(pixels, [(e, ps.get(e, 0)) for e in ev["rd"]["events"]]) for ev, _ in want}
     asked = {(eid, n) for calls in plan.values() for eid, n in calls}
     got = {k: memo.get(MEMO, f"{sig}|{k[0]}|{k[1]}") for k in asked}

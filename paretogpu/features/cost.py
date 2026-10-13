@@ -83,6 +83,14 @@ def print_summary(c, n_variants, api):
                 top = sorted({k for v in by_n.values() for k in list(v["stages"])[:3]})
                 print("  stages by n: " + "; ".join(
                     f"{s} " + "/".join(f"{100 * v['stages'].get(s, 0):.0f}" for v in by_n.values()) + "%" for s in top))
+    m = c.get("memory")
+    if m and t:
+        b, r = m["totals"]["bytes"], m["totals"]["roofline"].get(c["main_core"])
+        print(f"memory: {len(m['passes'])} passes, {b['total'] / 2 ** 20:.1f} MB (load {b['load'] / 2 ** 20:.1f}, "
+              f"store {b['store'] / 2 ** 20:.1f}, textures {b['textures'] / 2 ** 20:.1f})" + (
+                  f"; {m['assumptions']['devices'][c['main_core']]['device']}: shaders {r['alu_ms']:.2f} ms, "
+                  f"memory {r['mem_ms']:.2f} ms, {r['memory_passes']} passes memory bound "
+                  f"({100 * r['memory_cycles_share']:.1f}% of the cycles)" if r else ""))
     prof = c.get("profile") or {}
     print(profile.summary(prof))
     for w in prof.get("warnings") or []:
@@ -151,6 +159,7 @@ COST = Command(
      Arg("--out", help="output folder (default: the snapshot folder)", label="Папка результата")],
     run_command, title="Цена кадра",
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
-                                                                         "bounds", "rd_loops", "report"],
+                                                                         "bounds", "rd_loops", "rd_memory",
+                                                                         "report"],
     report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page),
     ui_values=default_variants, result=RESULT)

@@ -14,6 +14,7 @@ PHASES = {
     "loops": ("Циклы в шейдерах (malioc)", "замеров"),
     "bounds": ("Границы циклов (GLES)", None),
     "rd_loops": ("Повторы циклов (RenderDoc)", None),
+    "rd_memory": ("Память по проходам (RenderDoc)", None),
     "ablation": ("Разбор по строкам (malioc)", "замеров"),
     "report": ("Расчёт и отчёт", None),
     "unity_export": ("Экспорт шейдеров из Unity", None),
