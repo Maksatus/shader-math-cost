@@ -1,16 +1,6 @@
-"""What a running command tells the person and the local UI (`python -m paretogpu ui`): one object, Reporter.
-
-  log(text)          a line for the console (the UI shows it in the log of the run)
-  phase(id, total)   a step of the command starts (total: units of work, None if unknown)
-  step(done)         units done in the current step
-  skip(id, note)     a step is not needed this time
-  counter(total)     a thread-safe tick() that counts finished units of parallel work
-  error(code)        the command stops with a known error (model/errors.py): the UI says what to do about it
-
-With PARETOGPU_PROGRESS=1 in the environment (the UI sets it for the commands it runs) phase / step / skip / error
-also print lines `##progress {json}` on stdout; otherwise nothing but the log lines is printed and the console output
-stays as it was. The UI knows which steps every command has (features: Command.phases) and shows the ones to come.
-"""
+"""With PARETOGPU_PROGRESS=1 (set by ui/runner.py) phase/step/skip/error also print `##progress {json}` lines on
+stdout, {"event": "phase"|"step"|"skip"|"error", id, total, done, note, code}; ui/runner.py parses them.
+Phase ids should be those Command.phases lists: the UI shows them in advance."""
 import json
 import os
 import sys
@@ -50,7 +40,7 @@ class Reporter:
         self._emit(event="error", code=code)
 
     def counter(self, total, every=0.25):
-        """A thread-safe tick() that counts finished units and reports them at most every `every` seconds."""
+        """Thread-safe tick(n=1); emits step at most every `every` s (and at total)."""
         state = {"done": 0, "last": 0.0}
         lock = threading.Lock()
 
@@ -64,5 +54,5 @@ class Reporter:
         return tick
 
 
-CONSOLE = Reporter()           # the command line: log lines, and the UI's progress lines when it runs the command
-QUIET = Reporter(False, None)  # tests and nested work: nothing at all
+CONSOLE = Reporter()
+QUIET = Reporter(False, None)  # tests and nested work

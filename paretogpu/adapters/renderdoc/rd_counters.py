@@ -1,7 +1,6 @@
-# Runs inside RenderDoc's UI python (qrenderdoc --python rd_counters.py), not in the normal interpreter.
-# Opens the capture in PARETOGPU_RDC, writes PARETOGPU_OUT: every action (draw, dispatch, clear, ...) with its
-# marker path, index / instance counts and the GPU counters PSInvocations, VSInvocations, CSInvocations,
-# SamplesPassed (D3D11 pipeline statistics: how many times the pixel / vertex / compute shader ran for that call).
+# Runs inside qrenderdoc --python (RenderDoc's UI python, not the normal interpreter).
+# In: capture PARETOGPU_RDC. Out: PARETOGPU_OUT {"counters", "actions": leaf actions with marker path and counters
+# (*_invocations = times that shader stage ran)}; a traceback goes to <out>.error.
 import json
 import os
 import traceback

@@ -1,8 +1,11 @@
 "use strict";
 function projects() {
-  const open = OPT.unity_projects.filter(p => p.open), rest = OPT.unity_projects.filter(p => !p.open);
-  const o = p => `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · снимков: ${p.snapshots}` : ""}</option>`;
-  $("#project").innerHTML = (open.length ? `<optgroup label="Открыты в Unity">${open.map(o).join("")}</optgroup>` : "") +
+  const open = OPT.unity_projects.filter(p => p.open && !p.device), rest = OPT.unity_projects.filter(p => !p.open);
+  const o = p => p.device ? `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.package)}</option>`
+    : `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · снимков: ${p.snapshots}` : ""}</option>`;
+  const phones = OPT.unity_projects.filter(p => p.device);
+  $("#project").innerHTML = (phones.length ? `<optgroup label="Телефон (USB): кадр с телефона">${phones.map(o).join("")}</optgroup>` : "") +
+    (open.length ? `<optgroup label="Открыты в Unity">${open.map(o).join("")}</optgroup>` : "") +
     (rest.length ? `<optgroup label="Остальные проекты (Unity Hub)">${rest.map(o).join("")}</optgroup>` : "") +
     `<option value="__other">Другая папка…</option>`;
   const saved = store.get("project");
@@ -30,7 +33,12 @@ async function checkEditor(quiet) {
   const s = await api("/api/editor?project=" + encodeURIComponent(v));
   if (seq !== edSeq) return;
   edReady = !!s.ready;
-  if (!s.project) { el.className = "status bad"; el.textContent = "В этой папке нет Unity-проекта."; }
+  if (s.device) {
+    el.className = "status " + (s.ready ? "ok" : "bad");
+    el.textContent = s.ready ? "✓ Телефон подключён, сборка стоит. «Проверить кадр» запустит игру на телефоне; откройте нужную сцену и нажмите «Снять кадр». После съёмки ~2 минуты не трогайте телефон."
+      : !s.connected ? "Телефон не виден по USB (adb)." : !s.installed ? "На телефоне нет сборки этого проекта." : "Телефон заблокирован: разблокируйте и не гасите экран.";
+  }
+  else if (!s.project) { el.className = "status bad"; el.textContent = "В этой папке нет Unity-проекта."; }
   else if (s.ready) { el.className = "status ok"; el.textContent = `✓ Unity ${s.version || ""} открыт и готов`; }
   else if (!s.open) { el.className = "status bad"; el.textContent = `Проект не открыт. Откройте его в Unity ${s.version || ""} — кадр снимается из открытого редактора.`; }
   else if (!s.cli) { el.className = "status bad"; el.textContent = "Не найден Unity CLI (команда unity): запустите start.bat, он покажет, что поставить."; }
@@ -95,6 +103,7 @@ function values() {
 function updateRun() {
   const b = $("#runBtn"), why = $("#runWhy");
   b.textContent = recalc ? "▶ Пересчитать снимок" : "▶ Проверить кадр";
+  if (running() && job.waiting) { b.disabled = false; b.textContent = "📸 Снять кадр"; why.textContent = "Игра запущена на телефоне: откройте нужную сцену и нажмите."; return; }
   if (running()) { b.disabled = true; why.textContent = "Идёт проверка — новую можно начать после неё."; return; }
   if (!recalc && !projectValue()) { b.disabled = true; why.textContent = "Выберите проект."; return; }
   if (!recalc && edReady === false) { b.disabled = true; why.textContent = "Кнопка станет активной, когда Unity с проектом откроется и будет готов."; return; }
@@ -114,7 +123,10 @@ async function start(preset, vals) {
   poll();
   return true;
 }
-$("#runBtn").onclick = async () => { if (await start(recalc ? "cost" : "frame_cost", values())) setRecalc(null); };
+$("#runBtn").onclick = async () => {
+  if (running() && job.waiting) { $("#runBtn").disabled = true; await api("/api/capture", {}); return; }
+  if (await start(recalc ? "cost" : "frame_cost", values())) setRecalc(null);
+};
 
 function setRecalc(x) {
   recalc = x;
@@ -125,5 +137,3 @@ function setRecalc(x) {
   for (const id of ["#howto", "#projField", "#suffixField"]) $(id).style.display = x ? "none" : "";
   renderAdv(); checkEditor(); updateRun();
 }
-
-/* ---------- run panel ---------- */

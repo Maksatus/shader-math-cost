@@ -1,8 +1,3 @@
-"""Why the heaviest shaders of a frame are heavy (plan A3.5, report v2): `python -m paretogpu hotspots <snapshot>`.
-
-The costliest shader variants of a priced snapshot are ablated statement by statement (app/hotspots.py): their
-costliest parts and what they do, the candidates for moving to the vertex shader -> hotspots.html.
-"""
 import os
 
 from paretogpu.app import hotspots

@@ -1,8 +1,4 @@
-"""Candidates for moving to the vertex shader (core/vertexmove.py, plan A3.4) on synthetic shaders.
-
-The shaders are written the way Unity (HLSLcc) prints Shader Graph's nodes: Rotate (radians), Tiling And Offset,
-Flipbook. Run: python -m unittest discover tests   (from the repository root)
-"""
+"""core/vertexmove.py candidates on HLSLcc-printed Shader Graph nodes (Rotate, Tiling And Offset, Flipbook)."""
 import unittest
 
 from paretogpu.core import vertexmove
@@ -28,7 +24,7 @@ void main()
 {
 """
 
-# Rotate(UV, angle from a property): sin / cos of a uniform times (uv - center): affine in uv
+# angle from a property: affine in uv
 ROTATE_PROPERTY = HEAD + """    u_xlat2 = sin(_Rotation);
     u_xlat3 = cos(_Rotation);
     u_xlat0.xy = vs_TEXCOORD0.xy + (-_Center.xy);
@@ -41,7 +37,7 @@ ROTATE_PROPERTY = HEAD + """    u_xlat2 = sin(_Rotation);
 }
 """
 
-# Rotate(UV, angle from a noise texture): the angle depends on the pixel: not affine
+# angle from a noise texture: per pixel, not affine
 ROTATE_NOISE = HEAD + """    u_xlat2 = texture(_Noise, vs_TEXCOORD0.xy).x;
     u_xlat3 = cos(u_xlat2);
     u_xlat2 = sin(u_xlat2);
@@ -82,7 +78,6 @@ FLIPBOOK = HEAD + """    u_xlat2 = _TimeParameters.x * 8.0;
 
 class Candidates(unittest.TestCase):
     def test_rotate_by_property_is_a_candidate(self):
-        """Ready-when of A3.4: Rotate(UV, angle from a property) is marked..."""
         c = vertexmove.candidates(ROTATE_PROPERTY)
         self.assertEqual(len(c), 1)
         self.assertEqual(c[0]["text"], "u_xlat1.xy = u_xlat1.xy + _Center.xy;")
@@ -91,7 +86,6 @@ class Candidates(unittest.TestCase):
         self.assertEqual(len(c[0]["chain"]), 6)  # sin, cos and the rotation of (uv - center)
 
     def test_rotate_by_noise_is_not(self):
-        """...and Rotate(UV, noise) is not."""
         self.assertEqual(vertexmove.candidates(ROTATE_NOISE), [])
 
     def test_tiling_yes_normalize_no(self):

@@ -4,7 +4,7 @@ function renderHotspots() {
   const topPart = a => { if (!a || a.error) return null;
     const x = a.by_core[D.core]; if (!x || x.base.error) return null;
     const ids = Object.keys(a.statements).filter(id => x.stmts[id] && !x.stmts[id].error);
-    // the costliest part below the shader's output: a root that is not almost the whole shader
+    // a root that is almost the whole shader says nothing: descend to its costliest child
     const roots = ids.filter(id => a.statements[id].parent == null).sort((u, w) => (x.stmts[w].price || 0) - (x.stmts[u].price || 0));
     const kids = id => (a.statements[id].children || []).filter(k => x.stmts[k] && !x.stmts[k].error).sort((u, w) => (x.stmts[w].price || 0) - (x.stmts[u].price || 0));
     let id = roots[0];
@@ -17,11 +17,11 @@ function renderHotspots() {
     <p class="small" style="margin:10px 0 0">${refLink("hotspots", "Как читать")} · ${costHelp}</p></div>`;
   const overview = `<div class="card"><h2>Самые дорогие шейдеры кадра</h2><table class="cmp parts">
     <colgroup><col style="width:40px"><col style="width:420px"><col style="width:80px"><col style="width:480px"><col style="width:90px"></colgroup>
-    <tr><th class="n">#</th><th>Шейдер · проход</th><th class="n" title="Доля в цене кадра на ${esc(D.core)}">% кадра</th>
+    <tr><th class="n">#</th><th>Шейдер · проход</th><th class="n" title="Доля в шейдерных циклах кадра на ${esc(D.core)}">% шейдерных циклов</th>
     <th title="Самая дорогая часть пиксельного шейдера ниже его выхода и что в ней">Что тяжёлое</th><th class="n" title="Кандидатов на перенос в вертекс">В вертекс</th></tr>
     ${D.shaders.map((it, i) => { const t = topPart((it.ablation || {}).fragment) || topPart((it.ablation || {}).vertex);
       const nm = ((it.ablation || {}).fragment || {}).vertex_candidates;
-      return `<tr data-go="hs-${i}"><td class="n">${i + 1}</td><td class="code" title="${esc(it.variant)}">${esc(it.shader)} · ${esc(it.pass || "")}</td>
+      return `<tr data-go="hs-${i}"><td class="n">${i + 1}</td><td class="code">${esc(it.shader)} · ${esc(it.pass || "")}</td>
         <td class="n"><b>${pct(it.share || 0, 1).replace("+", "")}</b></td>
         <td class="small">${t ? `${esc(t.text)} <span class="muted">· строка ${t.line}, ${p0(Math.max(0, t.price) / (t.base || 1))} цены</span>` : `<span class="muted">${esc((((it.ablation || {}).fragment || {}).error) || "—")}</span>`}</td>
         <td class="n">${nm && nm.length ? nm.length : ""}</td></tr>`; }).join("")}</table></div>`;

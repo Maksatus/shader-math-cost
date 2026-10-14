@@ -1,28 +1,5 @@
-"""Ablation (plan A3.2): what every statement of a shader costs.
-
-A statement `x.xyz = <expression>;` of main() is ablated by putting a new varying (a vertex attribute in a vertex
-shader) of the same type in place of the expression: the compiler then drops the expression and everything that
-was computed only for it. The shader is measured again with malioc; the drop of every pipe is the statement's
-inclusive cost ("with its tail"). Dynamic loops are forced to n iterations (core/loops.py) in the base and in every
-ablated copy, so statements in loops are priced at n.
-
-Which statements feed only one other statement comes from a def-use analysis of main() per vector component
-(reaching definitions over if / else and loops, conservative); P is a child of L when every use of P's value is
-in L. The self cost of L is its inclusive cost minus the inclusive costs of its children, per pipe. Parts are the
-statements with no parent: a part's cost is its inclusive cost, its lines are the statement and all its children.
-
-Costs of pipes are additive only roughly (the compiler schedules them together), and the price of a shader is the
-maximum over pipes: the price drop of a part is not the sum of its pipe drops, and the parts' price drops do not add
-up to the price. The new varying itself costs a little in V.
-
-The text is Unity's GLSL (HLSLcc: one assignment per line, real names of textures and uniforms); its prices are
-GLES ones. Vulkan's SPIR-V of the same variant has no names left to show.
-
-  parse(src) -> {"statements": [...], "lines": [...]}
-  tree(parsed) -> parents of the statements; ablated(parsed, id, stage) -> the source with one statement ablated
-The measuring is app/ablation.py: run(src, stage, cores, n, jobs) -> per core: base pipes and price, every
-statement's inclusive and self cost.
-"""
+"""Per-statement shader cost: a statement's expression is replaced by a new varying of its type, so the compiler drops
+it and everything computed only for it. Input is Unity's HLSLcc GLSL (one assignment per line); SPIR-V has no names."""
 import re
 
 TYPES = {"float": ("f", 1), "int": ("i", 1), "uint": ("u", 1), "bool": ("b", 1)}
@@ -41,9 +18,8 @@ NAME = "_paretogpu_ablated"
 END = -1  # the shader's outputs
 
 
-# --- parsing ---------------------------------------------------------------------------------------------------
 def _main_span(lines):
-    """(first, last) line indices of main()'s body, without its braces."""
+    """(first, last) line indices of main()'s body, braces excluded."""
     start = next(i for i, l in enumerate(lines) if re.match(r"^\s*void\s+main\s*\(", l))
     depth, first = 0, None
     for i in range(start, len(lines)):
@@ -60,7 +36,6 @@ def _main_span(lines):
 
 
 def _vars(lines, first):
-    """{name: {"kind", "width", "prec", "io"}} of the declarations before main() (globals, inputs, outputs)."""
     out = {}
     for line in lines[:first]:
         m = DECL.match(line)
@@ -72,7 +47,6 @@ def _vars(lines, first):
 
 
 def _uses(expr, vars_):
-    """{(var, component)} read by an expression."""
     out = set()
     for m in IDENT.finditer(expr):
         v = vars_.get(m.group(1))
@@ -84,17 +58,15 @@ def _uses(expr, vars_):
 
 
 class _Parser:
-    """main() line by line: its statements and the tree of its blocks (what parse() returns)."""
-
     def __init__(self, lines, first, last, vars_):
         self.lines, self.first, self.last, self.vars = lines, first, last, vars_
         self.stmts, self.root = [], []
         self.stack = [("plain", self.root, [])]  # (kind, children, ids of every statement inside)
-        self.pending = None        # a loop / if header waiting for its "{" on the next line
-        self.pending_owner = None  # the if header of a block waiting for its "{"
+        self.pending = None        # header kind whose "{" is on the next line
+        self.pending_owner = None
         self.loop_depth = 0
-        self.if_owner = []         # the header of every open if block
-        self.loop_header = None    # (line, text, uses) of a for / while whose "{" is on the next line
+        self.if_owner = []
+        self.loop_header = None    # (line, text, uses)
 
     def add(self, kind_, line_no, text, **kw):
         s = {"id": len(self.stmts), "line": line_no, "text": text.strip(), "type": kind_, "loop": self.loop_depth > 0,
@@ -125,7 +97,6 @@ class _Parser:
         return next((e[2] for e in reversed(self.stack) if e[0] == "loop"), None)
 
     def brace(self):
-        """A "{" on its own line: the block of the pending header, or a plain block."""
         owner = self.pending_owner if self.pending in ("if", "else") else None
         ids = self.open_block(self.pending or "plain", owner)
         if self.pending in ("if", "else"):
@@ -136,11 +107,10 @@ class _Parser:
         self.pending, self.loop_header, self.pending_owner = None, None, None
 
     def header(self, i, t, head):
-        """A while / for / if header: the loop runs with its header; an if controls its block."""
         kind = "loop" if head.group(1) in ("while", "for") else "if"
         cond, brace, rest = head.group(2), head.group(3), head.group(4)
         if kind == "loop":
-            # the header runs with the loop: its uses are uses inside the loop; it controls the loop
+            # a loop header is added inside its loop block: its uses run every iteration
             if brace:
                 ids = self.open_block("loop")
                 self.add("other", i, t, uses=_uses(cond, self.vars))["controls"].append(ids)
@@ -148,7 +118,7 @@ class _Parser:
                 self.pending, self.loop_header = "loop", (i, t, _uses(cond, self.vars))
             return
         h = self.add("other", i, t, uses=_uses(cond, self.vars))
-        if brace and rest.rstrip().endswith("}"):  # if(c){break;} on one line: it controls its loop
+        if brace and rest.rstrip().endswith("}"):  # one-line if(c){break;}: controls the enclosing loop
             loop_ids = self.nearest_loop()
             if loop_ids is not None and re.search(r"\b(break|continue)\b", rest):
                 h["controls"].append(loop_ids)
@@ -210,10 +180,7 @@ class _Parser:
 
 
 def parse(src, stage="fragment"):
-    """Statements of main() and the tree of its blocks.
-    statements: [{"id", "line" (0-based in src), "text", "var", "comps", "kind", "width", "prec", "local",
-                  "ablate" (bool), "uses", "loop" (inside a loop)}];
-    tree: nested [("stmt", id) | ("block", kind, [children])] for the def-use analysis."""
+    """Statement "line" is 0-based in src; "tree" is nested [("stmt", id) | ("block", kind, [children])]."""
     lines = src.split("\n")
     first, last = _main_span(lines)
     vars_ = _vars(lines, first)
@@ -227,7 +194,6 @@ def parse(src, stage="fragment"):
             "main": (first, last)}
 
 
-# --- def-use ------------------------------------------------------------------------------------------------------
 def _union(a, b):
     out = {k: set(v) for k, v in a.items()}
     for k, v in b.items():
@@ -273,10 +239,8 @@ def _flow(nodes, state, p, edges):
 
 
 def dead_sets(p, users):
-    """{statement id: the statements that become dead code when its expression is replaced}: what the compiler
-    drops with it. Liveness from the shader's outputs, as a compiler does it: a statement is live when its value is
-    an output or is read by a live statement; a condition or loop header is live when a live statement is in a block
-    it controls. Everything else is dead (cycles of a loop's counter and its exit test die together)."""
+    """{statement id: statements dead once its expression is replaced}; a condition / loop header stays live while a
+    live statement is in a block it controls."""
     sources = {}
     for d, us in users.items():
         for u in us:
@@ -290,13 +254,12 @@ def dead_sets(p, users):
                 for x in ids:
                     if x != i:
                         controlled_by.setdefault(x, set()).add(i)
-    # always live: values that reach an output, and the returns (with the conditions they are under)
     essential = [d for d, us in users.items() if END in us] + [i for i, s in st.items() if s.get("ret")]
     out = {}
     for s in p["statements"]:
         if not s["ablate"]:
             continue
-        cut = s["id"]  # its expression is replaced: it reads nothing any more
+        cut = s["id"]  # replaced expression: reads nothing
         live, todo = set(), list(essential)
         while todo:
             x = todo.pop()
@@ -311,9 +274,8 @@ def dead_sets(p, users):
 
 
 def tree(p):
-    """({statement id: parent id or None}, users): a statement's parent is the closest statement whose removal makes
-    it dead code (its immediate post-dominator towards the outputs); users: {statement: statements reading it}.
-    Statements that kill each other (the same dead code, e.g. two writes nothing reads) chain in source order."""
+    """({id: parent id or None}, users {id: reader ids}); parent = closest statement whose ablation kills it; mutual
+    kills chain in source order."""
     edges = set()
     final = _flow(p["tree"], {}, p, edges)
     for key in p["outputs"]:
@@ -333,9 +295,7 @@ def tree(p):
     return parent, users
 
 
-# --- ablated sources -----------------------------------------------------------------------------------------------
 def ablated(p, sid, stage):
-    """The source with statement sid's expression replaced by a new input of its type."""
     s = p["statements"][sid]
     lines = list(p["lines"])
     n, kind = s["width"], s["kind"]
@@ -363,8 +323,7 @@ def ablated(p, sid, stage):
     return "\n".join(lines)
 
 
-# --- what a part does (plan A3.5) -------------------------------------------------------------------------------
-# what makes code heavy, the heaviest first: (key, pattern); views/messages.OPS has their names
+# heaviest first; names in views/messages.OPS
 OPS = [
     ("buffers", r"\b_\w+\[(?!\d+\])"),
     ("tex", r"\b(?:texture(?:Lod|Grad|Offset|LodOffset|Proj|ProjLod)?|texelFetch)\s*\("),
@@ -383,8 +342,6 @@ HASH = re.compile(r"\bfract\s*\(.*\bsin\s*\(|\bsin\s*\(.*\d{4,}\.\d")
 
 
 def explain(texts, loop=False, n=None):
-    """{"ops": {key: count}, "loop": in a dynamic loop, "n": its trip count} of the code of a part
-    (views/messages.explain_text says it in words)."""
     ops = {}
     for t in texts:
         rhs = t.split("=", 1)[1] if "=" in t else t

@@ -1,8 +1,3 @@
-"""Two materials of a Unity project against each other: `python -m paretogpu matcompare` (app/matcompare.py).
-
-The price of their shader variants per pixel and vertex, the dynamic loops at every n of NS; the passes of A and B
-paired by name, the rest in order. RESULT: its page (views/templates/result_view.html).
-"""
 import os
 
 from paretogpu.app import matcompare

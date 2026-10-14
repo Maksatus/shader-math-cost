@@ -27,7 +27,7 @@ function renderMaterial() {
       <div class="kpi"><div class="k">Регистры</div><div class="v">${c1(k === "px" ? x.px_regs : x.vtx_regs)}</div>${k === "px" && x.px_fp16 != null ? `<div class="s">fp16 ${x.px_fp16}%</div>` : ""}</div></div>
       ${flags ? `<div style="margin-top:8px">${flags}</div>` : ""}` : `<div class="warn">${esc(p.error || "нет цены на этом ядре")}</div>`;
     return `<div class="card"><h2>Проход ${esc(p.pass)}</h2>${facts}
-      <div class="small" style="margin-top:8px"><span class="muted" title="Keywords материала + глобальные keywords пайплайна для прохода">Keywords варианта:</span> ${kws(p.keywords)}</div>
+      <div class="small" style="margin-top:8px"><span class="muted">Keywords варианта:</span> ${kws(p.keywords)}</div>
       <h3>По конвейерам <span class="muted small">${esc(core)}, ${API_NAME[selApi] || esc(selApi)}</span></h3>${singlePipes(x, k, n)}
       ${ablationBlock(`${pi}:${stage}`, a)}</div>`;
   }).join("");
@@ -39,5 +39,4 @@ function renderMaterial() {
   bindAbl();
 }
 
-/* ---------- two materials (python -m paretogpu matcompare) ---------- */
 VIEWS.material = renderMaterial;

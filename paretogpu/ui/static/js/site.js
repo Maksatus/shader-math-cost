@@ -4,5 +4,3 @@ $("#siteUpdate").onclick = () => {
     return;
   start("site", {});
 };
-
-/* ---------- start ---------- */

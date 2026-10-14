@@ -1,11 +1,10 @@
-"""Target cores (decision D-04): presets, the main core (decision D-17), architectures, parsing of --cores."""
-MAIN_CORE = "Mali-G78"  # decision D-17: the core shown first and printed
+MAIN_CORE = "Mali-G78"  # the core shown first and printed
 PRESETS = {
-    # Bifrost low, Valhall mid, Valhall high (Galaxy S21+ on hand), Valhall new, 5th Gen
+    # Bifrost low, Valhall mid / high / new, 5th Gen
     "mobile": ["Mali-G52", "Mali-G57", "Mali-G78", "Mali-G715", "Mali-G720"],
 }
-# the device a core stands for in the roofline of the frame's passes (core/memory.py, plan K2.3): shader cores, GPU
-# clock, peak DRAM bandwidth. G78 is the Galaxy S21 (Exynos 2100) on hand; the others are typical phones (to check)
+# roofline device per core (core/memory.py): shader cores, GPU MHz, peak DRAM GB/s; G78 = the Galaxy S21 on hand,
+# the others are typical phones (unverified)
 DEVICES = {
     "Mali-G52": {"device": "Helio G85 (G52 MC2)", "cores": 2, "mhz": 1000, "gbps": 14.9},
     "Mali-G57": {"device": "Dimensity 700 (G57 MC2)", "cores": 2, "mhz": 950, "gbps": 17.1},
@@ -18,13 +17,11 @@ ARCH_SHORT = {"Bifrost": "Bifrost", "Valhall": "Valhall", "Arm 5th Generation": 
 
 
 def main_core(cores):
-    """MAIN_CORE if it is among `cores`, else the first one (None for no cores)."""
     return MAIN_CORE if MAIN_CORE in cores else (cores[0] if cores else None)
 
 
 def parse(spec, known):
-    """'preset:mobile' or 'Mali-G78,Mali-G52' -> [core]; raises ValueError on names not in known() (the cores
-    malioc lists, asked only once the spec itself is valid)."""
+    """'preset:mobile' or 'Mali-G78,Mali-G52' -> [core]; known() (malioc's list) is called only once the spec parses."""
     names = []
     for part in (p.strip() for p in spec.split(",") if p.strip()):
         if part.startswith("preset:"):

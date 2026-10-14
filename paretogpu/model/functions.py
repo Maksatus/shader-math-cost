@@ -1,32 +1,15 @@
-"""Benchmarked functions.
-
-kind -> GLSL type per variant size (dim 1 / 2 / 4, see glsl_type):
-  "same"   - float / vec2 / vec4
-  "geo"    - geometric: vec3 / vec2 / vec4
-  "mat"    - matrix * vector: mat3*vec3 / mat2*vec2 / mat4*vec4
-  "matmat" - matrix chain: mat3 / mat2 / mat4
-  "int"    - int / ivec2 / ivec4;  "uint" - uint / uvec2 / uvec4
-  "vec3", "fixed3", "fixed4" - always vec3 / vec3 / vec4 (cross, Unity helpers)
-combine: chain step is (expr) + w_i; the w_i add is subtracted via baseline.
-         False for the basic arithmetic ops which form a chain by themselves.
-extra_adds: additional adds inside expr to subtract (e.g. sin(x)+cos(x)).
-
-Expression: a format string, a (scalar, vector) pair, or a dict keyed by GLSL
-type. Placeholders: {x} chain value, {a},{b} varying operands of type T,
-{s} scalar varying operand, {T} GLSL type, {D} vector/matrix size,
-{I} int vector of the same size.
-
-Keep the expensive part of each function dependent on {x}: the operand pool
-has only 32 distinct scalars, so anything computed from operands alone (e.g.
-rcp(a) in x / a) gets reused across the chain and looks almost free.
-
-Do not edit existing expressions without need: results are cached by shader
-source, any change recompiles that function on every GPU.
+"""kind -> GLSL type for dim 1/2/4: same float/vec2/vec4; geo vec3/vec2/vec4; mat matN*vecN (3/2/4); matmat matN;
+int/uint scalar/vec2/vec4; vec3, fixed3, fixed4 fixed size.
+combine: chain step is (expr) + w_i, the add subtracted via a baseline; False for ops that chain by themselves.
+extra_adds: adds inside expr to subtract (sin(x) + cos(x)).
+expr: format string, (scalar, vector) pair or dict by GLSL type; {x} chain value, {a},{b} varyings of type T,
+{s} scalar varying, {T} type, {D} size, {I} int vector of the same size.
+Keep the expensive part dependent on {x}: only 32 distinct operand scalars, so operand-only work (rcp(a) in x / a)
+is reused across the chain and looks free. Changing an expression recompiles it on every GPU (cache by source).
 """
 
 # (id, hlsl, glsl_expr, category, kind, combine, extra_adds, note)
 FUNCS = [
-    # --- arithmetic
     ("add",        "a + b",        "{x} + {a}",                 "Арифметика", "same", False, 0, ""),
     ("mul",        "a * b",        "{x} * {a}",                 "Арифметика", "same", False, 0, ""),
     ("mad",        "mad / a*b+c",  "{x} * {a} + {b}",           "Арифметика", "same", False, 0, "Одна инструкция"),
@@ -44,7 +27,6 @@ FUNCS = [
                    "Границы — переменные, внутри деление"),
     ("smoothstep_c", "smoothstep (константы)", "smoothstep(0.2, 0.8, {x})", "Арифметика", "same", True, 0,
                    "Границы — константы, без деления"),
-    # --- rounding
     ("floor",      "floor",        "floor({x})",                "Округление", "same", True,  0, ""),
     ("ceil",       "ceil",         "ceil({x})",                 "Округление", "same", True,  0, ""),
     ("round",      "round",        "round({x})",                "Округление", "same", True,  0, ""),
@@ -52,7 +34,6 @@ FUNCS = [
     ("frac",       "frac",         "fract({x})",                "Округление", "same", True,  0, ""),
     ("fmod",       "fmod",         "{a} - {x} * trunc({a} / {x})", "Округление", "same", True, 0, "Как в HLSL: x − y·trunc(x/y)"),
     ("mod",        "mod (GLSL)",   "mod({a}, {x})",             "Округление", "same", True,  0, "В HLSL нет, пишется формулой. Для x < 0 отличается от fmod"),
-    # --- exp / pow
     ("sqrt",       "sqrt",         "sqrt({x})",                 "Степени и логарифмы", "same", True, 0, ""),
     ("rsqrt",      "rsqrt",        "inversesqrt({x})",          "Степени и логарифмы", "same", True, 0, ""),
     ("exp2",       "exp2",         "exp2({x})",                 "Степени и логарифмы", "same", True, 0, ""),
@@ -60,7 +41,6 @@ FUNCS = [
     ("log2",       "log2",         "log2({x})",                 "Степени и логарифмы", "same", True, 0, ""),
     ("log",        "log",          "log({x})",                  "Степени и логарифмы", "same", True, 0, ""),
     ("pow",        "pow",          "pow({x}, {a})",             "Степени и логарифмы", "same", True, 0, "Степень — переменная. С константой дешевле (строки ниже)"),
-    # --- trig
     ("sin",        "sin",          "sin({x})",                  "Тригонометрия", "same", True, 0, ""),
     ("cos",        "cos",          "cos({x})",                  "Тригонометрия", "same", True, 0, ""),
     ("sincos",     "sincos",       "sin({x}) + cos({x})",       "Тригонометрия", "same", True, 1, "sin и cos одного аргумента"),
@@ -71,18 +51,15 @@ FUNCS = [
     ("atan2",      "atan2",        "atan({x}, {a})",            "Тригонометрия", "same", True, 0, ""),
     ("radians",    "radians",      "radians({x})",              "Тригонометрия", "same", True, 0, "Умножение на константу"),
     ("degrees",    "degrees",      "degrees({x})",              "Тригонометрия", "same", True, 0, "Умножение на константу"),
-    # --- hyperbolic
     ("sinh",       "sinh",         "sinh({x})",                 "Гиперболические", "same", True, 0, ""),
     ("cosh",       "cosh",         "cosh({x})",                 "Гиперболические", "same", True, 0, ""),
     ("tanh",       "tanh",         "tanh({x})",                 "Гиперболические", "same", True, 0, ""),
     ("asinh",      "asinh",        "asinh({x})",                "Гиперболические", "same", True, 0, "В HLSL нет, пишется формулой"),
     ("acosh",      "acosh",        "acosh({x})",                "Гиперболические", "same", True, 0, "В HLSL нет, пишется формулой"),
     ("atanh",      "atanh",        "atanh({x})",                "Гиперболические", "same", True, 0, "В HLSL нет, пишется формулой"),
-    # --- derivatives
     ("ddx",        "ddx",          "dFdx({x})",                 "Производные", "same", True, 0, ""),
     ("ddy",        "ddy",          "dFdy({x})",                 "Производные", "same", True, 0, ""),
     ("fwidth",     "fwidth",       "fwidth({x})",               "Производные", "same", True, 0, "abs(ddx) + abs(ddy)"),
-    # --- geometric
     ("dot",        "dot",          "{T}(dot({x}, {a}))",        "Векторные", "geo", True, 0, ""),
     ("length",     "length",       "{T}(length({x}))",          "Векторные", "geo", True, 0, ""),
     ("distance",   "distance",     "{T}(distance({x}, {a}))",   "Векторные", "geo", True, 0, ""),
@@ -93,7 +70,6 @@ FUNCS = [
     ("cross",      "cross",        "cross({x}, {a})",           "Векторные", "vec3", True, 0, "Только float3"),
     ("mul_mat",    "mul(matrix, vector)", "uM{D} * {x}",        "Матрицы", "mat", True, 0, "Матрица из uniform"),
 
-    # --- pow with a constant exponent and other exp helpers
     ("pow2",       "pow(x, 2)",    "pow({x}, {T}(2.0))",             "Степени и логарифмы", "same", True, 0, ""),
     ("pow3",       "pow(x, 3)",    "pow({x}, {T}(3.0))",             "Степени и логарифмы", "same", True, 0, ""),
     ("pow4",       "pow(x, 4)",    "pow({x}, {T}(4.0))",             "Степени и логарифмы", "same", True, 0, ""),
@@ -105,7 +81,6 @@ FUNCS = [
     ("ldexp",      "ldexp",        "{a} * exp2({x})",           "Степени и логарифмы", "same", True, 0, "x · exp2(e)"),
     ("frexp",      "frexp",        "frexp_({x})",               "Степени и логарифмы", "same", True, 1, "Мантисса и порядок"),
     ("modf",       "modf",         "modf_({x})",                "Округление", "same", True, 0, "Целая часть получается попутно"),
-    # --- comparisons / select
     ("select",     "x > a ? b : x", ("({x} > {a}) ? {b} : {x}", "mix({x}, {b}, greaterThan({x}, {a}))"),
                                                                 "Сравнения", "same", True, 0, "Поэлементный выбор"),
     ("cmp",        "(float)(x > a)", ("float({x} > {a})", "{T}(greaterThan({x}, {a}))"),
@@ -116,20 +91,18 @@ FUNCS = [
     ("isinf",      "isinf",        ("float(isinf({x}))", "{T}(isinf({x}))"), "Сравнения", "same", True, 0, ""),
     ("isfinite",   "isfinite",     ("float(!isinf({x}) && !isnan({x}))", "{T}(not(isinf({x}))) * {T}(not(isnan({x})))"),
                                                                 "Сравнения", "same", True, 0, "!isinf && !isnan"),
-    # --- branches (real if statements inside a helper; condition on .x for vectors)
+    # branches: real if statements inside a helper; condition on .x for vectors
     ("if_small",   "if (x > a) x *= b", "if_small_({x}, {a}, {b})", "Ветвления", "same", True, 0,
                    "Компилятор заменяет на select, без перехода"),
     ("if_else",    "if (x > a) sin else cos", "if_else_({x}, {a})", "Ветвления", "same", True, 0,
                    "Считаются обе ветки, ≈ sincos"),
     ("if_skip",    "if (x > a) { 8× sin }", "if_skip_({x}, {a})", "Ветвления", "same", True, 0,
                    "Настоящий переход. Цифра — если ветка выполнилась"),
-    # --- conversions / half
     ("i2f",        "(float)(int)x", ("float(int({x}))", "{T}({I}({x}))"), "Конвертации", "same", True, 0, "float → int → float"),
     ("f32tof16",   "f32tof16",     {"float": "uintBitsToFloat(packHalf2x16(vec2({x}, 0.0)))", "vec2": "vec2(uintBitsToFloat(packHalf2x16(vec2({x}.x, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.y, 0.0))))", "vec4": "vec4(uintBitsToFloat(packHalf2x16(vec2({x}.x, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.y, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.z, 0.0))), uintBitsToFloat(packHalf2x16(vec2({x}.w, 0.0))))"},
                                                                 "Конвертации", "same", True, 0, "float → half"),
     ("f16tof32",   "f16tof32",     {"float": "unpackHalf2x16(floatBitsToUint({x})).x", "vec2": "vec2(unpackHalf2x16(floatBitsToUint({x}.x)).x, unpackHalf2x16(floatBitsToUint({x}.y)).x)", "vec4": "vec4(unpackHalf2x16(floatBitsToUint({x}.x)).x, unpackHalf2x16(floatBitsToUint({x}.y)).x, unpackHalf2x16(floatBitsToUint({x}.z)).x, unpackHalf2x16(floatBitsToUint({x}.w)).x)"},
                                                                 "Конвертации", "same", True, 0, "half → float"),
-    # --- integers
     ("iadd",       "int a + b",    "{x} + {a}",   "Целые числа", "int",  False, 0, ""),
     ("imul",       "int a * b",    "{x} * {a}",   "Целые числа", "int",  False, 0, ""),
     ("idiv",       "int a / b",    "{a} / {x}",   "Целые числа", "int",  True,  0, "Деление на переменную (не константу)"),
@@ -145,11 +118,9 @@ FUNCS = [
     ("firstbithigh", "firstbithigh", "{T}(findMSB({x}))", "Целые числа", "uint", True, 0, ""),
     ("firstbitlow", "firstbitlow", "{T}(findLSB({x}))", "Целые числа", "uint", True, 0, ""),
     ("reversebits", "reversebits", "bitfieldReverse({x})", "Целые числа", "uint", True, 0, ""),
-    # --- matrices
     ("mul_matmat", "mul(matrix, matrix)", "uM{D} * {x}", "Матрицы", "matmat", True, 0, "Матрица из uniform"),
     ("transpose",  "transpose",    "transpose({x})", "Матрицы", "matmat", True, 0, ""),
     ("determinant","determinant",  "{x} * determinant({x})", "Матрицы", "matmat", True, 0, "Замер: X · det(X)"),
-    # --- Unity URP / Core RP helpers
     ("unpack_rgb", "UnpackNormalRGBNoScale", "vec4(UnpackNormalRGBNoScale({x}), {x}.w)", "Unity (URP)", "fixed4", True, 0,
                    "Без DXT5nm (обычно мобилки)"),
     ("unpack_ag",  "UnpackNormalAG", "UnpackNormalAG({x}).xyzz", "Unity (URP)", "fixed4", True, 0,
@@ -162,7 +133,7 @@ FUNCS = [
     ("lin2srgb",   "LinearToSRGB", "LinearToSRGB({x})", "Unity (URP)", "fixed3", True, 0, "Точная, через pow"),
     ("lin2srgb_f", "FastLinearToSRGB", "FastLinearToSRGB({x})", "Unity (URP)", "fixed3", True, 0, "= LinearToGammaSpace"),
     ("safenorm",   "SafeNormalize", "SafeNormalize({x})", "Unity (URP)", "fixed3", True, 0, "normalize без деления на 0"),
-    # --- texture sampling: cost in FMA like the rest (busiest of texture pipe and arithmetic)
+    # textures: cost in FMA like the rest (busiest of texture pipe and arithmetic)
     ("tex2D",      "tex2D",        "texture(uT2, {x}.xy)",                   "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D"),
     ("tex2Dlod",   "tex2Dlod",     "textureLod(uT2, {x}.xy, {x}.z)",         "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D_LOD"),
     ("tex2Dbias",  "tex2Dbias",    "texture(uT2, {x}.xy, {x}.z)",            "Текстуры", "tex", True, 0, "SAMPLE_TEXTURE2D_BIAS"),
@@ -178,8 +149,7 @@ FUNCS = [
     ("texshadow",  "SampleCmp (shadow)", "vec4(texture(uTS, {x}.xyz))",     "Текстуры", "tex", True, 0, "Сравнение с глубиной"),
 ]
 
-# Helper functions placed before main(). {T}/{I} = chain type / its int vector,
-# {MINV} = FLT_MIN or HALF_MIN. GLSL ports of Unity Packing.hlsl, Color.hlsl, Common.hlsl.
+# helpers before main(), GLSL ports of Unity Packing/Color/Common.hlsl; {MINV} = FLT_MIN or HALF_MIN
 _POSPOW = "vec3 PositivePow(vec3 b, vec3 p) { return pow(max(abs(b), vec3(5.960464478e-8)), p); }\n"
 _UNPACK_AG = ("vec3 UnpackNormalAG(vec4 p) { vec3 n; n.xy = p.ag * 2.0 - 1.0; "
               "n.z = max(1.0e-16, sqrt(1.0 - clamp(dot(n.xy, n.xy), 0.0, 1.0))); return n; }\n")
@@ -188,8 +158,7 @@ PRELUDE = {
     "if_else": "{T} if_else_({T} v, {T} a) { if ({V0} > {A0}) v = sin(v); else v = cos(v); return v; }\n",
     "if_skip": "{T} if_skip_({T} v, {T} a) { if ({V0} > {A0}) { for (int i = 0; i < 8; i++) v = sin(v); } return v; }\n",
     "frexp": "{T} frexp_({T} v) { {I} e; {T} m = frexp(v, e); return m + {T}(e); }\n",
-    # f = v - trunc(v) already computes the integer part; returning f * i would fuse the
-    # mul with the chain's '+ w' into one FMA, f + i is folded back to v.
+    # f * i would fuse with the chain's '+ w' into one FMA; f + i folds back to v
     "modf": "{T} modf_({T} v) { {T} i; {T} f = modf(v, i); return f; }\n",
     "unpack_rgb": "vec3 UnpackNormalRGBNoScale(vec4 p) { return p.rgb * 2.0 - 1.0; }\n",
     "unpack_ag": _UNPACK_AG,
@@ -209,7 +178,6 @@ MINV = {"highp": "1.175494351e-38", "mediump": "6.103515625e-5"}
 
 
 def glsl_type(kind, dim):
-    """GLSL type measured for a function kind in a variant of size dim (1, 2, 4)."""
     if kind == "same":
         return {1: "float", 2: "vec2", 4: "vec4"}[dim]
     if kind in ("geo", "mat"):
@@ -233,7 +201,6 @@ def _ivec(t):
 
 
 def glsl_expr(expr, t):
-    """Pick the form of expr for GLSL type t and fill size placeholders."""
     if isinstance(expr, dict):
         expr = expr[t]
     elif isinstance(expr, tuple):
@@ -260,8 +227,7 @@ def hlsl_type(prec, t):
     return ("half" if half else "float") + n
 
 
-# HLSL (Unity) form of each measured expression, same argument order as the GLSL.
-# None = no HLSL intrinsic (GLSL-only builtin).
+# HLSL form of each expression, same argument order as the GLSL; None = GLSL-only builtin
 HLSL_EXPR = {
     "add": "x + a", "mul": "x * a", "mad": "mad(x, a, b)", "div": "a / x", "rcp": "rcp(x)",
     "abs": "abs(x)", "sign": "sign(x)", "min": "min(x, a)", "max": "max(x, a)",

@@ -1,18 +1,6 @@
-"""Incremental build of artifacts: what is still valid is taken, only the rest is built ("Build systems à la carte",
-Mokhov, Mitchell, Peyton Jones).
-
-A Rule is one kind of artifact. Two kinds of rules:
-  keyed   every key is built on its own, in parallel, and is content-addressed: memo_key(key) holds what it is made
-          of (the hash of a shader file's text, a core, malioc's version), so there is nothing to check: a value
-          remembered under that key (store/memo.py, kind = the rule's memo name with its version) is the value;
-          malioc runs, forced dynamic loops;
-  batch   stored values are checked first (lookup: still valid for the current inputs?) and the missing ones are
-          built in one go: the compiled variants (one Unity run compiles hundreds of them), whose inputs (the shader,
-          its includes, Unity's defines) only the open editor can fingerprint.
-
-  Engine(rep, jobs).get(rule, keys) -> {key: value}
-  Engine(...).get(rule, keys, tick)  a keyed rule counting into a progress counter shared with other gets (no phase)
-"""
+"""Incremental build. Keyed rules: each key built alone, in parallel, content-addressed (memo_key must hold everything
+the value depends on; a memo hit is never re-checked). Batch rules: lookup() validates stored values, the missing ones
+are built in one go (one Unity run compiles hundreds of variants)."""
 import concurrent.futures as cf
 import os
 import threading
@@ -24,51 +12,47 @@ MISSING = object()
 
 
 class Rule:
-    phase = None   # the progress phase its builds report as
+    phase = None
     keyed = True
-    memo = None    # keyed rules: the name and version their values are remembered under ("loops/1"), or None
+    memo = None    # keyed rules: memo kind with version ("loops/1"), or None
 
     def memo_key(self, key):
-        """What a keyed rule's value is made of, as a string (None: not remembered)."""
+        """None: not remembered."""
         return None
 
     def remember(self, value):
-        """Whether a built value may be remembered (not a failure that may go away)."""
+        """False for failures that may go away."""
         return value is not None
 
     def from_memo(self, key, value):
-        """The value of `key` from what was remembered (a rule may add what depends on the key, not the content)."""
+        """A rule may add here what depends on the key, not the content."""
         return value
 
     def prepare(self, keys):
-        """Before the lookups (batch rules): read the store, ask for the current inputs."""
+        """Batch rules: read the store and the current inputs before lookups."""
 
     def lookup(self, key):
-        """The stored value if it is still valid, else MISSING (batch rules)."""
+        """Batch rules: the stored value if still valid, else MISSING."""
         return MISSING
 
     def can_build(self):
-        """False: the missing values are not built now (e.g. --no-compile), unbuilt() stands for them."""
+        """False (e.g. --no-compile): unbuilt() stands for the missing values."""
         return True
 
     def skip_note(self):
-        """Why the batch phase is skipped (nothing missing, or building not allowed)."""
         return None
 
     def build_one(self, key):
-        """A keyed rule's value."""
         raise NotImplementedError
 
     def build(self, keys):
-        """A batch rule's values of the missing keys: {key: value}."""
         raise NotImplementedError
 
     def unbuilt(self, key):
-        """The value of a missing key that is not built now."""
         return None
 
     def finish(self, values):
-        """After all keys have their value: write the store."""
+        """Called with all values: write the store."""
 
 
 class Engine:

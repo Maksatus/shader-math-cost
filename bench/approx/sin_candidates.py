@@ -1,5 +1,4 @@
-"""sin(x) candidates: minimax odd polynomials, with and without range reduction.
-Fits coefficients, reports f32 / f16 max error and malioc Vulkan cost per architecture.
+"""sin(x) minimax odd-polynomial candidates: f32 / f16 max error and malioc Vulkan cost per architecture.
 
 Usage: python sin_candidates.py [--variants float,half,float4,half4]
 """
@@ -14,7 +13,6 @@ SPEC = {"float": 2 ** -11, "half": 2 ** -7}  # Vulkan: sin abs error inside [-pi
 
 
 def poly_glsl(name, c, T):
-    """T name(T x): x * P(x*x) in Horner form."""
     p = f"{c[-1]:.9g}"
     for ck in c[-2::-1]:
         p = f"({p} * x2 + {ck:.9g})"
@@ -26,7 +24,7 @@ def main():
     ap.add_argument("--variants", default="float,half,float4,half4")
     args = ap.parse_args()
 
-    fits = {}  # name -> (coeffs, domain of the polynomial argument)
+    fits = {}
     for terms in (3, 4, 5):
         fits[f"p{2 * terms - 1}"] = odd_poly(np.sin, 0, PI, terms)[0]
         fits[f"u{2 * terms - 1}"] = odd_poly(lambda u: np.sin(2 * PI * u), 0, 0.5, terms)[0]

@@ -1,7 +1,4 @@
-"""Ablation (core/ablation.py, app/ablation.py, plan A3.2) on synthetic shaders: no project data.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""Ablation (core/ablation.py, app/ablation.py) on synthetic shaders."""
 import os
 import unittest
 
@@ -11,10 +8,9 @@ from paretogpu.core import ablation
 from paretogpu.views.reporter import QUIET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SYNTH = os.path.join(HERE, "..", "paretogpu", "corpus", "synthetic")
+SYNTH = os.path.join(HERE, "data", "glsl")
 CORE = "Mali-G78"
 
-# HLSLcc-like: globals declared before main, one assignment per line, a loop and an if / else
 UNITY_LIKE = """#version 310 es
 precision highp float;
 layout(location = 0) in highp vec4 vs_TEXCOORD0;
@@ -120,23 +116,19 @@ class Parse(unittest.TestCase):
         parent, _ = ablation.tree(p)
         by = {p["statements"][i]["text"]: par for i, par in parent.items()}
         text = lambda i: p["statements"][i]["text"] if i is not None else None
-        # sin(x) feeds only the multiplication: its child
         self.assertEqual(text(by["u_xlat2 = sin(u_xlat0.x);"]), "u_xlat16_1.xyz = vec3(u_xlat2) * u_xlat0.yzw;")
-        # u_xlat0 is read by sin and by the multiplication, but both die with the multiplication: it dies too
+        # read by sin and the mul, both die with the mul
         self.assertEqual(text(by["u_xlat0 = vs_TEXCOORD0 * vs_TEXCOORD0;"]),
                          "u_xlat16_1.xyz = vec3(u_xlat2) * u_xlat0.yzw;")
-        # the value before the loop is read by the loop and by the output after it (the loop may not run):
-        # removing the loop's statement keeps it, removing the output kills both
+        # read by the loop and the output (loop may not run): only the output kills it
         self.assertEqual(text(by["u_xlat16_1.xyz = vec3(u_xlat2) * u_xlat0.yzw;"]),
                          "SV_Target0.xyz = u_xlat16_1.xyz * u_xlat2;")
-        # both branches of the if feed the output
         self.assertEqual(text(by["u_xlat2 = 1.0;"]), "SV_Target0.xyz = u_xlat16_1.xyz * u_xlat2;")
         self.assertEqual(text(by["u_xlat2 = 2.0;"]), "SV_Target0.xyz = u_xlat16_1.xyz * u_xlat2;")
-        # outputs are read by the end of the shader
         self.assertIsNone(by["SV_Target0.w = 1.0;"])
 
     def test_dead_code_takes_loops_and_conditions(self):
-        """Without the output the compiler drops the loop too: its counter, its exit test and the if after it."""
+        """Without the output the compiler drops the loop, its counter, exit test and the if after it."""
         p = ablation.parse(UNITY_LIKE)
         _, users = ablation.tree(p)
         dead = ablation.dead_sets(p, users)
@@ -145,7 +137,6 @@ class Parse(unittest.TestCase):
         for t in ("while(true){", "u_xlatb3 = u_xlati4 >= int(vs_TEXCOORD0.w);", "if(u_xlatb3){break;}",
                   "u_xlati4 = u_xlati4 + 1;", "u_xlati4 = 0;", "if(u_xlatb3){", "u_xlat2 = sin(u_xlat0.x);"):
             self.assertIn(t, gone)
-        # the other output keeps nothing alive but itself
         self.assertEqual(dead[sid["SV_Target0.w = 1.0;"]], {sid["SV_Target0.w = 1.0;"]})
 
     def test_statements_that_kill_each_other_have_no_cycle(self):
@@ -187,14 +178,13 @@ void main()
         p = ablation.parse(read("sin_x4.frag"))
         parent, _ = ablation.tree(p)
         assigns = [s["id"] for s in p["statements"] if s["type"] == "assign"]
-        # x = sin(x) + v: every statement feeds only the next one, the last feeds the output
+        # x = sin(x) + v chain
         self.assertEqual([parent[i] for i in assigns], assigns[1:] + [None])
 
 
 @unittest.skipUnless(os.path.exists(mali.MALIOC or ""), "malioc is not installed")
 class Measure(unittest.TestCase):
     def test_sin_is_about_8_fma_on_valhall(self):
-        """Ready-when of A3.2: the self cost of a sin ≈ 8 FMA on Valhall."""
         sin = ablation_run.run(read("sin_x4.frag"), "fragment", [CORE], jobs=4, rep=QUIET)
         mad = ablation_run.run(read("mad4_x64.frag"), "fragment", [CORE], jobs=4, rep=QUIET)
         rows = lambda r: r["by_core"][CORE]["stmts"]
@@ -203,8 +193,7 @@ class Measure(unittest.TestCase):
         self.assertAlmostEqual(sorted(sins)[len(sins) // 2] / fma, 8.0, delta=1.0)
 
     def test_word_scan_of_a_light_loop_is_charged_once(self):
-        """The ablated statements are priced as the frame prices loops (core/loops.cycles_at): a statement of the
-        nested word scan costs the same at 1 and 3 lights, one of the light body 3 times as much."""
+        """Word-scan statement costs the same at 1 and 3 lights, light-body statement 3x."""
         incl = {}
         for n in (1, 3):
             r = ablation_run.run(FORWARD_PLUS, "fragment", [CORE], n=n, jobs=4, rep=QUIET)

@@ -1,8 +1,4 @@
-"""app/results.py and store/results.py: a published result is described and listed the same way for every kind;
-results made before descriptions existed are adopted. Temporary out/ folder, synthetic documents.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""app/results.py and store/results.py: publishing, listing and adopting old results."""
 import json
 import os
 import shutil

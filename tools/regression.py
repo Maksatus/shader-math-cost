@@ -4,13 +4,8 @@
   python tools/regression.py check [--name base]          run again and compare with the baseline
   python tools/regression.py diff <run A> <run B>
 
-A run copies two snapshots of one project and the project's variants folder from paretogpu/out into
-paretogpu/out/_regression/work (the real snapshots are never written), runs cost (several option sets), compare,
-matcompare, matshader, hotspots, measure / report on corpus/synthetic, the bench table and the UI's JSON endpoints,
-and keeps every output in paretogpu/out/_regression/<run>. --no-compile everywhere: no Unity needed. Two runs are
-compared ignoring times, dict key order and timings; the data embedded in HTML pages is compared as JSON.
-By default the two newest snapshots of a project and two materials whose shaders they draw are taken; the baseline
-remembers them, so `check` runs on the same inputs.
+Works on copies in paretogpu/out/_regression/work (real snapshots are never written); --no-compile everywhere.
+A failed step fails the run even when the baseline failed the same way.
 """
 import argparse
 import difflib
@@ -30,26 +25,35 @@ from paretogpu.store import workspace  # noqa: E402
 ROOT = os.path.join(workspace.OUT, "_regression")
 WORK = os.path.join(ROOT, "work")
 UI_PORT = 8799
-SNAP_FILES = (workspace.SNAPSHOT_FILE, "frame.json")
+SNAP_FILES = (workspace.SNAPSHOT_FILE, "frame.json", "frame.rdc", "rd_actions.json", "rd_memory.json")
+SNAP_DIRS = ("device",)
 
 
 def W(*p):
     return os.path.join(WORK, *p)
 
 
-# --- inputs ------------------------------------------------------------------------------------------------------
-def pick_inputs(snapshots=None, mats=None):
+def is_phone(path):
+    with open(os.path.join(path, workspace.SNAPSHOT_FILE), encoding="utf-8") as f:
+        return '"source": "device"' in f.read(4096)
+
+
+def pick_inputs(snapshots=None, mats=None, phone=None):
     snaps = sorted(workspace.snapshot_dirs(), key=lambda s: -os.path.getmtime(os.path.join(s[1], workspace.SNAPSHOT_FILE)))
     if snapshots:
         names = snapshots.split(",")
     else:
         by_project = {}
         for name, path in snaps:
-            by_project.setdefault(workspace.snapshot_project(path), []).append(name)
-        names = next((v[:2] for v in by_project.values() if len(v) >= 2), [s[0] for s in snaps[:2]])
+            if not is_phone(path):
+                by_project.setdefault(workspace.snapshot_project(path), []).append(name)
+        names = next((v[:2] for v in by_project.values() if len(v) >= 2), [])
     if len(names) < 2:
-        sys.exit("needs two snapshots of a project in paretogpu/out")
+        sys.exit("needs two editor snapshots of a project in paretogpu/out")
     project = workspace.snapshot_project(os.path.join(workspace.OUT, names[0]))
+    if phone is None:
+        phone = next((name for name, path in snaps if is_phone(path) and workspace.snapshot_project(path) == project),
+                     None)
     if mats:
         mat_paths = mats.split(",")
     else:
@@ -61,20 +65,34 @@ def pick_inputs(snapshots=None, mats=None):
             if m.get("shader") and not m.get("error"):
                 by_shader.setdefault(m["shader"], m["path"])
         mat_paths = list(dict.fromkeys(by_shader[s] for s in drawn if s in by_shader))[:2]
-    return {"snapshots": names, "project": project, "variants": workspace.variants_dir(project),
-            "materials": mat_paths}
+    return {"snapshots": names, "phone": phone or None, "project": project,
+            "variants": workspace.variants_dir(project), "materials": mat_paths}
+
+
+def copy(src, dst):
+    """Captures are hard-linked: large, read-only, and their signature keeps the memo."""
+    if src.endswith(".rdc"):
+        try:
+            return os.link(src, dst)
+        except OSError:
+            pass
+    shutil.copy2(src, dst)
 
 
 def prepare(inputs):
     if os.path.isdir(WORK):
         shutil.rmtree(WORK)
     shutil.copytree(inputs["variants"], W("variants"), ignore=shutil.ignore_patterns("_compiled"))
-    for s in inputs["snapshots"]:
+    for s in inputs["snapshots"] + ([inputs["phone"]] if inputs.get("phone") else []):
         os.makedirs(W("snaps", s))
         for fn in SNAP_FILES:
             src = os.path.join(workspace.OUT, s, fn)
             if os.path.exists(src):
-                shutil.copy2(src, W("snaps", s, fn))
+                copy(src, W("snaps", s, fn))
+        for dn in SNAP_DIRS:
+            src = os.path.join(workspace.OUT, s, dn)
+            if os.path.isdir(src):
+                shutil.copytree(src, W("snaps", s, dn), copy_function=copy)
     os.makedirs(W("out"))
 
 
@@ -86,15 +104,14 @@ def steps(inputs):
                     "--out", W("out", "cost_a")]),
         ("cost_b", ["cost", W("snaps", b), "--variants", v, "--no-compile", "--cores", "preset:mobile",
                     "--materials", "--project", project, "--out", W("out", "cost_b")]),
-        ("cost_gles", ["cost", W("snaps", a), "--variants", v, "--no-compile", "--core", "Mali-G78", "--api", "gles",
-                       "--loop-iters", "4", "--loop-iters-shader", "Lit=1", "--main-core", "Mali-G78",
+        ("cost_gles", ["cost", W("snaps", a), "--variants", v, "--no-compile", "--cores", "Mali-G78", "--api", "gles",
                        "--out", W("out", "cost_gles")]),
         ("compare", ["compare", W("out", "cost_a"), W("out", "cost_b"), "--out", W("out", "compare")]),
         ("hotspots", ["hotspots", W("out", "cost_a"), "--top", "4", "--out", W("out", "hotspots")]),
-        ("measure", ["measure", os.path.join(REPO, "paretogpu", "corpus", "synthetic"), "--cores", "preset:mobile",
-                     "--out", W("out", "measure")]),
-        ("report", ["report", W("out", "measure"), "--out", W("out", "report")]),
     ]
+    if inputs.get("phone"):
+        out.insert(3, ("cost_phone", ["cost", W("snaps", inputs["phone"]), "--variants", v, "--no-compile", "--cores",
+                                      "preset:mobile", "--out", W("out", "cost_phone")]))
     if len(mats) >= 2:
         out.insert(4, ("matcompare", ["matcompare", "--project", project, mats[0], mats[1], "--variants", v,
                                       "--no-compile", "--out", W("out", "matcompare")]))
@@ -104,7 +121,6 @@ def steps(inputs):
     return out
 
 
-# --- a run -------------------------------------------------------------------------------------------------------
 def env():
     e = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONHASHSEED="0")
     e.pop("PARETOGPU_PROGRESS", None)
@@ -117,7 +133,7 @@ def run(name, inputs, bench=True):
         shutil.rmtree(res)
     os.makedirs(res)
     prepare(inputs)
-    timing = {}
+    timing, failed = {}, []
     for sid, argv in steps(inputs):
         t = time.time()
         p = subprocess.run([sys.executable, "-m", "paretogpu"] + argv, cwd=REPO, env=env(), capture_output=True,
@@ -126,6 +142,8 @@ def run(name, inputs, bench=True):
         with open(os.path.join(res, f"{sid}.stdout.txt"), "w", encoding="utf-8") as f:
             f.write(f"rc={p.returncode}\n{p.stdout}\n--- stderr\n{p.stderr}")
         print(f"{sid}: exit {p.returncode}, {timing[sid]} s")
+        if p.returncode:
+            failed.append(sid)
     if bench:
         t = time.time()
         b = W("out", "bench")
@@ -139,10 +157,16 @@ def run(name, inputs, bench=True):
                            capture_output=True)
         timing["bench"] = round(time.time() - t, 1)
         print(f"bench: exit {p.returncode}, {timing['bench']} s")
+        if p.returncode:
+            failed.append("bench")
     ui(res, inputs)
     shutil.copytree(W("out"), os.path.join(res, "out"))
     with open(os.path.join(res, "run.json"), "w", encoding="utf-8") as f:
-        json.dump({"inputs": inputs, "timing": timing, "time": time.time()}, f, indent=1, ensure_ascii=False)
+        json.dump({"inputs": inputs, "timing": timing, "failed": failed, "time": time.time()}, f, indent=1,
+                  ensure_ascii=False)
+    for sid in failed:
+        print(f"FAILED: {sid} (see {os.path.join(res, sid + '.stdout.txt')})")
+    return failed
 
 
 def ui(res, inputs):
@@ -177,9 +201,8 @@ def ui(res, inputs):
             p.kill()
 
 
-# --- comparing ---------------------------------------------------------------------------------------------------
 VOLATILE = {"computed_at", "made_at", "cost_computed_at", "created", "started", "finished", "seconds", "time", "cost_time",
-            "snapshot_time", "updated"}
+            "snapshot_time", "updated", "code_version", "stale"}
 TIME_RE = re.compile(r"\d{8}_\d{6}b*")
 BLOBS = [re.compile(r"^const D = (.*);$", re.M),
          re.compile(r'(?s)<script type="application/json" id="data">(.*?)</script>')]
@@ -289,6 +312,7 @@ def main():
     b.add_argument("--name", default="base")
     b.add_argument("--snapshots", help="two snapshot folders of paretogpu/out, comma separated (default: the newest)")
     b.add_argument("--materials", help="two .mat paths of the project, comma separated (default: drawn in the frame)")
+    b.add_argument("--phone", help="a phone snapshot of the project (default: its newest; an empty string for none)")
     b.add_argument("--no-bench", action="store_true")
     c = sub.add_parser("check", help="run again on the baseline's inputs and compare")
     c.add_argument("--name", default="base")
@@ -300,15 +324,15 @@ def main():
     d.add_argument("--ignore", action="append", default=[])
     a = ap.parse_args()
     if a.cmd == "baseline":
-        inputs = pick_inputs(a.snapshots, a.materials)
+        inputs = pick_inputs(a.snapshots, a.materials, a.phone)
         print("inputs:", json.dumps(inputs, ensure_ascii=False))
-        run(a.name, inputs, not a.no_bench)
-        return 0
+        return 1 if run(a.name, inputs, not a.no_bench) else 0
     if a.cmd == "check":
         with open(os.path.join(ROOT, a.name, "run.json"), encoding="utf-8") as f:
             inputs = json.load(f)["inputs"]
-        run(a.name + "_check", inputs, not a.no_bench)
-        return 1 if diff(a.name, a.name + "_check", a.ignore + (["^out/bench/"] if a.no_bench else [])) else 0
+        failed = run(a.name + "_check", inputs, not a.no_bench)
+        bad = diff(a.name, a.name + "_check", a.ignore + (["^out/bench/"] if a.no_bench else []))
+        return 1 if bad or failed else 0
     return 1 if diff(a.a, a.b, a.ignore) else 0
 
 

@@ -1,29 +1,19 @@
-"""A command of `python -m paretogpu`, described once: the CLI parser and the UI's forms are made from it.
-
-  Command(name, help, args, run, title=...)  run(args) -> exit code; args: [Arg | Group]; title: its name in the UI
-  Arg("--cores", default=..., help=..., label=...), Arg("folder") for a positional; Group(Arg, Arg): mutually
-  exclusive; label: the argument's name in the UI's forms (help is the CLI's)
-  phases(values) -> the progress phases (views/reporter.py) a run goes through, in order, for the UI
-  report(values) -> the page the run writes (the UI opens it), or None
-  ui_values(values) -> the values with the folders the UI does not ask for filled in
-  result: ResultKind -> what a run leaves (model/result.py): its title and summary for the lists of results
-"""
 import argparse
 from dataclasses import dataclass
 
 
 @dataclass
 class Arg:
-    flag: str                   # "--cores", or the name of a positional
+    flag: str
     help: str = None
     default: object = None
     type: object = None
     choices: list = None
-    action: str = None          # "store_true" | "append"
+    action: str = None
     nargs: str = None
     required: bool = False
     metavar: str = None
-    label: str = None           # the UI's name of it (the forms); None: the flag
+    label: str = None           # UI form label
 
     @property
     def positional(self):
@@ -50,7 +40,7 @@ class Arg:
         p.add_argument(self.flag, **kw)
 
     def schema(self, group=None):
-        """The UI's description of the argument (ui/static/js/run_form.js builds its form fields from it)."""
+        """Read by ui/static/js/run_form.js."""
         default = False if self.action == "store_true" and self.default is None else self.default
         if not isinstance(default, (str, int, float, bool)) and default is not None:
             default = None
@@ -72,8 +62,8 @@ class Group:
 
 @dataclass
 class ResultKind:
-    """What a command's run leaves: <name>.json and <name>.html (own_page: the command writes its own page and data),
-    described by <name>.result.json with title(doc) and summary(doc) (app/results.py)."""
+    """<name>.json + <name>.html (own_page: the command writes them itself), indexed by <name>.result.json with
+    title(doc) and summary(doc) (app/results.py)."""
     name: str
     title: object
     summary: object = lambda doc: {}
@@ -92,14 +82,14 @@ class Command:
     help: str
     args: list
     run: object                                     # run(args) -> exit code
-    phases: object = None                           # phases(values) -> [phase id]
-    report: object = None                           # report(values) -> path of the page the run writes
-    ui_values: object = None                        # ui_values(values) -> values with the UI's own folders
+    phases: object = None                           # phases(values) -> [phase id] (views/reporter.py)
+    report: object = None                           # report(values) -> page path the UI opens, or None
+    ui_values: object = None                        # ui_values(values) -> values + folders the UI does not ask for
     result: object = None                           # ResultKind
-    title: str = None                               # the command's name in the UI (None: its name)
+    title: str = None                               # UI name (None: name)
 
     def flat_args(self):
-        """[(Arg, index of its mutually exclusive group or None)] in the order they are declared."""
+        """[(Arg, mutually exclusive group index or None)]."""
         out, g = [], 0
         for a in self.args:
             if isinstance(a, Group):

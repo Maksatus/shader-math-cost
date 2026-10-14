@@ -1,24 +1,11 @@
-// Compile exact shader variants (shader x subshader x pass x keywords) for malioc (plan item K1.4):
-// the variants a Frame Debugger snapshot used, with the keywords it reported, whether or not
-// "Compile and show code" (ParetoGpuExport.cs) would include them.
-//
-// Used by `python -m paretogpu cost` (app/variants.py):
-//   adapters/unity/bridge.py call(..., "ParetoGpuVariants.cs", "Run", <out>, "variants", ...)
-//
-// config: one entry per variant in parallel arrays (JsonUtility in a run_script assembly reads arrays of
-// strings and numbers, not arrays of this script's classes); keywords are space separated, id = array index:
-//   {"shaders": ["Custom/Lit"], "subshaders": [0], "pass_indices": [0], "passes": ["Forward Opaque"],
-//    "keywords": ["_EMISSION _NORMALMAP"], "platforms": ["gles3", "vulkan"]} (and the job's "out", "name")
-// Compute kernels (subshader -1) are refused: ComputeShader.FindKernel / HasKernel and the internal
-// ShaderUtil.CompileComputeShaderVariant crashed the 6000.3.18f1 editor when called from here.
-// Writes <out>/<id>_<platform>_<vert|frag>.bin (GLSL text for gles3, SPIR-V binary for vulkan: what
-// ShaderData.Pass.CompileVariant(..., forExternalTool: true) returns for Android) as it goes ("variants i/n" in
-// the job's progress) and answers with the fingerprint of every variant's shader (see Fingerprint).
-//
-// Fingerprints entry: config {"shaders": [...]} -> {"unity": ..., "shaders": {name: fingerprint}}
-// without compiling anything; app/variants.py compares them with the fingerprints stored next to the compiled
-// files and compiles a variant again when its shader, an include or package it depends on, the Unity version or
-// the Android platform defines changed.
+// Exact shader variants for malioc. Run: job "variants", config = parallel arrays, one entry per variant, id = index
+// (JsonUtility in a run_script assembly reads arrays of strings/numbers, not of this script's classes):
+//   {"shaders", "subshaders", "pass_indices", "passes", "keywords": space separated, "platforms": ["gles3", "vulkan"]}
+// Writes <out>/<id>_<platform>_<vert|frag>.bin as it goes (gles3: GLSL text, vulkan: SPIR-V; CompileVariant(...,
+// forExternalTool: true) for Android), progress "variants i/n"; answers {"unity", "variants": [{"id", "files",
+// "fingerprint", "errors"}]}. Compute kernels (subshader -1) are refused: FindKernel / HasKernel /
+// ShaderUtil.CompileComputeShaderVariant crashed the 6000.3.18f1 editor from here.
+// Fingerprints: {"shaders"} -> {"unity", "shaders": {name: fingerprint}}, nothing compiled; a change means recompile.
 
 using System;
 using System.Collections.Generic;
@@ -91,6 +78,9 @@ public static class ParetoGpuVariants
                 if (v.pass_index < 0 || v.pass_index >= sub.PassCount)
                     throw new Exception($"no pass {v.pass_index} in subshader {v.subshader} (has {sub.PassCount})");
                 var pass = sub.GetPass(v.pass_index);
+                if (v.pass != pass.Name && !(v.pass.StartsWith("<Unnamed Pass") && string.IsNullOrEmpty(pass.Name)))
+                    throw new Exception($"pass {v.pass_index} is named '{pass.Name}', the snapshot says '{v.pass}': " +
+                                        "the shader's passes changed since the snapshot");
                 foreach (var plat in cfg.platforms)
                 {
                     if (!Platforms.TryGetValue(plat, out var sp))
@@ -115,8 +105,6 @@ public static class ParetoGpuVariants
                         files.Add($"{{\"platform\": {Str(plat)}, \"stage\": {Str(ext)}, \"file\": {Str(fn)}}}");
                     }
                 }
-                if (v.pass != pass.Name && !(v.pass.StartsWith("<Unnamed Pass") && string.IsNullOrEmpty(pass.Name)))
-                    errors.Add($"pass {v.pass_index} is named '{pass.Name}', the snapshot says '{v.pass}'");
             }
             catch (Exception e)
             {
@@ -136,9 +124,9 @@ public static class ParetoGpuVariants
         public string[] shaders = new string[0];
     }
 
-    // Passes entry: config {"shaders": [...]} -> {"shaders": {name: [{"subshader", "pass_index",
-    // "pass", "light_mode"}] or null}}: the passes of shaders no frame snapshot has drawn (the project shaders tab
-    // of the frame report picks their color passes by LightMode). Nothing is compiled.
+    // Passes: {"shaders"} -> {"unity", "shaders": {name: [{"subshader", "pass_index", "pass", "light_mode",
+    // "keywords"}] or null}}, nothing compiled. keywords: those the pass declares (a material keyword it does not
+    // declare is not in its variant); null when Unity cannot say.
     public static string Passes(string configPath)
     {
         var cfg = JsonUtility.FromJson<FingerprintConfig>(ParetoGpuJob.Open(configPath));
@@ -159,7 +147,7 @@ public static class ParetoGpuVariants
                 var sub = data.GetSubshader(s);
                 for (var p = 0; p < sub.PassCount; p++)
                     passes.Add($"{{\"subshader\": {s}, \"pass_index\": {p}, \"pass\": {Str(sub.GetPass(p).Name)}, " +
-                               $"\"light_mode\": {Str(LightMode(shader, s, p))}}}");
+                               $"\"light_mode\": {Str(LightMode(shader, s, p))}, \"keywords\": {PassKeywords(shader, s, p)}}}");
             }
             items.Add($"{Str(name)}: [{string.Join(", ", passes)}]");
         }
@@ -167,8 +155,20 @@ public static class ParetoGpuVariants
                                  string.Join(",\n ", items) + "}}\n");
     }
 
-    // Shader.FindPassTagValue(subshader, pass, "LightMode") through reflection (the 3-argument overload is not in
-    // every Unity version); null if there is none
+    static string PassKeywords(Shader shader, int subshader, int pass)
+    {
+        try
+        {
+            var kws = ShaderUtil.GetPassKeywords(shader, new UnityEngine.Rendering.PassIdentifier((uint)subshader, (uint)pass));
+            return "[" + string.Join(", ", kws.Select(k => Str(k.name)).Distinct()) + "]";
+        }
+        catch (Exception)
+        {
+            return "null";
+        }
+    }
+
+    // reflection: the 3-argument FindPassTagValue is not in every Unity version
     static string LightMode(Shader shader, int subshader, int pass)
     {
         try
@@ -190,6 +190,8 @@ public static class ParetoGpuVariants
     public static string Fingerprints(string configPath)
     {
         var cfg = JsonUtility.FromJson<FingerprintConfig>(ParetoGpuJob.Open(configPath));
+        if (!EditorApplication.isPlaying)
+            AssetDatabase.Refresh();
         var byName = new Dictionary<string, Shader>();
         var items = cfg.shaders.Distinct().Select(name =>
         {
@@ -200,9 +202,8 @@ public static class ParetoGpuVariants
                                  string.Join(",\n ", items) + "}}\n");
     }
 
-    // What the compiled code of a shader depends on: the Unity version, the Android platform defines and the color
-    // space, and for an asset (project or package) its dependency hash (the file and everything it imports:
-    // includes, subgraphs); built-in shaders change only with Unity.
+    // Unity version, Android platform defines, color space, and for an asset its dependency hash (covers includes,
+    // subgraphs); built-in shaders change only with Unity.
     static string Fingerprint(Shader shader)
     {
         var path = AssetDatabase.GetAssetPath(shader);
@@ -213,8 +214,7 @@ public static class ParetoGpuVariants
                            PlatformDefines(ShaderCompilerPlatform.GLES3x), PlatformDefines(ShaderCompilerPlatform.Vulkan), asset);
     }
 
-    // ShaderUtil.GetShaderPlatformKeywordsForBuildTarget(platform, Android): the BuiltinShaderDefines the compiler
-    // gets for Android (normal map encoding, reversed Z, ...); through reflection, empty if the API is not there
+    // BuiltinShaderDefines the compiler gets for Android (normal map encoding, reversed Z, ...); "" if API is missing
     static string PlatformDefines(ShaderCompilerPlatform platform)
     {
         try
@@ -233,7 +233,7 @@ public static class ParetoGpuVariants
         }
     }
 
-    // Shader.Find by name; shaders that are not loaded yet are found among the project and package assets
+    // Shader.Find misses shaders not loaded yet: fall back to the asset database
     static Shader Find(string name, Dictionary<string, Shader> cache)
     {
         if (cache.TryGetValue(name, out var s))

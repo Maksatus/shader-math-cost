@@ -1,19 +1,5 @@
-"""Mali shader math cost benchmark (the function cost site, docs/).
-
-Compiles chained fragment shaders (core/shadergen.py) of every function (model/functions.py) with malioc for every
-Mali GPU on both OpenGL ES and Vulkan, then derives the per-call cost of each function.
-
-Per-call cost = slope of arithmetic cycles between chain lengths N1 and N2
-(8 -> 24; falls back to 8 -> 16 or 4 -> 8 if the shader spills registers), minus the slope of the same chain without
-the function (only the '+ w_i' adds). The slope cancels fixed shader overhead, which matters on Bifrost.
-Cost is taken on the bottleneck arithmetic pipe (FMA / CVT / SFU run in parallel on Valhall and 5th Gen; Bifrost
-reports one pipe).
-
-malioc results come from its cache (adapters/malioc.py). Results that look like a corrupted cache (a strongly
-negative per-pipe cost, or a different FMA unit in GLES and Vulkan on the same GPU) are returned as warnings.
-
-  run(gpus, jobs) -> (rows of mali_math_cost.csv, errors, warnings)
-"""
+"""Per-call function cost on Mali via malioc: cycle slope between chain lengths N1->N2 minus the slope of the bare
+'+ w_i' chain (cancels fixed overhead, matters on Bifrost); cost = busiest pipe (FMA/CVT/SFU/TEX run in parallel)."""
 import concurrent.futures as cf
 import os
 
@@ -25,7 +11,7 @@ from paretogpu.views.reporter import CONSOLE
 MALIOC_NEW = mali.MALIOC
 CACHE = mali.CACHE
 
-PAIRS = [(8, 24), (8, 16), (4, 8)]  # chain lengths (N1, N2), tried in order
+PAIRS = [(8, 24), (8, 16), (4, 8)]  # chain lengths (N1, N2), next one tried when a shader spills
 VARIANTS = [  # name, precision, vector size
     ("float",  "highp",   1),
     ("half",   "mediump", 1),
@@ -57,7 +43,6 @@ spills = mali.spills
 
 
 def _plan(gpus):
-    """One entry per measurement: (gpu, api, variant, function) with the shader text of its chain step."""
     plan = []
     for malioc, core, arch, apis in gpus:
         for api in APIS:
@@ -78,14 +63,12 @@ def _plan(gpus):
 
 
 def _keys_for(p, n):
-    """The compile keys of a measurement at chain length n: its chain, and the baseline chain of '+ w_i' adds
-    (None when the function forms the chain by itself)."""
+    """-> (chain key, baseline '+ w_i' chain key or None when the function forms the chain by itself)."""
     mk = lambda e, c, pre="": (p["malioc"], p["api"], p["core"], build(p["api"], p["prec"], p["t"], e, n, c, pre))
     return mk(p["expr"], p["combine"], p["prelude"]), (mk("{x}", True) if p["combine"] else None)
 
 
 def _compile_all(results, keys, jobs, rep):
-    """malioc on every key not in `results` yet, in parallel."""
     keys = [k for k in dict.fromkeys(keys) if k not in results]
     rep.log(f"  compiling {len(keys)} shaders")
     rep.phase("bench_compile", len(keys))
@@ -102,8 +85,7 @@ def _compile_all(results, keys, jobs, rep):
 
 
 def _measure(plan, jobs, rep):
-    """Every measurement with the first chain-length pair whose shaders do not spill registers: fills p["slope"],
-    p["short"], p["r2"], p["rs"], p["spill"]; returns (slopes by (core, api, variant, fid), errors)."""
+    """Fills p["slope"], p["short"], p["r2"], p["rs"], p["spill"]; -> (slopes by (core, api, variant, fid), errors)."""
     results = {}  # (malioc, api, core, src) -> compile result
     slopes, errors = {}, []
     todo = plan
@@ -147,8 +129,7 @@ def _measure(plan, jobs, rep):
 
 
 def _unit_warnings(plan, slopes):
-    """Corrupted cache entries (results of another shader) showed up as a different FMA unit in GLES and Vulkan on
-    one GPU."""
+    """A corrupted malioc cache (results of another shader) shows up as a different FMA unit in GLES vs Vulkan."""
     warnings = []
     for core in dict.fromkeys(p["core"] for p in plan):
         u = {api: max(v for k, v in slopes[(core, api, "float", "mad")].items() if k != "texture")
@@ -159,11 +140,10 @@ def _unit_warnings(plan, slopes):
 
 
 def _row(p, slopes, malioc_version, warnings):
-    """The CSV row of a measured entry of the plan (a strongly negative per-pipe cost is a warning)."""
     s, sh = dict(p["slope"]), dict(p["short"])
     if p["extra"]:
         add = slopes[(p["core"], p["api"], p["variant"], "add")]
-        # 'add' of the variant type; extra adds are on the same type
+        # extra adds are of the variant type
         s = {k: s[k] - p["extra"] * add[k] for k in s}
         sh = {k: sh[k] - p["extra"] * add[k] for k in sh}
     unit = slopes.get((p["core"], p["api"], "float", "mad"), {})
@@ -177,7 +157,7 @@ def _row(p, slopes, malioc_version, warnings):
     short = max([max(0.0, v) for k, v in sh.items() if k != "texture"] or [0.0])
     tex = s.pop("texture", 0.0)
     alu = max(s.values()) if s else 0.0
-    # the texture pipe runs in parallel with arithmetic: like FMA/CVT/SFU, the busiest pipe is the cost
+    # the texture pipe runs in parallel with arithmetic: the busiest pipe is the cost
     cyc = max(alu, tex)
     bound = ("TEX" if tex >= alu else max(s, key=s.get)) if cyc > 1e-9 else "-"
     ref = slopes.get((p["core"], p["api"], "float", "tex2D"), {}).get("texture", 0)
@@ -193,7 +173,7 @@ def _row(p, slopes, malioc_version, warnings):
         "cycles": round(cyc, 5),
         "rel_fma": round(cyc / unit_c, 3) if unit_c else "",
         "unit": "FMA",
-        # cost on the shortest path (a skipped branch); empty unless cheaper than the longest path
+        # shortest path (skipped branch); empty unless cheaper than the longest path
         "rel_short": round(short / unit_c, 3)
                      if unit_c and p["kind"] != "tex" and short < cyc - 1e-6 else "",
         # texture rows: arithmetic for the coordinates (FMA) and texture time in plain tex2D samples
@@ -214,7 +194,7 @@ def _row(p, slopes, malioc_version, warnings):
 
 
 def run(gpu_names="", jobs=None, rep=CONSOLE):
-    """Measure every function; returns (rows of mali_math_cost.csv, errors, warnings)."""
+    """-> (rows of mali_math_cost.csv, errors, warnings)."""
     malioc_version = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"
     gpus = [(MALIOC_NEW, n, a, apis) for n, a, apis in list_gpus(MALIOC_NEW)]
     if gpu_names:

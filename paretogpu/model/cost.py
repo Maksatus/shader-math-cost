@@ -1,10 +1,8 @@
-"""The cost of a frame (frame_cost.json, core/frame_cost.compute): every event priced on every core, and its short
-account (core/frame_cost.summary) for the lists of runs, the comparison and the UI."""
 from typing import TypedDict
 
 
 class StageCosts(TypedDict, total=False):
-    """One event on one core: the prices (cycles per pixel / vertex / thread) and the cycles they add up to."""
+    """One event on one core; *_price in cycles per pixel / vertex / thread."""
     px_price: float
     vtx_price: float
     cs_price: float
@@ -24,16 +22,18 @@ class StageCosts(TypedDict, total=False):
     vtx_regs: int
     px_fp16: int
     total_by_n: dict      # {n: total} with the dynamic loops at n iterations
-    px_loops: list        # core/pricing.loop_parts of the fragment stage: [{"n", "cycles"}] per outer loop
-    cs_loops: list        # the same of a compute kernel
+    px_loops: list        # [{"n", "cycles"}] per outer loop (core/pricing.loop_parts)
+    cs_loops: list        # the same for a compute kernel
     px_price_by_n: dict
+    px_ref: float
+    vtx_ref: float
+    cs_ref: float
 
 
-# one event of the frame (draw or dispatch) with its cost per core
 EventCost = TypedDict("EventCost", {
     "index": int, "kind": str, "stage": str, "object": str, "path": str, "meshes": list, "shader": str,
     "pass": str, "keywords": list, "rt": str, "rt_size": list, "pixels": int, "pixel_method": str,
-    "pixels_low": int, "pixels_high": int, "pixel_note": str, "vertices": int, "vertex_method": str,
+    "pixel_note": str, "vertices": int, "vertex_method": str,
     "threads": int, "thread_method": str, "kernel": str, "variant": str, "files": dict,
     "cost": dict,      # {core: StageCosts}
     "reason": str,     # why there is no price
@@ -42,7 +42,7 @@ EventCost = TypedDict("EventCost", {
 
 
 class CostRun(TypedDict, total=False):
-    """frame_cost.json and every costs/<time>.json (store/cost_runs.py)."""
+    """frame_cost.json and every costs/<time>.json."""
     frame: dict           # the snapshot's meta (model/frame.Snapshot without the events)
     profile: dict         # core/profile.describe of the snapshot and the frame size + "warnings": [{"code", ...}]
     api: str
@@ -61,19 +61,17 @@ class CostRun(TypedDict, total=False):
     frame_dir: str
     variants_dir: str
     computed_at: float
+    code_version: str
     project_shaders: dict
 
 
 class CostSummary(TypedDict, total=False):
-    """core/frame_cost.summary of a CostRun: where it is from (snapshot, frame_dir, project, computed_at), what it was
-    priced with (api, malioc, main_core, cores, loops_n, checked), the frame (resolution, quality, pipeline, scale,
-    renderdoc), its cycles on the main core (total, fragment, vertex, compute) and on every core (totals), what was
-    priced (coverage, priced, pixel_methods), the costliest shaders and what has no price (unpriced_draws,
-    unpriced_compute, failed_reasons)."""
+    """core/frame_cost.summary of a CostRun; total/fragment/vertex/compute are on the main core."""
     snapshot: str
     frame_dir: str
     project: str
     computed_at: float
+    code_version: str
     api: str
     malioc: str
     main_core: str
@@ -84,6 +82,7 @@ class CostSummary(TypedDict, total=False):
     quality: str
     pipeline: str
     scale: float
+    render: dict
     renderdoc: bool
     total: float
     fragment: float
@@ -93,6 +92,7 @@ class CostSummary(TypedDict, total=False):
     coverage: dict
     priced: int
     pixel_methods: dict
+    vertex_methods: dict
     shaders: list
     unpriced_draws: int
     unpriced_compute: int

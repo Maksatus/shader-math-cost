@@ -7,21 +7,20 @@ const STAGE = {opaque: "непрозрачное", transparent: "прозрач�
 const PART = {fragment: "пиксели", vertex: "вершины", compute: "compute"};
 const UNIT = {fragment: "пикс.", vertex: "верш.", compute: "потоков"};
 const FLAG = {spilling: "spilling", regs_gt32: "регистров > 32", low_fp16: "мало fp16", dynamic_loop: "динамический цикл", sfu_bound: "упор в SFU"};
-// the pipes of a Mali shader core (malioc): the bound is the busiest one, its cycles are the price
 const PIPE = {
-  arith: ["A", "арифметика", "Арифметика: FMA, CVT и SFU вместе"],
-  fma: ["FMA", "умножение/сложение", "FMA — умножение и сложение (+ * mad lerp dot). Упор: меньше математики, half вместо float"],
-  cvt: ["CVT", "сравнения/типы", "CVT — сравнения, выбор и преобразования типов (min max clamp step ?:, half↔float). Упор: меньше сравнений и преобразований"],
-  sfu: ["SFU", "спецфункции", "SFU — спецфункции (rcp sqrt exp log sin cos) и деление. Упор: заменить их приближениями"],
-  ls: ["LS", "память", "LS — load/store: чтение буферов (свет Forward+, константы), спилл регистров, атомики. Упор: убрать спилл, меньше чтений буферов в циклах"],
-  v: ["V", "varyings", "V — интерполяция varyings из вершинного шейдера. Упор: меньше varyings, передавать в half"],
-  t: ["T", "текстуры", "T — выборки и фильтрация текстур. Упор: меньше выборок, ASTC, mip-map, проще фильтрация"],
+  arith: ["A", "арифметика"],
+  fma: ["FMA", "умножение/сложение"],
+  cvt: ["CVT", "сравнения/типы"],
+  sfu: ["SFU", "спецфункции"],
+  ls: ["LS", "память"],
+  v: ["V", "varyings"],
+  t: ["T", "текстуры"],
 };
 const SITE_REF = location.protocol.startsWith("http") && /^(127\.0\.0\.1|localhost)$/.test(location.hostname)
   ? "/site/reference.html" : "https://maksatus.github.io/shader-math-cost/reference.html";
 const SITE_COST = SITE_REF + "#cost";
-const boundTag = b => b && b.length ? b.map(x => { const p = PIPE[x] || [x, "", ""];
-  return `<span class="bnd" title="${esc(p[2] + " · клик — справочник")}" onclick="window.open(SITE_REF + '#fix', '_blank')">${esc(p[0])}${p[1] ? ` <i>${esc(p[1])}</i>` : ""}</span>`; }).join(" + ") : "—";
+const boundTag = b => b && b.length ? b.map(x => { const p = PIPE[x] || [x, ""];
+  return `<span class="bnd" onclick="window.open(SITE_REF + '#fix', '_blank')">${esc(p[0])}${p[1] ? ` <i>${esc(p[1])}</i>` : ""}</span>`; }).join(" + ") : "—";
 const costHelp = `<a href="${SITE_COST}" target="_blank" class="costhelp">как считается цена — справочник ↗</a>`;
 const refLink = (id, text) => `<a href="${SITE_REF}#${id}" target="_blank" class="costhelp">${text} — справочник ↗</a>`;
 let core = D && D.main_core, hideSmall = true, query = "", open = new Set();
@@ -38,8 +37,7 @@ function side(i, tag) {
     <div class="small muted">${esc(i.api || "")} · malioc ${esc(i.malioc || "?")}${i.resolution ? " · " + i.resolution.join("×") : ""}${i.quality ? " · " + esc(i.quality) : ""}</div></div>`;
 }
 
-// the words of a warning {code, ...params}, of a part's explanation {ops, loop, n} and of a vertex candidate's
-// label (views/messages.py, embedded as MSG); an older result holds the words themselves
+// older results hold plain strings instead of {code, ...params}
 const fill = (t, p) => t.replace(/\{(\w+)\}/g, (_, k) => p[k] ?? "?");
 const msg = w => typeof w === "string" ? w : (w.side ? w.side + ": " : "") + fill(MSG.warnings[w.code] || w.code || "", w);
 const plural = (n, one, few, many) => { const k = n % 100;

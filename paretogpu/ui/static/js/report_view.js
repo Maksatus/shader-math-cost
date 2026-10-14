@@ -17,8 +17,6 @@ function openReport(x, which) {
   $("#repName").textContent = x.name;
   showRep(which || "cost");
 }
-// the snapshot's pages by the kind of result (x.pages: /api/reports): the frame report ("cost") or its "why heavy"
-// analysis ("hotspots", made on demand: every line of the top shaders in malioc)
 function showRep(which) {
   const x = curRep;
   document.querySelectorAll("#repWhich button").forEach(b => b.classList.toggle("on", b.dataset.w === which));
@@ -43,5 +41,3 @@ $("#repRecalc").onclick = () => {
   setRecalc({name: curRep.name, path: curRep.path || s.path, project: curRep.project || s.project});
   tab("run");
 };
-
-/* ---------- site ---------- */

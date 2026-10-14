@@ -1,10 +1,4 @@
-"""Publishing a result (model/result.py): its data, its page and the description every list of results reads.
-
-  publish(kind, doc, folder, snapshot)  writes <kind>.json + <kind>.html (unless the command writes its own page)
-                                        and <kind>.result.json
-  adopt(kinds)                          describes the results made before descriptions existed (once)
-kind: a ResultKind of the command (features/spec.py): name, title(doc), summary(doc), data, page, own_page.
-"""
+"""Writes <kind>.json + <kind>.html (unless kind.own_page) + <kind>.result.json; kind: features/spec.py ResultKind."""
 import json
 import os
 import time
@@ -23,7 +17,7 @@ def meta_of(kind, doc, folder, snapshot=None) -> ResultMeta:
 
 
 def publish(kind, doc, folder, snapshot=None):
-    """Write the result; returns the path of its page."""
+    """-> path of its page."""
     if not kind.own_page:
         html.write_result(doc, folder, kind.name, kind.title(doc))
     results.write_meta(folder, meta_of(kind, doc, folder, snapshot))
@@ -31,7 +25,7 @@ def publish(kind, doc, folder, snapshot=None):
 
 
 def adopt(kinds):
-    """Results in out/ that have their data but no description yet (made before descriptions existed) get one."""
+    """Writes the missing <kind>.result.json for results in out/ that have only their data."""
     for d in results.folders():
         snapshot = os.path.basename(d) if workspace.is_snapshot(d) else None
         for kind in kinds:

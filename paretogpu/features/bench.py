@@ -1,6 +1,3 @@
-"""The function cost site (docs/): `python -m paretogpu bench` measures every function on every Mali GPU
-(app/bench.py) -> mali_math_cost.csv, then builds the site's data (views/site.py) -> data.js, summary_*.csv.
-"""
 import csv
 import os
 

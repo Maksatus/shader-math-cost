@@ -1,9 +1,5 @@
-"""core/loops.py: dynamic loops forced to n iterations, in GLSL text and binary SPIR-V (corpus/synthetic
-loop_dynamic.frag and its glslang SPIR-V in testdata/spirv). The malioc and spirv-val checks are skipped when
-the tools are not installed.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""core/loops.py: dynamic loops forced to n iterations (GLSL and SPIR-V), loop bounds, loop pricing."""
+import base64
 import glob
 import os
 import struct
@@ -16,9 +12,10 @@ from paretogpu.app import rules
 from paretogpu.core import loops
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GLSL = os.path.join(HERE, "..", "paretogpu", "corpus", "synthetic", "loop_dynamic.frag")
+GLSL = os.path.join(HERE, "data", "glsl", "loop_dynamic.frag")
 SPV = os.path.join(HERE, "data", "spirv", "loop_dynamic.frag.spv")
 STATIC_SPV = os.path.join(HERE, "data", "spirv", "tex_x24.frag.spv")
+LIGHTS_SPV = os.path.join(HERE, "data", "spirv", "loop_lights.frag.spv")  # its source: loop_lights.frag
 
 
 def spirv_val():
@@ -62,9 +59,16 @@ class GlslTest(unittest.TestCase):
 
     def test_pixels_split_over_calls(self):
         from paretogpu.app.frame_loops import _split
-        self.assertEqual(_split(16, [(1, 1225346), (2, 48044), (3, 0)]), [(1, 15), (2, 1)])
-        many = _split(16, [(i, 100 + i) for i in range(60)])
-        self.assertEqual(sum(n for _, n in many), 16)  # a batch of many calls: still 16 pixels
+        s = _split(16, [(1, 1225346), (2, 48044), (3, 0)], seed=7)
+        self.assertEqual((sum(n for _, n in s), 3 in dict(s)), (16, False))
+        self.assertEqual(s, _split(16, [(1, 1225346), (2, 48044), (3, 0)], seed=7))
+        batch = [(i, 1000 if i < 10 else 100) for i in range(200)]
+        got = {}
+        for seed in range(200):
+            for eid, n in _split(16, batch, seed):
+                got[eid] = got.get(eid, 0) + n
+        big = sum(n for eid, n in got.items() if eid < 10) / (16 * 200)
+        self.assertAlmostEqual(big, 10000 / 29000, delta=0.03)
         self.assertEqual(_split(16, [(1, 0)]), [])
 
     def test_every_loop_has_its_n(self):
@@ -79,15 +83,25 @@ class GlslTest(unittest.TestCase):
         src = "void main(){ while(true){ if(a) break; while(true){ if(b) break; } } for(int i=0;i<uN;i++){ x+=1.0; } }"
         self.assertEqual(loops.outer_loops(src), [{"nested": True}, {"nested": False}])
         self.assertEqual([(m, k) for m, k, _, _ in loops.plan(src)],
-                         [("base", None), ("zero", 0), ("two", 0), ("word", 0), ("zero", 1), ("two", 1)])
+                         [("base", None), ("zero", 0), ("two", 0), ("word", 0), ("zero", 1), ("two", 1),
+                          ("zero", None)])
         out = loops.force_glsl(src, [3, 0])
         self.assertEqual((out.count("<3;"), out.count("<1;"), out.count("<0;")), (1, 1, 1))  # nested: once
         word = loops.force_glsl(src, 1, [2, 1])
         self.assertEqual((word.count("<2;"), word.count("<1;")), (1, 2))
         p = {"base": {"x": 1.0}, "loops": [{"zero": {"x": 0.5}, "two": {"x": 2.0}, "word": {"x": 1.0}},
                                             {"zero": {"x": 0.8}, "two": {"x": 1.1}, "word": None}]}
-        self.assertEqual(loops.profile(loops.plan(src), [{"x": v} for v in (1.0, 0.5, 2.0, 1.0, 0.8, 1.1)])["loops"],
-                         p["loops"])
+        prof = loops.profile(loops.plan(src), [{"x": v} for v in (1.0, 0.5, 2.0, 1.0, 0.8, 1.1, 0.2)])
+        self.assertEqual((prof["loops"], prof["zero"]), (p["loops"], {"x": 0.2}))
+
+    def test_every_loop_at_zero_is_measured(self):
+        p = {"base": {"ls": 29.0}, "zero": {"ls": 4.0},
+             "loops": [{"zero": {"ls": 20.0}, "two": {"ls": 35.0}, "word": None},
+                       {"zero": {"ls": 25.0}, "two": {"ls": 33.0}, "word": None}]}
+        self.assertEqual(loops.cycles_at(p, 0)["ls"], 4.0)
+        self.assertEqual(loops.cycles_at(p, [0, 1])["ls"], 20.0)
+        self.assertEqual(loops.cycles_at(p, [1, 2])["ls"], 29.0 + 4.0)
+        self.assertEqual(loops.cycles_at(p, [0.5, 0])["ls"], 29.0 - 0.5 * 9.0 - 4.0 + 0.5 * (4.0 - 29.0 + 9.0 + 4.0))
 
     def test_bounds_traced_to_uniforms(self):
         src = """uniform 	vec4 CR_Params0;
@@ -112,8 +126,63 @@ void main(){
         self.assertEqual([loops.bound_value(x, params) for x in b], [None, 128.0, 5.0, None])
         self.assertIsNone(loops.bound_value(b[1], {}))  # the event has no such parameter: default n
 
+    def test_bounds_that_are_not_the_trip_count(self):
+        head = "uniform \tvec4 P;\nuint b;\nint k;\nvoid main(){\n"
+        cases = [("for(uint i = 1u ; i<uint(P.w) ; i++){ x += 1.0; }", "uint(P.w) - 1", 4.0),
+                 ("for(uint i = 0u ; i<uint(P.w) ; i+=2u){ x += 1.0; }", None, None),
+                 ("b = uint(P.w);\nfor(uint i = 0u ; i<b ; i++){ b = b + 1u; }", None, None),
+                 ("for(uint i = 0u ; i<uint(P.w) ; i++){ i += 1u; }", None, None),
+                 ("b = uint(P.w);\nb += 3u;\nfor(uint i = 0u ; i<b ; i++){ x += 1.0; }", None, None),
+                 ("k = int(P.x) + int(P.y);\nfor(int i = 0 ; i<k ; i++){ x += 1.0; }", "int(P.x) + int(P.y)", 2.0),
+                 ("b = uint(P.w) + 4294967295u;\nfor(uint i = 0u ; i<b ; i++){ x += 1.0; }", "int(P.w) + -1", 4.0)]
+        for code, text, value in cases:
+            b = loops.glsl_bounds(head + code + "\n}")
+            self.assertEqual(loops.bound_text(b[0]) is not None, text is not None, code)
+            if value is not None:
+                self.assertEqual(loops.bound_value(b[0], {"P": [1.5, 1.5, 0.0, 5.0]}), value, code)
+
     def test_static_loop_is_kept(self):
         self.assertIsNone(loops.force_glsl("void main(){ for(int i = 0 ; i<4 ; i++){ x += 1.0; } }", 2))
+
+
+def _dxbc_parser():
+    """The DXBC parsing functions of rd_loops.py (the script itself runs only inside qrenderdoc)."""
+    import ast
+    import re
+    import paretogpu
+    path = os.path.join(os.path.dirname(paretogpu.__file__), "adapters", "renderdoc", "rd_loops.py")
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    keep = [n for n in tree.body if isinstance(n, ast.FunctionDef)
+            and n.name in ("_instructions", "_reg", "_constant", "outer_loops")]
+    ns = {"re": re}
+    exec(compile(ast.Module(body=keep, type_ignores=[]), path, "exec"), ns)
+    return ns
+
+
+class DxbcTest(unittest.TestCase):
+    def test_outer_dynamic_loops(self):
+        dis = """   0: mov r0.x, l(0)
+   1: loop
+   2:   uge r0.y, r0.x, l(4)
+   3:   breakc_nz r0.y
+   4:   mov r1.x, cb0[3].w
+   5:   loop
+   6:     ige r1.y, r1.z, r1.x
+   7:     breakc_nz r1.y
+   8:     continuec_nz r2.x
+   9:     iadd r1.z, r1.z, l(1)
+  10:   endloop
+  11:   iadd r0.x, r0.x, l(1)
+  12: endloop
+  13: loop
+  14:   breakc_z r3.x
+  15:   loop
+  16:     breakc_z r4.x
+  17:   endloop
+  18: endloop"""
+        loops_, nested, continues = _dxbc_parser()["outer_loops"](dis)
+        self.assertEqual((loops_, nested, continues), ([(5, 10), (13, 18)], [False, True], [[8], []]))
 
 
 class SpirvTest(unittest.TestCase):
@@ -150,6 +219,26 @@ class SpirvTest(unittest.TestCase):
         self.assertAlmostEqual(c2 - c1, c1 - c0, delta=0.25 * (c1 - c0))
         self.assertAlmostEqual(loops.cycles_at(p, 4)["sfu"], c1 + 3 * (c2 - c1))
         self.assertEqual(loops.cycles_at(p, 0)["sfu"], c0)
+
+
+class SpirvBoundsTest(unittest.TestCase):
+    def test_unity_light_loop(self):
+        data = read(LIGHTS_SPV, True)
+        b = loops.spirv_bounds(data)
+        self.assertEqual(len(b), len(loops.force_spirv(data, 2, describe=True)))
+        self.assertEqual(b[0], ["int", ["min", ["b", 1, 0, 16, "f"], ["b", 1, 2, 180, "f"]]])
+        self.assertIsNone(b[1])  # its bound is stored in a branch: not known before the loop
+        blocks = {"@1.0": base64.b64encode(struct.pack("<8f", 0, 9, 0, 0, 3.7, 0, 0, 0)).decode(),
+                  "@1.2": base64.b64encode(bytes(176) + struct.pack("<4f", 1, 2, 0, 0)).decode()}
+        self.assertEqual(loops.bound_value(b[0], blocks), 2.0)  # int(min(3.7, 2))
+        self.assertIsNone(loops.bound_value(b[0], {"@1.0": blocks["@1.0"]}))  # a block the call did not read
+        self.assertIsNone(loops.bound_value(["b", 1, 0, 64, "f"], blocks))  # past the bytes of the block
+        self.assertEqual(loops.bound_text(b[0]), "int(min(block 1.0 +16 (f), block 1.2 +180 (f)))")
+
+    def test_glslang_counter(self):
+        self.assertEqual(loops.spirv_bounds(read(SPV, True)), [["b", 0, 0, 0, "i"]])
+        self.assertIsNone(loops.spirv_bounds(read(STATIC_SPV, True)))  # no dynamic loop
+
 
 if __name__ == "__main__":
     unittest.main()

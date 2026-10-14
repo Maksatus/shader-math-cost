@@ -1,9 +1,4 @@
-"""A shader variant: what a draw or dispatch of a frame ran, and how its compiled files are named.
-
-VariantKey(shader, subshader, pass_index, pass_name, keywords) of a draw; (compute shader, COMPUTE, 0, kernel, ())
-of a dispatch. The compiled files of a variant live in <variants>/<shader>/ (GLSL for GLES3) and
-<variants>/<shader>_vulkan/ (SPIR-V), named by base_name: readable, unique, short enough for Windows paths.
-"""
+"""A dispatch's VariantKey is (compute shader, COMPUTE, 0, kernel, ())."""
 import hashlib
 import json
 import re
@@ -17,10 +12,14 @@ PLATFORM = {v: k for k, v in API.items()}  # malioc API -> export platform
 STAGE = {"vert": "vertex", "frag": "fragment", "comp": "compute"}
 SHORT = {v: k for k, v in STAGE.items()}
 COMPUTE = -1  # subshader of a compute kernel key
-# ComputeShader.FindKernel / HasKernel and ShaderUtil.CompileComputeShaderVariant called from a run_script crashed
-# the 6000.3.18f1 editor three times (2026-10-06), on built-in and package compute shaders alike
+CODE = "spirv "  # the "keyword" of a variant a device ran: the hash of its code (VariantKey.of)
+# ComputeShader.FindKernel / HasKernel and ShaderUtil.CompileComputeShaderVariant from a run_script crash the
+# 6000.3.18f1 editor, on built-in and package compute shaders alike
 COMPUTE_NOT_COMPILED = "compute kernel not compiled: compiling compute shaders from a script crashes Unity 6000.3"
 NOT_FINISHED = "no output: the Unity run did not finish"  # transient: compiled again next time
+OUTDATED = "only files of an older version of the shader: not used"
+STOPPED = "the Unity run stopped at this variant (the editor crashed or the connection broke)"
+STOPPED_TWICE = "two Unity runs stopped at this variant: not compiled again until the shader changes (--retry-failed)"
 
 
 def slug(s):
@@ -40,16 +39,20 @@ class VariantKey:
 
     @classmethod
     def of(cls, ev):
-        """The variant a draw or dispatch event ran."""
+        """A device-frame event (ev["code"]) -> identify()'s project variant if known, else its code ("spirv <hash>" in
+        place of keywords)."""
+        if (ev.get("code") or {}).get("variant"):
+            return cls.from_list(ev["code"]["variant"])
+        code = (f"{CODE}{ev['code']['hash']}",) if ev.get("code") else None
         if ev["kind"] == "compute":
             c = ev.get("compute") or {}
-            return cls(c.get("shader") or "", COMPUTE, 0, c.get("kernel") or "", ())
-        return cls(ev["shader"], ev["subshader"] or 0, ev["pass_index"] or 0, ev["pass"] or "",
-                   tuple(sorted(ev["keywords"])))
+            return cls(c.get("shader") or "", COMPUTE, 0, c.get("kernel") or "", code or ())
+        return cls(ev["shader"] or "", ev["subshader"] or 0, ev["pass_index"] or 0, ev["pass"] or "",
+                   code or tuple(sorted(ev["keywords"])))
+
 
     @classmethod
     def from_list(cls, x):
-        """From its JSON form [shader, subshader, pass index, pass name, [keywords]]."""
         return cls(x[0], x[1], x[2], x[3], tuple(x[4]))
 
     def to_list(self):
@@ -61,7 +64,6 @@ class VariantKey:
 
     @property
     def stages(self):
-        """Short stage names of its files: ("vert", "frag"), or ("comp",) for a kernel."""
         return ("comp",) if self.is_compute else ("vert", "frag")
 
     def __str__(self):
@@ -71,7 +73,7 @@ class VariantKey:
 
     @property
     def base_name(self):
-        """File name stem: readable, unique (hash of the whole key), not too long for Windows paths."""
+        """Unique (hash of the whole key), short enough for Windows paths."""
         kw = slug("_".join(self.keywords)) or "none"
         h = hashlib.sha1(json.dumps(self.to_list()).encode()).hexdigest()[:8]
         stem = (f"{slug(self.pass_name)}" if self.is_compute
@@ -79,21 +81,20 @@ class VariantKey:
         return (stem[:72] + "__" + h) if len(stem) > 80 else f"{stem}__{h}"
 
     def folder(self, platform):
-        """Folder of its files of one platform, in the variants folder."""
         return (slug(self.shader) + ("_compute" if self.is_compute else "")
                 + ("" if platform == "gles3" else f"_{platform}"))
 
     def as_event(self):
-        """A draw event that names this variant (materials have variants but no frame events)."""
+        """Materials have variants but no frame events."""
         return {"index": -1, "kind": "draw", "shader": self.shader, "subshader": self.subshader,
                 "pass_index": self.pass_index, "pass": self.pass_name, "keywords": list(self.keywords)}
 
 
 class VariantState(TypedDict, total=False):
-    """The compiled and measured variants of a frame or of materials (app/variants.run)."""
     keys: list            # [VariantKey]
     files: dict           # {VariantKey: {(platform, short stage): file relative to the variants folder}}
     errors: dict          # {VariantKey: [error]}
     measurements: dict    # {file: {core: Measurement}} (model/measurement.py)
     checked: bool         # the files were checked against the shaders in the open editor
+    captured: set         # the variants whose files are the code a device ran (app/variants.place_captured)
     loops: dict           # {file: {core: LoopProfile}} of the files with dynamic loops (app/variants.loops_of)

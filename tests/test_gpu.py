@@ -1,8 +1,4 @@
-"""adapters/gpu.py: the rules measure through a GPU backend; another backend plugs in without touching them.
-A fake backend, a temporary shader file.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""adapters/gpu.py: rules measure through a pluggable GPU backend."""
 import os
 import shutil
 import tempfile

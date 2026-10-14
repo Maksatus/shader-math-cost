@@ -45,7 +45,6 @@ function showCompare() {
 $("#cmpA").onchange = showCompare;
 $("#cmpB").onchange = showCompare;
 $("#cmpSwap").onclick = () => { const a = $("#cmpA").value; $("#cmpA").value = $("#cmpB").value; $("#cmpB").value = a; showCompare(); };
-/* ---------- compare: two materials ---------- */
 let cmpMode = store.get("compareMode") === "materials" ? "materials" : "frames";
 let MATS = [], matsOf = null, matJobId = null, matTimer = null;
 function setMode(m) {
@@ -83,7 +82,7 @@ async function loadMatList() {
   matStatus();
 }
 function suggest(inp, dl) {
-  // the datalist holds the 60 best matches of what is typed: thousands of options make the browser slow
+  // capped at 60 options: thousands make the datalist slow
   const q = inp.value.trim().toLowerCase();
   const hits = [];
   for (const m of MATS) {
@@ -102,7 +101,6 @@ function matStatus() {
   store.set("matcompare", {project: matProject(), a: $("#matA").value.trim(), b: $("#matB").value.trim()});
   const busy = !!(job && job.status === "running");
   $("#matRun").disabled = !(a && b) || busy;
-  $("#matRun").title = busy ? "Уже идёт запуск" : !(a && b) ? "Выберите оба материала из списка" : "";
   return {a, b};
 }
 for (const [inp, dl] of [["#matA", "#dl-matA"], ["#matB", "#dl-matB"]]) {
@@ -186,13 +184,11 @@ function matProgress() {
     <pre class="log">${esc(tail)}</pre><div class="small muted">Весь лог — во вкладке «Проверка кадра».</div>`);
 }
 
-/* ---------- one material ---------- */
-const MATS_OF = new Map();  // project -> its materials (for the pickers)
+const MATS_OF = new Map();
 async function materialsOf(project) {
   if (!MATS_OF.has(project)) MATS_OF.set(project, (await api("/api/materials?project=" + encodeURIComponent(project))).materials || []);
   return MATS_OF.get(project);
 }
-// a dropped material the cached list does not have (added by a branch switch): load the list again
 function forgetMats(project) {
   MATS_OF.delete(project);
   if (matsOf === project) matsOf = null;

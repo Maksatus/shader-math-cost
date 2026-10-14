@@ -1,10 +1,7 @@
-// One run of a ParetoGPU entry in the editor: the protocol of adapters/unity/bridge.py, compiled into every script
-// (bridge.py puts this file in front of the script it runs).
-//
-// Python writes <out>/<name>_config.json with "out" (absolute folder) and "name"; the entry opens the job with it and
-// answers in <out>/<name>.json, reports progress in <name>.progress and fails with <name>.error: "[code] message"
-// (model/errors.py: the UI has a hint for the code; "error" leaves the caller's own). An entry that works on editor
-// ticks returns "started" at once, the others return when the answer is written.
+// Job protocol of adapters/unity/bridge.py, prepended to every script. Config <out>/<name>_config.json {"out"
+// (absolute), "name", ...}; answer <out>/<name>.json, progress <name>.progress, failure <name>.error "[code] message"
+// (model/errors.py codes; "error" = the caller's own). Tick-driven entries return "started" at once, the others after
+// the answer.
 
 using System;
 using System.IO;
@@ -34,7 +31,7 @@ public static class ParetoGpuJob
     public static string Folder { get; private set; }
     static string name;
 
-    // the config text, for the script's own Config; the files of an earlier run of the job are removed
+    // -> the config text for the script's own Config; clears files of an earlier run
     public static string Open(string configPath)
     {
         var text = File.ReadAllText(configPath);

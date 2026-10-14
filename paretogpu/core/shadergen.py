@@ -1,17 +1,9 @@
-"""Shader source generator for the math-cost benchmark.
+"""Benchmark shaders: a chain x = expr(x, a, b, ...) + w_i. Operands are varyings: Mali hoists uniform-only chains to
+one op. Float shaders must stay byte-identical (results cached by source text): emit int/matrix/helper code only when
+used."""
 
-Each test shader runs a dependency chain of N steps:
-    x = <expr(x, a, b, c)> + w_i
-Operands a/b/c/w come from varyings (not uniforms): the Mali compiler folds
-chains of uniform-only operands into a single op (uniform computation hoisting).
-
-Float vector/scalar shaders must stay byte-identical between versions (results
-are cached by source text), so int/matrix/helper additions are emitted only
-when the shader needs them.
-"""
-
-N_POOL_VARYINGS = 8          # vP0..vP7 -> 32 distinct operands per type
-N_INT_VARYINGS = 4           # vI0..vI3 (flat) -> 16 distinct int operands
+N_POOL_VARYINGS = 8
+N_INT_VARYINGS = 4
 
 GLSL_DIM = {"float": 1, "vec2": 2, "vec3": 3, "vec4": 4,
             "int": 1, "ivec2": 2, "ivec4": 4, "uint": 1, "uvec2": 2, "uvec4": 4}
@@ -27,7 +19,6 @@ def is_int(t):
 
 
 def pool(k, t):
-    """k-th distinct varying operand of GLSL type t."""
     if t in MAT_DIM:
         d = MAT_DIM[t]
         return f"{t}(" + ", ".join(pool(k + j * 5, VEC_OF[d]) for j in range(d)) + ")"
@@ -91,9 +82,7 @@ def init_expr(t):
 
 
 def build(api, prec, t, step_expr, n, combine=True, prelude=""):
-    """step_expr: format string with {x},{a},{b},{s} ({s} = scalar operand).
-    combine: append '+ w_i' after each step (breaks idempotent folding).
-    prelude: helper functions placed before main()."""
+    """step_expr fields: {x} {a} {b} {s} (scalar) {T}; combine appends + w_i so idempotent steps are not folded."""
     s = header(api, prec, t, need_m2="uM2" in step_expr,
                samplers=[n for n in SAMPLERS if n in step_expr])
     s += prelude

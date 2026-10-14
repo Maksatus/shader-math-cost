@@ -16,19 +16,14 @@ function renderCost() {
   </div>
   <div class="stagebar" id="stagebar"></div>
   <div class="stages" id="stages"></div>
-  <section id="loops"></section>
   <section id="memory"></section>
   <section id="main"></section>
   <section id="missing"></section>
   <section id="project"></section>`;
   Object.assign(AUTO_TIPS, {
-    "повторов цикла, n": "Сколько раз выполняются динамические циклы во всех шейдерах с ↻",
     "Шейдер · пасс": "Шейдер и его проход (pass): у одного шейдера несколько проходов, у каждого своя цена",
-    "в кадре": "Шейдеры проекта, которые есть в этом кадре", "не в кадре": "Шейдеры материалов проекта, которых нет в этом кадре",
-    "события": "Каждое событие (draw / dispatch) отдельно",
   });
   const TOP = 50;
-  const CUM_HINT = "Сумма «% шейдерных циклов» этой строки и всех выше: «первые N строк — это X% циклов кадра». Только при сортировке по итогу.";
   const STAGE_NAMES = {post: "пост", opaque: "opaque", transparent: "transparent", shadow: "тени", prepass: "prepass",
                        ui: "UI", compute: "compute", other: "прочее"};
   const STAGE_COLORS = {post: "#a594f0", opaque: "#7fb2e5", transparent: "#6cc4c4", shadow: "#8b939c", prepass: "#d9b36e",
@@ -47,21 +42,21 @@ function renderCost() {
 
   const f = D.frame, cov = D.coverage;
   document.title = document.getElementById("title").textContent =
-    `Стоимость кадра: ${f.project ? f.project.split(/[\\/]/).pop() : ""} ${D.frame_size || ""}`.trim();
+    `Стоимость кадра: ${f.project ? f.project.split(/[\\/]/).pop() : ""} ${((D.profile || {}).frame_size || []).join("×")}`.trim();
+  const dev = f.source === "device" ? f.device || {} : null;
   document.getElementById("meta").textContent =
-    `Unity ${f.unity} · ${f.graphics_api} в редакторе, quality ${f.quality}, ${f.play_mode ? "Play Mode" : "Edit Mode"} · ` +
+    (dev ? `Телефон ${dev.model || "?"} · ${dev.gpu || "GPU ?"} · ${f.graphics_api}`
+      + `${dev.captured_at ? " · " + when(dev.captured_at) : ""}${dev.app ? " · " + dev.app : ""} · `
+      : `Unity ${f.unity} · ${f.graphics_api} в редакторе, quality ${f.quality}, ${f.play_mode ? "Play Mode" : "Edit Mode"} · `) +
     `цены: malioc ${D.malioc || ""}, ${D.api}` + (D.variants_checked === false ? " (варианты не сверены с шейдерами)" : "") + ` · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
     Object.entries(D.pixel_methods).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${D.frame_dir || ""}`;
 
-  // the settings the frame is drawn with (core/profile.py): quality, build target, pipeline asset, the frame's scale
-  const PROF = D.profile || {recorded: false, warnings: []};
+  const PROF = D.profile || {warnings: []};
   const size = a => a ? a.join("×") : "?";
-  document.getElementById("profile").textContent = !PROF.recorded ? "" :
-    `Quality ${PROF.quality} · платформа ${PROF.build_target || "?"}`
-    + (PROF.pipeline ? ` · пайплайн ${PROF.pipeline} (${PROF.pipeline_class}${PROF.asset_scale ? ", RenderScale " + PROF.asset_scale : ""})` : "")
-    + ` · Game view ${size(PROF.screen)}, кадр ${size(PROF.frame_size)}` + (PROF.frame_scale ? ` (масштаб ${PROF.frame_scale})` : "")
-    + (PROF.features && PROF.features.length ? " · features: " + PROF.features.map(x => x.name + (x.active ? "" : " (выкл.)")).join(", ") : "");
-  document.getElementById("profile").title = Object.entries(PROF.fields || {}).map(([k, v]) => `${k} = ${v}`).join("\n");
+  const R = PROF.render || {}, screen = `${dev ? "экрана" : "Game view"} ${size(PROF.screen)}`;
+  document.getElementById("profile").textContent = `Кадр ${size(R.size)}` + (R.scale ? ` (масштаб ${R.scale} от ${screen})` : "")
+    + (R.msaa ? ` · MSAA ${R.msaa}×` : "") + (R.color ? ` · ${R.color}` : "")
+    + ` · тени ${(R.shadow_maps || []).length ? R.shadow_maps.map(size).join(", ") : "нет"} · проходы: ${(R.passes || []).join(", ")}`;
   {
     const w = PROF.warnings || [], el = document.getElementById("profileWarn");
     el.classList.toggle("hide", !w.length);
@@ -70,7 +65,7 @@ function renderCost() {
 
   const coreSeg = document.getElementById("core");
   D.cores.forEach(c => { const b = document.createElement("button"); b.dataset.v = c.name;
-    b.textContent = short(c.name) + (c.name === D.main_core ? " ★" : ""); b.title = c.arch;
+    b.textContent = short(c.name) + (c.name === D.main_core ? " ★" : "");
     b.onclick = () => { st.core = c.name; draw(); }; coreSeg.appendChild(b); });
   const bySeg = document.getElementById("by");
   BY.forEach(([k, l]) => { const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
@@ -86,19 +81,10 @@ function renderCost() {
   }
   document.getElementById("costLink").href = SITE_REF + "#report";
   const pathNote = p => p === "total" ? " · total" : String(p || "").startsWith("loop") ? " · цикл " + esc(p.slice(5)) : "";
-  // a dynamic loop (lights per pixel, ray steps): its price at 0, 1, 2, 4, 8 repeats; the used one is in px_path "loop n=2"
-  const loopN = () => String((D.loops || {}).n ?? "");  // the default n: the column of the range that is the price
-  const byN = c => c.px_price_by_n ? "цена пикселя при числе повторов цикла: " + Object.entries(c.px_price_by_n)
-    .map(([n, v]) => `${n} → ${cyc(v)}${n === loopN(c) ? " (в итоге)" : ""}`).join(" · ") : "";
-  // what every outer loop of the shader costs at its number of repeats (core/pricing.loop_parts) and where that
-  // number is from (r.loop.loops: a uniform of the event, the event's pixels in the RenderDoc capture, the shader's
-  // override or the default n), in code order
   const repeats = n => Number.isInteger(+n) ? plural(+n, "повтор", "повтора", "повторов") : `${(+n).toFixed(2)} повтора в среднем`;
   const loopFrom = s => !s ? "" : s.from === "uniform" ? `: ${s.bound} = ${+Number(s.value).toFixed(3)}`
     : s.from === "frame" ? `, из кадра: ${plural(s.pixels, "пиксель", "пикселя", "пикселей")} в RenderDoc`
-    : s.from === "override" ? ", задано для шейдера" : ", по умолчанию";
-  // the event still has a loop whose number of repeats the frame does not give: the prices at n = 0..8 mean something
-  const guessed = r => !r.loop || !(r.loop.loops || []).length || r.loop.loops.some(x => x.from === "default");
+    : ", по умолчанию";
   const loopParts = (r, c) => {
     const parts = c.px_loops || c.cs_loops, src = (r.loop || {}).loops || [];
     if (!parts || !parts.length) return "";
@@ -106,35 +92,9 @@ function renderCost() {
     return `из ${cyc(price)} циклов ${c.px_loops ? "пикселя" : "потока"} на циклы шейдера приходится: ` + parts.map((x, i) =>
       `${i + 1}-й (${repeats(x.n)}${loopFrom(src[i])}) — ${cyc(x.cycles)}`).join(" · ");
   };
-  const PARTS_TIP = "Циклы шейдера по порядку в коде. Для каждого — сколько раз он повторяется и откуда это взято: "
-    + "из параметра шейдера этого события (граница цикла — uniform), из кадра (пиксели события отлажены в RenderDoc, "
-    + "среднее по ним), заданное для шейдера число или n по умолчанию. "
-    + "Цена цикла — цена с ним минус цена без него; части узкого места не обязаны складываться в цену.";
-  const loopTip = c => `В шейдере цикл, число повторов которого заранее неизвестно (например, по источникам света на пиксель). `
-    + `Цена посчитана для ${loopN(c) ?? "n"} повторов. ` + (byN(c) ? byN(c)[0].toUpperCase() + byN(c).slice(1) : "");
-  function loopsTable() {
-    const L = D.loops, el = document.getElementById("loops");
-    // nothing to vary when the frame gives the repeats of every loop of every event with pixels
-    if (!L || !L.events || L.unknown === 0) { el.innerHTML = ""; return; }
-    const by = L.by_n[st.core] || {}, ns = Object.keys(by);
-    const names = [...new Set(ns.flatMap(n => Object.keys(by[n].stages)))];
-    const cell = (n, k) => `<td class="num ${String(n) === String(L.n) ? "gl" : ""}">${k}</td>`;
-    el.innerHTML = `<h2 title="Весь кадр, если в каждом шейдере с ↻ цикл повторится n раз (например, n источников света на пиксель). В итоге кадра сейчас n = ${L.n}. Циклы, у которых число повторов взято из параметров события, не меняются.">`
-      + `↻ Кадр при разном числе повторов циклов <small>${L.events} событий с циклами · в итоге n = ${L.n}`
-      + (L.bounded ? ` · у ${L.bounded} событий часть циклов с числом повторов из параметров — они не меняются` : "")
-      + (Object.keys(L.overrides).length ? " · " + Object.entries(L.overrides).map(([k, v]) => esc(k) + " = " + v).join(", ") : "")
-      + (L.unforced.length ? ` · ${L.unforced.length} файлов не удалось — цена по total` : "") + `</small></h2>`
-      + `<div class="wrap"><table><thead><tr><th class="l">повторов цикла, n</th>${ns.map(n => `<th class="num">${n}</th>`).join("")}</tr></thead><tbody>`
-      + `<tr><td class="l">кадр, млн циклов</td>${ns.map(n => cell(n, mc(by[n].total))).join("")}</tr>`
-      + `<tr><td class="l" title="Доля кадра, которую дают события с ↻">доля событий с циклами</td>${ns.map(n => cell(n, pc(by[n].loop_share))).join("")}</tr>`
-      + names.map(k => `<tr><td class="l">${esc(STAGE_NAMES[k] || k)}</td>${ns.map(n => cell(n, pc(by[n].stages[k] || 0))).join("")}</tr>`).join("")
-      + `</tbody></table></div>`;
-  }
-  // memory traffic of the passes and the roofline on the core's device (core/memory.py, plan K2.3)
   const MEM = D.memory;
   const mb = v => v == null ? "—" : (v / 1048576).toFixed(v >= 10485760 ? 1 : 2);
   const ms = v => v == null ? "—" : v.toFixed(v >= 10 ? 1 : 2);
-  // the pass of every event: its bound is shown in the event's details
   const PASS_OF = new Map();
   for (const p of (MEM || {}).passes || []) for (const i of p.events) if (!PASS_OF.has(i)) PASS_OF.set(i, p);
   const passBound = p => ((p.roofline || {})[st.core] || {}).bound;
@@ -148,10 +108,10 @@ function renderCost() {
       const memFrame = R.mem_ms > R.alu_ms;
       const other = MEM.passes.filter(p => passBound(p) === (memFrame ? "alu" : "memory"));
       h += `<p class="verdict"><b>Кадр упирается в ${memFrame ? "память" : "шейдеры"}</b>: шейдеры ${ms(R.alu_ms)} мс, память ${ms(R.mem_ms)} мс.`
-        + (other.length ? ` В ${memFrame ? "шейдеры" : "память"} упираются: ${other.map(p => esc(p.name)).join(", ")}`
+        + (other.length ? ` В ${memFrame ? "шейдеры" : "память"} упираются: ${[...new Set(other.map(p => p.name))].map(esc).join(", ")}`
           + (memFrame ? "." : ` — это ${pc(R.memory_cycles_share)} циклов кадра.`) : "") + `</p>`;
     }
-    const tgt = t => `<span class="kw" title="${t.width}×${t.height} ${esc(t.format)}, ${mb(t.bytes)} МБ">`
+    const tgt = t => `<span class="kw">`
       + `${esc(String(t.name).replace(/_\d+x\d+_.*$/, ""))}${t.depth ? " (глубина)" : ""} `
       + `${t.cleared ? "clear" : t.load ? "<b>L</b>" : "—"}/${t.store ? "<b>S</b>" : "—"}</span>`;
     const passMs = p => { const r = (p.roofline || {})[st.core]; return r ? Math.max(r.alu_ms, r.mem_ms) : null; };
@@ -182,20 +142,22 @@ function renderCost() {
         + `<td class="l tg">${p.targets.map(tgt).join("")}</td>`
         + `<td class="num">${mb(p.bytes.load)}</td><td class="num">${mb(p.bytes.store)}</td><td class="num">${mb(p.bytes.textures)}</td></tr>`;
       if (open) h += `<tr class="det"><td colspan="10"><div class="dl">${plural(p.calls, "вызов", "вызова", "вызовов")} · события ${p.events.map(i => i + 1).join(", ") || "—"}</div>`
+        + ((p.resolves || []).length ? `<div class="dl">Resolve в тайле: ${p.resolves.map(n => `<span class="kw">${esc(n)}</span>`).join("")}</div>` : "")
         + `<div class="dl">Тяжёлые текстуры: `
-        + (p.textures.length ? p.textures.map(t => `<span class="kw" title="${esc(t.format)}">${esc(t.name)} ${t.size.join("×")} — ${mb(t.bytes)} МБ</span>`).join("") : "нет")
+        + (p.textures.length ? p.textures.map(t => `<span class="kw">${esc(t.name)} ${t.size.join("×")} — ${mb(t.bytes)} МБ</span>`).join("") : "нет")
         + `</div></td></tr>`;
     }
     const A = MEM.assumptions;
-    h += `</tbody></table></div><p class="sub" title="Скорость памяти — пиковая, реальная ниже. Вершинные буферы не учтены.">`
+    h += `</tbody></table></div><p class="sub">`
       + (dev ? `${dev.cores} ядер × ${dev.mhz} МГц, память ${dev.gbps} ГБ/с · ` : "")
-      + `за кадр ${mb(T.bytes.total)} МБ · RT сжаты ×${A.afbc} (AFBC), текстуры как ASTC 6×6</p>`;
+      + `за кадр ${mb(T.bytes.total)} МБ · RT сжаты ×${A.afbc} (AFBC), ${A.native ? "текстуры в форматах телефона" : "текстуры как ASTC 6×6"}`
+      + ` · циклы проходов в сумме равны итогу кадра; подгрузка цели в тайл — это байты «Чтение», не циклы</p>`;
     el.innerHTML = h;
   }
   function stages() {
     const g = (D.groups[st.core] || {}).stage || [];
     document.getElementById("stagebar").innerHTML = g.map(a =>
-      `<span title="${esc(STAGE_NAMES[a.key] || a.key)} ${pc(a.share)}" style="width:${100 * a.share}%;background:${STAGE_COLORS[a.key] || STAGE_COLORS.other}"></span>`).join("");
+      `<span style="width:${100 * a.share}%;background:${STAGE_COLORS[a.key] || STAGE_COLORS.other}"></span>`).join("");
     const t = D.totals[st.core] || {};
     document.getElementById("stages").innerHTML =
       `<div class="stage ${st.stage ? "" : "on"}" data-s=""><div class="n">весь кадр · ${short(st.core)}</div><b>${mc(t.total)}</b> <span class="n">млн циклов</span>` +
@@ -218,18 +180,16 @@ function renderCost() {
       a.threads += r.threads || 0; a.compute += c.compute || 0;
       a.fragment += c.fragment; a.vertex += c.vertex; a.total += c.total; a.share += c.share;
       a.stages.add(r.stage); a.shaders.add(r.shader);
-      // prices of the events that did any work (a draw with 0 pixels, e.g. depth-only shadows, says nothing)
+      // a zero-work draw (e.g. depth-only shadow) has no meaningful price
       if (r.kind === "compute") { if (r.threads) a.pxP.push(c.cs_price); }
       else { if (r.pixels) a.pxP.push(c.px_price); if (r.vertices) a.vtxP.push(c.vtx_price); }
     }
-    // the group's price: cycles per pixel / per vertex weighted by the work (compute: per thread)
     for (const a of m.values()) {
       a.px_price = a.pixels + a.threads ? (a.fragment + a.compute) / (a.pixels + a.threads) : null;
       a.vtx_price = a.vertices ? a.vertex / a.vertices : null;
     }
     return [...m.values()];
   }
-  // tooltips of the column headers (the reference explains them in full)
   const HEAD_TIPS = {
     share: "Доля в шейдерных циклах кадра", events: "Сколько событий (draw / dispatch) в группе",
     pixels: "Сколько раз выполнился фрагментный шейдер (метка рядом — откуда число)",
@@ -249,39 +209,25 @@ function renderCost() {
     rows.sort((a, b) => { const x = get(a, k), y = get(b, k); return (x < y ? -1 : x > y ? 1 : 0) * d; });
   }
   const BAD_FLAGS = new Set(["spilling", "regs_gt32"]);
-  const TIPS = {
-    dynamic_loop: "Цикл с заранее неизвестным числом повторов (свет на пиксель, шаги луча): цена зависит от числа повторов, см. ↻",
-    low_fp16: "Мало вычислений в half (fp16). На Mali half вдвое дешевле float — кандидат на перевод в half",
-    regs_gt32: "Больше 32 регистров: GPU держит меньше потоков сразу и хуже прячет задержки текстур",
-    spilling: "Регистров не хватило, данные уходят в память — заметно дороже. Упростите шейдер",
-    sfu_bound: "Упирается в спецфункции (sin, exp, pow, rcp, sqrt…) — замените их приближениями",
-    renderdoc: "Точно: сколько раз реально выполнился шейдер (счётчик RenderDoc)",
-    fullscreen: "Площадь экрана: полноэкранный проход посчитан без RenderDoc",
-    diff: "Оценка: сколько пикселей поменялось в Frame Debugger, обычно занижено",
-    mesh: "Число вершин меша из Frame Debugger",
-    none: "Не посчитано",
-  };
-  const tip = k => esc(TIPS[k] || "");
-  const flagTag = x => `<span class="flag ${x}" title="${tip(x)}">${x}</span>`;
-  const methodTag = m => m ? `<span class="m ${esc(m)}" title="${tip(m)}">${esc(m)}</span>` : "";
+  const flagTag = x => `<span class="flag ${x}">${x}</span>`;
+  const methodTag = m => m ? `<span class="m ${esc(m)}">${esc(m)}</span>` : "";
   function flagCount(flags) {
     if (!flags.length) return "";
     const bad = flags.some(x => BAD_FLAGS.has(x));
-    return ` <span class="fc ${bad ? "bad" : ""}" title="${esc(flags.map(x => x + ": " + (TIPS[x] || "")).join(" · "))}">${bad ? "⚠ " : ""}${flags.length}</span>`;
+    return ` <span class="fc ${bad ? "bad" : ""}">${bad ? "⚠ " : ""}${flags.length}</span>`;
   }
   function detailRow(r, c, cum) {
     const item = (label, value) => `<div><span>${label}</span>${value}</div>`;
-    const range = r.pixels_low != null || r.pixels_high != null ? ` (${num(r.pixels_low)} … ${num(r.pixels_high)})` : "";
     const items = r.kind === "compute"
       ? [item("Потоки", `${num(r.threads)} ${methodTag(r.thread_method)}`),
          item("Цикл / поток", `${cyc(c.cs_price)} · ${boundTag(c.cs_bound)}${pathNote(c.cs_path)}`)]
-      : [item("Пиксели", `${num(r.pixels)} ${methodTag(r.pixel_method)}${range}`),
+      : [item("Пиксели", `${num(r.pixels)} ${methodTag(r.pixel_method)}`),
          item("Цикл / пиксель", `${cyc(c.px_price)} · ${boundTag(c.px_bound)}${pathNote(c.px_path)}`),
          item("Вершины", `${num(r.vertices)} ${methodTag(r.vertex_method)}`),
          item("Цикл / вершина", `${cyc(c.vtx_price)} · ${boundTag(c.vtx_bound)}`),
          item("Итог: пиксели / вершины", `${mc(c.fragment)} / ${mc(c.vertex)} млн`)];
     items.push(item("Регистры", `${c.px_regs ?? "—"}${c.vtx_regs != null ? " / " + c.vtx_regs : ""}${c.px_fp16 != null ? ` · fp16 ${c.px_fp16}%` : ""}`));
-    if (cum != null) items.push(item(`<span title="${CUM_HINT}">Накоплено</span>`, pc(cum)));
+    if (cum != null) items.push(item("Накоплено", pc(cum)));
     const tags = [`событие ${r.index + 1}`, STAGE_NAMES[r.stage] || r.stage];
     const ps = PASS_OF.get(r.index);
     if (ps && passBound(ps)) tags.push(`проход ${ps.name}: упор в ${boundWord(passBound(ps))}`);
@@ -292,8 +238,7 @@ function renderCost() {
     }
     const kws = r.kind === "compute" ? "" : r.keywords.length ? r.keywords.map(k => `<span class="kw">${esc(k)}</span>`).join("") : '<span class="kw">без keywords</span>';
     return `<tr class="det"><td colspan="6"><div class="dg num">${items.join("")}</div>`
-      + (byN(c) && guessed(r) ? `<div class="dl" title="${esc(loopTip(c))}">↻ ${esc(byN(c))}</div>` : "")
-      + (loopParts(r, c) ? `<div class="dl" title="${esc(PARTS_TIP)}">↻ ${esc(loopParts(r, c))}</div>` : "")
+      + (loopParts(r, c) ? `<div class="dl">↻ ${esc(loopParts(r, c))}</div>` : "")
       + (r.pixel_note ? `<div class="dl note">${esc(r.pixel_note)}</div>` : "")
       + (c.flags.length ? `<div class="dl">${c.flags.map(flagTag).join(" ")}</div>` : "")
       + `<div class="dl">${tags.map(t => `<span class="kw">${esc(t)}</span>`).join("")}${kws}</div></td></tr>`;
@@ -318,13 +263,13 @@ function renderCost() {
     for (const r of shown) {
       const c = cost(r); cum += c.share;
       const open = st.open.has(r.index), compute = r.kind === "compute", names = objName(r.object).split(", ");
-      const loop = String(c.px_path || "").startsWith("loop") ? ` <span class="lp" title="${esc(loopTip(c))}">↻</span>` : "";
-      const warn = r.pixel_method === "none" || r.pixel_note ? ` <span class="pw" title="${esc(r.pixel_note || "пиксели не посчитаны")}">!</span>` : "";
+      const loop = String(c.px_path || "").startsWith("loop") ? ` <span class="lp">↻</span>` : "";
+      const warn = r.pixel_method === "none" || r.pixel_note ? ` <span class="pw">!</span>` : "";
       h += `<tr class="r ${open ? "open" : ""}" data-i="${r.index}">`
          + `<td class="l"><div class="pct"><span>${pc(c.share)}</span><i style="width:${Math.max(1, 100 * c.share / (max || 1))}%"></i></div></td>`
-         + `<td class="l"><span class="dot" style="background:${STAGE_COLORS[r.stage] || STAGE_COLORS.other}" title="${esc(STAGE_NAMES[r.stage] || r.stage)}"></span>`
-         + `<span class="sh" title="${esc(objName(r.object))}">${esc(names[0])}</span>${names.length > 1 ? ` <span class="st">+${names.length - 1}</span>` : ""}${flagCount(c.flags)}</td>`
-         + `<td class="l" title="${esc(r.shader)} · ${esc(compute ? "kernel " + r.kernel : r.pass)}"><span class="shn">${esc(r.shader)}</span> <span class="pass">· ${esc(compute ? r.kernel : r.pass)}</span></td>`
+         + `<td class="l"><span class="dot" style="background:${STAGE_COLORS[r.stage] || STAGE_COLORS.other}"></span>`
+         + `<span class="sh">${esc(names[0])}</span>${names.length > 1 ? ` <span class="st">+${names.length - 1}</span>` : ""}${flagCount(c.flags)}</td>`
+         + `<td class="l"><span class="shn">${esc(r.shader)}</span> <span class="pass">· ${esc(compute ? r.kernel : r.pass)}</span></td>`
          + `<td class="num">${num(compute ? r.threads : r.pixels)}${warn}</td>`
          + `<td class="num">${cyc(compute ? c.cs_price : c.px_price)}${loop}</td>`
          + `<td class="num big">${mc(c.total)}</td></tr>`;
@@ -348,7 +293,7 @@ function renderCost() {
       item("Вершины", num(a.vertices)), item("Цикл / вершина, среднее", cyc(a.vtx_price) + range(a.vtxP)),
       item("Итог: пиксели / вершины", `${mc(a.fragment)} / ${mc(a.vertex)} млн`)];
     if (a.threads) items.push(item("Compute", `${num(a.threads)} потоков · ${mc(a.compute)} млн`));
-    if (cum != null) items.push(item(`<span title="${CUM_HINT}">Накоплено</span>`, pc(cum)));
+    if (cum != null) items.push(item("Накоплено", pc(cum)));
     const stagesTag = [...a.stages].map(s => `<span class="kw"><span class="dot" style="background:${STAGE_COLORS[s] || STAGE_COLORS.other}"></span>${esc(STAGE_NAMES[s] || s)}</span>`).join("");
     const shaders = st.by !== "shader" && st.by !== "variant" ? [...a.shaders].map(s => `<span class="kw">${esc(s)}</span>`).join("") : "";
     return `<tr class="det"><td colspan="6"><div class="dg num">${items.join("")}</div>`
@@ -357,7 +302,7 @@ function renderCost() {
   }
   function groupTable() {
     const rows = groupRows();
-    sortRows(rows, (a, k) => k === "name" ? String(a.key).toLowerCase() : a[k] ?? -1);
+    sortRows(rows, (a, k) => k === "name" ? String(a.key).toLowerCase() : k === "pixels" ? a.pixels + a.threads : a[k] ?? -1);
     const max = Math.max(...rows.map(a => a.share), 0);
     const shown = st.all ? rows : rows.slice(0, TOP);
     const byTotal = (st.sort[0] === "total" || st.sort[0] === "share") && st.sort[1] < 0;
@@ -371,11 +316,11 @@ function renderCost() {
     for (const a of shown) {
       cum += a.share;
       const open = st.open.has("g:" + st.by + ":" + a.key);
-      const dots = [...a.stages].map(s => `<span class="dot" style="background:${STAGE_COLORS[s] || STAGE_COLORS.other}" title="${esc(STAGE_NAMES[s] || s)}"></span>`).join("");
+      const dots = [...a.stages].map(s => `<span class="dot" style="background:${STAGE_COLORS[s] || STAGE_COLORS.other}"></span>`).join("");
       const sub = st.by === "object" || st.by === "rt" ? ` <span class="st">${esc([...a.shaders].join(", "))}</span>` : "";
       h += `<tr class="r ${open ? "open" : ""}" data-g="${esc("g:" + st.by + ":" + a.key)}">`
          + `<td class="l"><div class="pct"><span>${pc(a.share)}</span><i style="width:${Math.max(1, 100 * a.share / (max || 1))}%"></i></div></td>`
-         + `<td class="l" title="${esc(a.key)}"><span class="dots">${dots}</span>${groupLabel(a)}${sub}</td>`
+         + `<td class="l"><span class="dots">${dots}</span>${groupLabel(a)}${sub}</td>`
          + `<td class="num">${a.events}</td><td class="num">${num(a.pixels + a.threads)}</td>`
          + `<td class="num">${cyc(a.px_price)}</td><td class="num big">${mc(a.total)}</td></tr>`;
       if (open) h += groupDetail(a, byTotal ? cum : null);
@@ -426,7 +371,7 @@ function renderCost() {
       const p = r.prices[main] || {}, f = (r.in_frame || {})[main];
       const open = st.open.has("p:" + r._id);
       h += `<tr class="r ${open ? "open" : ""}" data-g="p:${r._id}">`
-         + `<td class="l" title="${esc(r.shader)} · ${esc(r.pass)}"><span class="dot" style="background:${r.frame_events ? "var(--accent)" : "var(--line)"}" title="${r.frame_events ? "есть в кадре" : "нет в кадре"}"></span>`
+         + `<td class="l"><span class="dot" style="background:${r.frame_events ? "var(--accent)" : "var(--line)"}"></span>`
          + `<span class="shn">${esc(r.shader)}</span> <span class="pass">· ${esc(r.pass)}</span>${flagCount(p.flags || [])}</td>`
          + `<td class="num">${r.materials.length}</td>`
          + `<td class="num big">${cyc(p.px_price)}${String(p.px_path || "").startsWith("loop") ? ' <span class="lp">↻</span>' : ""}</td>`
@@ -469,7 +414,7 @@ function renderCost() {
     pfSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.pf));
     const proj = st.tab === "project", passes = st.tab === "passes";
     document.querySelectorAll(".project-only").forEach(el => el.classList.toggle("hide", !proj));
-    for (const id of ["stagebar", "stages", "loops", "main", "missing"]) document.getElementById(id).classList.toggle("hide", st.tab !== "frame");
+    for (const id of ["stagebar", "stages", "main", "missing"]) document.getElementById(id).classList.toggle("hide", st.tab !== "frame");
     document.getElementById("memory").classList.toggle("hide", !passes);
     bySeg.closest(".group").classList.toggle("hide", st.tab !== "frame");
     for (const id of ["q", "all"]) document.getElementById(id).closest(".group").classList.toggle("hide", passes);
@@ -495,7 +440,6 @@ function renderCost() {
     bySeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.by));
     document.getElementById("all").textContent = st.all ? `Только топ-${TOP}` : "Показать все";
     stages();
-    loopsTable();
     document.getElementById("main").innerHTML = st.by === "event" ? eventsTable() : groupTable();
     document.querySelectorAll("thead th[data-k]").forEach(el => el.onclick = () => {
       const k = el.dataset.k; st.sort = [k, st.sort[0] === k ? -st.sort[1] : (k === "name" || k === "shader" || k === "index" ? 1 : -1)]; draw(); });

@@ -1,40 +1,20 @@
-"""Candidates for moving to the vertex shader (plan A3.4).
-
-A value of the fragment shader that is an affine function of varyings with coefficients from uniforms (material
-properties, time) can be computed exactly in the vertex shader and interpolated instead: interpolation is a
-weighted average with weights summing to 1, so it commutes with an affine map. Tiling/Offset (uv * _ST.xy + _ST.zw),
-Rotate with an angle from a property (sin/cos of a uniform times uv), Flipbook (uv scaled and offset by a tile index
-from time) are such values; anything that goes through a texture, a non-linear function of a varying, a product of
-two varyings or gl_FragCoord is not.
-
-Every statement of main() at the top level is classified in order, per vector component:
-  C constant  <  U uniform only  <  A affine in varyings  <  X anything else
-Statements inside if / loops are X (their value depends on the control flow). A candidate is an A statement whose
-value is read by something that is not A (the frontier of an affine chain): it would become a new interpolator. How
-much it saves comes from the ablation of the same statement (core/ablation.py), which replaces it with a new
-varying — just what the move does in the fragment shader. Only a list: nothing is rewritten.
-
-  candidates(src, parsed=None) -> [{"id", "line", "text", "chain" (ids), "width", "label" (a code of
-                                    views/messages.VERTEXMOVE), "varyings"}]
-"""
+"""Fragment values affine in varyings with uniform coefficients: exact to compute in the vertex shader, since
+interpolation commutes with affine maps. Per component C < U < A < X; statements inside if / loops are X."""
 import re
 
 from paretogpu.core import ablation
 
 C, U, A, X = 0, 1, 2, 3
-KIND_NAME = {C: "const", U: "uniform", A: "affine", X: "other"}
 TOKEN = re.compile(r"\s*(?:(\d+\.\d*(?:[eE][-+]?\d+)?[uUfF]?|\.\d+(?:[eE][-+]?\d+)?|\d+(?:[eE][-+]?\d+)?[uU]?)"
                    r"|([A-Za-z_]\w*)|(<<|>>|<=|>=|==|!=|&&|\|\||[-+*/%()\[\],.?:!<>&|^~]))")
 CONSTRUCTORS = re.compile(r"^(float|int|uint|bool|[iub]?vec[234]|mat[234](x[234])?)$")
 LINEAR_1 = {"float", "vec2", "vec3", "vec4"}
-NONLINEAR_OK_ON_UNIFORM = True  # any function of uniforms only is uniform
 UNIFORM_DECL = re.compile(r"^\s*(?:UNITY_LOCATION\(\d+\)\s*)?uniform\s+(?:(?:highp|mediump|lowp)\s+)?\w+\s+(\w+)")
 BLOCK_MEMBER = re.compile(r"^\s*(?:(?:highp|mediump|lowp)\s+)?(?:float|int|uint|bool|[iub]?vec[234]|mat[234])\s+(\w+)")
 TIME = re.compile(r"_Time|_TimeParameters|_SinTime|_CosTime")
 
 
 def uniforms_of(lines, first):
-    """Names of uniforms (loose ones and the members of uniform blocks) declared before main()."""
     out, in_block = set(), False
     for line in lines[:first]:
         t = line.strip()
@@ -57,7 +37,7 @@ def uniforms_of(lines, first):
 
 
 class _Expr:
-    """Recursive descent over a GLSL expression; returns its kind (C, U, A, X) and the varyings it reads."""
+    """parse() -> kind C/U/A/X; varyings read end up in .reads."""
 
     def __init__(self, text, env, varyings, uniforms):
         self.toks = []
@@ -140,7 +120,7 @@ class _Expr:
             if self.peek("."):
                 self.take(".")
                 field = self.take()[1]
-                if name is not None and name in self.env:  # a component of a temporary
+                if name is not None and name in self.env:
                     k = max((self.env[name].get(ablation.COMP.get(c, 0), X) for c in field), default=X)
                 name = None
             elif self.peek("["):
@@ -180,7 +160,7 @@ class _Expr:
             return X, v  # resolved per component by postfix()
         if v in ("true", "false"):
             return C, None
-        return X, None  # unknown: a local we did not track, a helper's name
+        return X, None
 
     def call(self, fn):
         self.take("(")
@@ -196,7 +176,7 @@ class _Expr:
             return X
         if fn in LINEAR_1:
             return top
-        if CONSTRUCTORS.match(fn):  # int(), bool(), mat: truncation or not tracked
+        if CONSTRUCTORS.match(fn):  # int()/bool() truncate; mat not tracked
             return top if top <= U else X
         if fn == "dot" and len(args) == 2:
             return A if sorted(args)[1] == A and sorted(args)[0] <= U else (top if top <= U else X)
@@ -208,8 +188,7 @@ class _Expr:
 
 
 def _label(texts, uniforms_read):
-    """What kind of affine value it is, by the functions and uniforms of its chain: a code of
-    views/messages.VERTEXMOVE."""
+    """A code of views/messages.VERTEXMOVE."""
     joined = " ".join(texts)
     if re.search(r"\b(sin|cos)\s*\(", joined):
         return "rotate"
@@ -225,7 +204,7 @@ def _label(texts, uniforms_read):
 
 
 def candidates(src, parsed=None):
-    """The frontier statements of affine chains of the fragment shader's main() (see the module doc)."""
+    """Ends of affine chains: A statements read by something that is not A (each would be a new interpolator)."""
     p = parsed or ablation.parse(src, "fragment")
     lines, first = p["lines"], p["main"][0]
     uniforms = uniforms_of(lines, first)
@@ -248,7 +227,7 @@ def candidates(src, parsed=None):
         for c in s["comps"]:
             env[s["var"]][c] = k
     _, users = ablation.tree(p)
-    sources = {}  # statement -> the statements whose values it reads
+    sources = {}
     for d, us in users.items():
         for u in us:
             sources.setdefault(u, set()).add(d)
@@ -262,7 +241,7 @@ def candidates(src, parsed=None):
         if us and all(u != ablation.END and kinds.get(u) == A for u in us):
             continue  # inside a chain: its end is the candidate
         chain, todo = set(), [sid]
-        while todo:  # everything it is computed from: affine, uniform and constant statements (redone in the vertex)
+        while todo:  # A/U/C sources, all recomputed in the vertex shader
             x = todo.pop()
             if x not in chain:
                 chain.add(x)
@@ -270,7 +249,7 @@ def candidates(src, parsed=None):
         texts = [st[x]["text"] for x in chain]
         work = re.sub(r"\b(float|[iu]?vec[234])\s*\(", "(", " ".join(st[x]["expr"] for x in chain))
         if not re.search(r"[*/]|\b[a-z]\w*\s*\(", work):
-            continue  # a copy or a shift of a varying: cheaper than one more interpolated varying
+            continue  # copy / shift of a varying: cheaper than an extra interpolator
         out.append({"id": sid, "line": s["line"], "text": s["text"], "chain": sorted(chain, key=lambda x: st[x]["line"]),
                     "width": len(s["comps"]), "label": _label(texts, None),
                     "varyings": sorted({v for x in chain for v in st[x].get("reads_varyings", [])})})
@@ -278,7 +257,6 @@ def candidates(src, parsed=None):
 
 
 def budget(src, parsed=None):
-    """Varyings of the fragment shader: how many vec4 slots are used and how many components are free in them."""
     p = parsed or ablation.parse(src, "fragment")
     ins = [v for v in p["vars"].values() if v["io"] == "in"]
     return {"varyings": len(ins), "free_components": sum(4 - v["width"] for v in ins if v["kind"] == "f")}

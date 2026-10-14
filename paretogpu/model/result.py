@@ -1,8 +1,3 @@
-"""A result: what one run of a command left (a page and its data), described the same way for every command.
-
-<folder>/<kind>.result.json holds a ResultMeta; the kinds (what their title and summary are) are declared by the
-commands (features/: ResultKind), the store lists them (store/results.py), the UI shows them all the same way.
-"""
 from typing import TypedDict
 
 SUFFIX = ".result.json"

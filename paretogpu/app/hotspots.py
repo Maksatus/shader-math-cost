@@ -1,13 +1,5 @@
-"""Why the heaviest shaders of a frame are heavy (plan A3.5, report v2): what `hotspots` runs (features/hotspots.py).
-
-For the costliest shader variants of a priced snapshot (frame_cost.json of `cost`, by share of the frame on the main
-core) the GLES file of the same variant (in the variants folder next to the Vulkan one; compiled now if the cost did
-not need it) is ablated statement by statement (core/ablation.py): its costliest parts with their pipes and what they
-do (texture reads, buffer reads in a light loop, sin, division, hash...), and the candidates for moving to the vertex
-shader (core/vertexmove.py). Dynamic loops at the frame's n.
-
-  run(frame_dir, top, core, jobs) -> JSON-able result (kind "hotspots")
-"""
+"""Ablation of the costliest variants of a priced snapshot, on their GLES files (compiled now if the cost did not
+need them); dynamic loops at the frame's n."""
 import json
 import os
 import time
@@ -17,9 +9,9 @@ from paretogpu.app import ablation as ablation_run
 from paretogpu.app import variants
 from paretogpu.core import ablation
 from paretogpu.core import loops
-from paretogpu.core.pricing import LOOP_ITERS, loop_n
+from paretogpu.core.pricing import LOOP_ITERS
 from paretogpu.model.errors import ParetoError
-from paretogpu.model.variant import VariantKey
+from paretogpu.model.variant import CODE, VariantKey
 from paretogpu.store import workspace
 from paretogpu.store.variant_store import gles_file
 from paretogpu.views.reporter import CONSOLE
@@ -28,29 +20,24 @@ VERTEX_SHARE = 0.25  # the vertex shader is ablated too when it is at least this
 
 
 def compile_gles(frame_dir, c, root, items, rep=CONSOLE):
-    """Compile the GLES files the items lack in the open editor: None, or why they could not be."""
+    """-> None, or why the missing GLES files could not be compiled."""
     need = {it["variant"] for it in items if any(not gles_file(root, vf) for vf in it["files"].values())}
     if not need:
         return None
-    snap_dir = next((d for d in (frame_dir, c.get("frame_dir") or "")
-                     if d and os.path.isfile(os.path.join(d, workspace.SNAPSHOT_FILE))), None)
-    if not snap_dir:
-        return f"no {workspace.SNAPSHOT_FILE} next to the cost or in {c.get('frame_dir')}"
-    with open(os.path.join(snap_dir, workspace.SNAPSHOT_FILE), encoding="utf-8") as f:
-        events = json.load(f)["events"]
-    keys = {str(k): k for k in (VariantKey.of(e) for e in events if e["kind"] == "draw")}
-    rep.log(f"compiling the GLES files of {len(need)} variants ...")
+    keys = {e["variant"]: VariantKey.from_list(e["key"]) for e in c.get("events") or [] if e.get("key")}
+    todo = [keys[v] for v in sorted(need) if v in keys and not any(kw.startswith(CODE) for kw in keys[v].keywords)]
+    if not todo:
+        return None
+    rep.log(f"compiling the GLES files of {len(todo)} variants ...")
     try:
-        variants.compile_keys([keys[v] for v in sorted(need) if v in keys], (c.get("frame") or {}).get("project"),
-                              root, ["gles3"], rep)
+        variants.compile_keys(todo, (c.get("frame") or {}).get("project"), root, ["gles3"], rep)
     except VariantsError as e:
         return str(e)
     return None
 
 
 def plan(c, top, core):
-    """The variants to analyse: [{"variant", "shader", "pass", "keywords", "share", "fragment", "vertex", "pixels",
-    "vertices", "files": {stage: vulkan file}}], costliest first."""
+    """Costliest first; "files" are {stage: vulkan file}."""
     groups = ((c.get("groups") or {}).get(core) or {}).get("variant") or []
     by_variant = {}
     for e in c.get("events") or []:
@@ -71,8 +58,6 @@ def plan(c, top, core):
 
 
 def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
-    """The costliest `top` variants of the priced snapshot in frame_dir on `core` (default: its main core), ablated:
-    the document of hotspots.json."""
     with open(os.path.join(frame_dir, workspace.COST_FILE), encoding="utf-8") as f:
         c = json.load(f)
     core = core or c.get("main_core")
@@ -86,9 +71,8 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
     for it in items:
         it["ablation"] = {}
         stages = ["fragment"] + (["vertex"] if (it.get("vertex") or 0) >= VERTEX_SHARE * (it.get("total") or 1) else [])
-        n, _ = loop_n(it["shader"], loops_.get("n", LOOP_ITERS), loops_.get("overrides"))
-        it["n"] = n
-        # the fragment's loops at the trip counts the frame priced them with (one per outer loop, core/frame_cost)
+        n = it["n"] = loops_.get("n", LOOP_ITERS)
+        # trip counts the frame priced with, one per outer loop
         frame_ns = [x["n"] for x in ((it.get("loop") or {}).get("loops") or [])]
         for stage in stages:
             vf = it["files"].get(stage)

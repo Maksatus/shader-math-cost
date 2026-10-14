@@ -1,11 +1,3 @@
-"""Materials of a Unity project -> their shader variants, compiled and measured (core/materials.py plans them).
-
-  resolve(project, path)  a .mat file -> its shader, keywords and switched-off passes
-  prepare(project, paths, root, cores, ...)  the materials' variants compiled and measured, dynamic loops priced
-  common(prep, sides, ...)  the fields every result about materials has (features/matcompare.py, matshader.py)
-  project_variants(project, events, ...)  the variants of every material of the project (cost --materials)
-  MaterialError  why a material cannot be priced (code "material")
-"""
 import os
 import time
 from collections import Counter
@@ -24,12 +16,10 @@ from paretogpu.views.reporter import CONSOLE
 
 
 class MaterialError(ParetoError):
-    """A material cannot be priced: no such file, no shader of it in the project, no pass to draw it with."""
     code = "material"
 
 
 def resolve(project, path, guids=None):
-    """A material file (absolute, or relative to the project) -> materials.parse_material() + path, shader."""
     full = path if os.path.isabs(path) else os.path.join(project, path)
     if not os.path.isfile(full):
         raise MaterialError(f"no material {path}")
@@ -48,8 +38,7 @@ def resolve(project, path, guids=None):
 
 def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
             recompile=False, snapshot_folders=(), rep=CONSOLE):
-    """Materials -> their variants (passes, material and pipeline keywords) -> compiled and measured, with the
-    dynamic loops priced. Returns {"project", "mats", "keys" (per material, sorted by pass), "state", "snaps"}."""
+    """-> {"project", "mats", "keys" (per material, sorted by pass), "state", "snaps"}."""
     project = os.path.abspath(project)
     rep.phase("materials")
     guids = materials.shader_guids(project)
@@ -68,7 +57,7 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
         rep.log("passes are taken from the snapshots only "
                  + ("(--no-compile)" if not compile_missing else "(the editor does not answer Unity CLI)"))
     if not info["by_light_mode"] and editor:
-        # no snapshot of the project: every pass that shades the picture, without global keywords
+        # no snapshot of the project: every shading pass, without global keywords
         info["by_light_mode"] = {p["light_mode"]: Counter({(): 1}) for ps in editor.values() for p in ps or []
                                  if p["light_mode"] not in plan_.UTILITY_LIGHT_MODES}
     sides = []
@@ -87,7 +76,6 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
 
 
 def common(prep, sides, cores, api, apis, ns=NS):
-    """The fields every result of materials has: cores found, malioc, warnings."""
     state, snaps = prep["state"], prep["snaps"]
     found = [c for c in cores if any(c in p["prices"] for s in sides for p in s["passes"])]
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
@@ -107,9 +95,7 @@ def common(prep, sides, cores, api, apis, ns=NS):
 
 
 def project_variants(project, events, folders, root, compile_missing=True, rep=CONSOLE):
-    """Variants of every material of the project (core/materials.py): passes and global keywords from the snapshot's
-    `events` and every other snapshot of the project in `folders`, the shaders' passes from the open editor.
-    Returns ({variant key: [material paths]}, [skipped materials])."""
+    """-> ({variant key: [material paths]}, [skipped materials])."""
     mats = materials.scan(project)
     snaps = [events] + workspace.snapshots_of(project, folders)
     info = plan_.snapshot_info(snaps)

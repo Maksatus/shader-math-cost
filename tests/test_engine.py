@@ -1,8 +1,4 @@
-"""app/engine.py: batch rules take what is valid and build the rest in one go, keyed rules build every key in
-parallel; app/variants.run() measures only the files of the requested variants. Synthetic data, stubs for malioc.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""app/engine.py batch/keyed/memo rules; app/variants.run() measures only requested variants (malioc stubbed)."""
 import json
 import os
 import shutil

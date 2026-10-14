@@ -1,7 +1,4 @@
-"""Comparison of cost runs (core/compare.py, store/cost_runs.py) on synthetic runs: no project data.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""Comparison of cost runs (core/compare.py, store/cost_runs.py) on synthetic runs."""
 import json
 import os
 import tempfile
@@ -26,7 +23,7 @@ def event(index, shader, pixels, px_price, vertices=0, vtx_price=0.0, keywords=(
 
 
 def run(events, frame_dir="F", **kw):
-    total = sum(e["cost"][CORE]["total"] for e in events)
+    total = sum(e["cost"][CORE]["total"] for e in events if e["cost"])
     return {"frame": {"project": "P", "quality": "Q"}, "api": "vulkan", "malioc": "1", "main_core": CORE,
             "cores": [{"name": CORE}], "totals": {CORE: {"total": total}}, "loops": {"n": 2},
             "frame_dir": frame_dir, "events": events, "missing": [], "variants_checked": True, **kw}
@@ -44,8 +41,28 @@ class Compare(unittest.TestCase):
         self.assertAlmostEqual(x["work"], 0.0)
         self.assertEqual(x["mix"], 0.0)
 
+    def test_loop_trip_counts_are_not_price(self):
+        def lit(price, ref, pixels=1000):
+            e = event(0, "Lit", pixels, price)
+            e["cost"][CORE].update({"px_ref": ref, "vtx_ref": 0.0, "px_path": "loop n=3"})
+            return e
+        x = compare.compare(run([lit(20.0, 10.0)]), run([lit(32.0, 10.0)], frame_dir="G"))["by_core"][CORE]
+        self.assertAlmostEqual((x["price"], x["loops"], x["work"]), (0.0, 12000.0, 0.0))
+        c = compare.compare(run([lit(20.0, 10.0)]), run([lit(29.0, 9.0, 1500)], frame_dir="G"))
+        x = c["by_core"][CORE]
+        self.assertAlmostEqual(x["price"], -1.0 * 1250)
+        self.assertAlmostEqual(x["loops"], (29.0 - 20.0) * 1250 + 1250)
+        self.assertAlmostEqual(x["price"] + x["loops"] + x["work"] + x["mix"], x["delta"])
+
+    def test_unpriced_on_one_side_is_not_new(self):
+        unpriced = event(1, "Water", 100, 5.0)
+        unpriced["cost"] = {}
+        x = compare.compare(run([event(0, "Lit", 100, 5.0), unpriced]),
+                            run([event(0, "Lit", 100, 5.0), event(1, "Water", 100, 5.0)]))["by_core"][CORE]
+        water = next(s for s in x["shaders"] if s["shader"] == "Water")
+        self.assertEqual((water["status"], water["variants"][0]["unpriced"]), ("unpriced", "A"))
+
     def test_split_is_exact(self):
-        """price + work + mix = B - A for every shader and the frame, with work and price both changing."""
         a = run([event(0, "Lit", 1000, 10.0, 200, 3.0), event(1, "Fog", 4000, 2.0), event(2, "Old", 100, 5.0)])
         b = run([event(0, "Lit", 1500, 7.0, 260, 3.5), event(1, "Fog", 4000, 2.0, keywords=["_HQ"]),
                  event(2, "New", 300, 1.0)], frame_dir="G")
@@ -62,7 +79,7 @@ class Compare(unittest.TestCase):
         self.assertAlmostEqual(lit["work"], 4250.0 + 60 * 3.25)
         self.assertEqual(by["Old"]["status"], "gone")
         self.assertEqual(by["New"]["status"], "new")
-        self.assertEqual(by["Fog"]["status"], "mixed")  # the same shader with other keywords: a new variant
+        self.assertEqual(by["Fog"]["status"], "mixed")  # other keywords: a new variant
         self.assertAlmostEqual(by["Fog"]["delta"], 0.0)
 
     def test_flags_and_warnings(self):

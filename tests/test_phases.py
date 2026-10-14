@@ -1,8 +1,4 @@
-"""Every phase id the code reports (views/reporter.phase / skip, app/engine.Rule.phase, features: Command.phases) is
-declared in model/phases.py, so the UI has a name for it.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""Every phase id the code reports is declared in model/phases.py."""
 import ast
 import os
 import unittest
@@ -15,7 +11,6 @@ SKIP = ("out", "real", "__pycache__", "static")
 
 
 def reported():
-    """{(module, line, id)} of every literal phase id in rep.phase("..."), rep.skip("...") and `phase = "..."`."""
     out = set()
     for d, dirs, files in os.walk(PKG):
         dirs[:] = [x for x in dirs if x not in SKIP]

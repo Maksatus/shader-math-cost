@@ -1,46 +1,22 @@
 # Shader Math Cost (Mali)
 
-Сколько стоят функции в шейдерах на GPU Mali: 120 функций, 32 GPU, OpenGL ES и Vulkan.
-Сайт: https://maksatus.github.io/shader-math-cost/. Цена в FMA: «sin = 8» — как 8 обычных операций.
+Цена функций в шейдерах на GPU Mali (120 функций, 32 GPU, GLES и Vulkan), в FMA: «sin = 8» — как 8 обычных операций.
+Сайт: https://maksatus.github.io/shader-math-cost/.
 
-## ParetoGPU — профилировщик кадра и шейдеров
+## ParetoGPU — цена кадра на Mali
 
-Что нужно: Python 3.10+, [Arm Performance Studio](https://developer.arm.com/Tools%20and%20Software/Arm%20Performance%20Studio) (malioc), RenderDoc, Unity с открытым проектом.
+Нужно: Python 3.10+, [Arm Performance Studio](https://developer.arm.com/Tools%20and%20Software/Arm%20Performance%20Studio) (malioc), RenderDoc, Unity с открытым проектом.
+Запуск: `start.bat` или `python -m paretogpu ui`.
 
-Запуск: `start.bat` (проверит, что всё установлено, и откроет окно) или `python -m paretogpu ui`.
+- **Проверка кадра** — Unity в Play Mode → «Проверить кадр»: снимок, цена на Mali, самые дорогие шейдеры.
+  С телефона (USB, development build, Vulkan): выберите телефон → «Проверить кадр» запустит игру → «Снять кадр».
+- **Отчёты**, **Сравнение** (кадры, материалы), **Материал**, **Цена функций**, **Справочник**.
 
-Вкладки окна:
-- **Проверка кадра** — Play Mode в Unity, кнопка; снимок кадра, цена на Mali, самые дорогие шейдеры.
-- **Отчёты** — посчитанные кадры, пересчёт после правки шейдера, «Почему тяжёлые» (разбор по строкам).
-- **Сравнение** — два кадра или два материала: что подорожало и почему (шейдеры, объём работы, варианты).
-- **Материал** — один материал: варианты, цена пикселя и вершины, цена каждой строки.
-- **Цена функций**, **Справочник** — таблица с сайта и как читать отчёты.
-
-Отчёты и снимки лежат в `paretogpu/out` и в git не попадают. Консольные команды: `python -m paretogpu -h`.
+Снимки и отчёты — в `paretogpu/out` (не в git). Консоль: `python -m paretogpu -h`.
 
 ## Данные сайта
 
-- `python -m paretogpu bench` — пересчитать таблицу цен (`docs/`); функции в `paretogpu/model/functions.py`.
-- Аппроксимации (кнопка «≈ быстрее»): `bench/approx/build_approx.py` → `docs/approx.js`; нужны numpy, scipy. Ошибки и цифры ловушек считает `bench/approx/check.py` полным перебором всех float и half (~3.5 мин на функцию, кеш в `bench/.cache/approx_check`); `--keep-cost` — цены malioc из текущего `approx.js`, `--fast` — черновик без записи `approx.js`; отчёт по функции — `python check.py FastSin`.
+- `python -m paretogpu bench` — таблица цен (`docs/`), функции в `paretogpu/model/functions.py`.
+- Аппроксимации: `bench/approx/build_approx.py` → `docs/approx.js` (numpy, scipy); проверка полным перебором — `bench/approx/check.py`.
 
-## Код
-
-```
-paretogpu/
-  model/     типы и константы, шаги прогресса (phases.py)
-  core/      чистые расчёты: цена, кадр, сравнение, циклы, абляция, материалы
-  adapters/  malioc, Unity (мост к редактору, C# в cs/), RenderDoc
-  store/     paretogpu/out: снимки, варианты, расчёты, описания результатов, memo
-  views/     страницы результатов, CSV, Reporter, messages.py (все тексты)
-  app/       сценарии команд и движок «что ещё не сделано» (компиляция → замер → циклы)
-  features/  команды: аргументы, фазы, результат — из этого строятся CLI и окно
-  cli.py, ui/
-```
-
-- Импорты только вниз: `cli, ui → features → app → adapters | store | views → core → model` (`tests/test_layers.py`).
-- Новая команда: `app/<имя>.py` (сценарий) + `features/<имя>.py` (`Command`) + `views/static/result/<имя>.js` (страница). CLI, форма, список результатов и названия фаз появляются сами.
-- Предупреждения и подписи — коды из `core`/`app`, слова в `views/messages.py`.
-- Дорогое запоминается по содержимому: malioc в `bench/.cache`, правила в `paretogpu/out/_cache`; у правила есть версия.
-- Тесты: `python -m unittest discover tests`. Регрессия на своих данных: `python tools/regression.py baseline` до, `check` после.
-
-Подробности и план: `plans/shader-optimizer-plan.md` (раздел 3 — что есть, раздел 7 — что дальше).
+План: `plans/shader-optimizer-plan.md`.

@@ -9,15 +9,15 @@ async function loadReports() {
     <table class="rep"><tr><th></th><th>Когда</th><th>Проект</th><th class="n">Draw</th><th class="n">Кадр, млн циклов</th><th>Пиксели / вершины</th><th></th></tr>` +
     reps.map((x, i) => {
       const t = x.total || 0, f = t ? x.fragment / t : 0, v = t ? x.vertex / t : 0;
-      return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></td>
+      return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.phone ? " · " + esc(x.phone) : x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></td>
       <td>${esc(x.project || "—")}</td><td class="n">${x.draws}</td>
-      <td class="n">${x.total ? `<b>${M(x.total, 1)}</b><div class="muted small">${esc(x.main_core)}</div>` : `<span class="muted">не посчитан</span>`}</td>
+      <td class="n">${x.total ? `<b>${M(x.total, 1)}</b><div class="muted small">${esc(x.main_core)}</div>${x.stale ? `<div class="small" style="color:var(--medium)">старый расчёт · пересчитайте</div>` : ""}` : `<span class="muted">не посчитан</span>`}</td>
       <td>${x.total ? `<div class="split" style="width:140px"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i></div><span class="muted small">${pct(f)} / ${pct(v)}</span>` : ""}</td>
       <td style="white-space:nowrap;text-align:right">${x.pages.cost ? `<button class="btn sm primary" data-a="open" data-i="${i}">Открыть</button> ` : ""}
         <button class="btn sm" data-a="recalc" data-i="${i}">${x.pages.cost ? "Пересчитать" : "Посчитать"}</button>
         ${x.runs.length ? `<button class="btn sm" data-a="cmp" data-i="${i}">Сравнить</button>` : ""}
         <button class="btn sm" data-a="folder" data-i="${i}">Папка</button>
-        <button class="btn sm danger" data-a="del" data-i="${i}" title="Удалить">✕</button></td></tr>`;
+        <button class="btn sm danger" data-a="del" data-i="${i}">✕</button></td></tr>`;
     }).join("") + `</table></div>`;
   document.querySelectorAll("#repList [data-a]").forEach(b => b.onclick = async () => {
     const x = reps[+b.dataset.i];
@@ -50,7 +50,6 @@ async function loadReports() {
 }
 
 function compareSnapshot(x, reps) {
-  // the snapshot priced again: its last two runs; else its last run against the previous snapshot of the project
   const b = `${x.name}/${x.runs.at(-1)}`;
   if (x.runs.length > 1) return openCompare(`${x.name}/${x.runs.at(-2)}`, b);
   const prev = reps.filter(r => r.runs.length && r.name !== x.name && r.time < x.time && (!x.project || r.project === x.project))
@@ -58,5 +57,3 @@ function compareSnapshot(x, reps) {
   if (prev) return openCompare(`${prev.name}/${prev.runs.at(-1)}`, b);
   openCompare(null, b);
 }
-
-/* ---------- compare ---------- */

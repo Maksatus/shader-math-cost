@@ -1,7 +1,4 @@
-"""Memory traffic of the passes (K2.3) on a synthetic capture: no project data.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""Memory traffic of the passes (core/memory.py) on a synthetic capture."""
 import unittest
 
 from paretogpu.core import memory
@@ -32,8 +29,12 @@ ACTIONS = [action(3, ["draw"], "Editor"), action(10, ["clear"]), action(11, ["dr
 EVENTS = [{"index": 0, "path": "Cam/(RP 0:0) Draw Opaque/Loop", "rd": {"events": [11, 12]}},
           {"index": 1, "path": "Cam/(RP 1:0) Post", "rd": {"events": [20]}},
           {"index": 2, "path": "Cam/(RP 2:0) Late", "rd": {"events": [21]}}]
-ROWS = [{"index": 0, "cost": {"Mali-G78": {"total": 1e6}}}, {"index": 1, "cost": {"Mali-G78": {"total": 2e5}}},
-        {"index": 2, "cost": {"Mali-G78": {"total": 1e3}}}]
+def row(index, fragment, vertex):
+    return {"index": index, "cost": {"Mali-G78": {"total": fragment + vertex, "fragment": fragment, "vertex": vertex,
+                                                  "compute": 0.0}}}
+
+
+ROWS = [row(0, 8e5, 2e5), row(1, 2e5, 0.0), row(2, 1e3, 0.0)]
 ASTC = memory.ASSET_BITS / 8
 
 
@@ -79,16 +80,143 @@ class Passes(unittest.TestCase):
         self.assertEqual(self.m["totals"]["roofline"]["Mali-G78"]["memory_passes"],
                          sum(p["roofline"]["Mali-G78"]["bound"] == "memory" for p in self.p))
 
+    def test_cycles_are_the_events(self):
+        # Late loads C and Z: load bytes, cycles only from its own event
+        late = self.p[2]
+        self.assertAlmostEqual(late["cycles"]["Mali-G78"], 1e3)
+        self.assertGreater(late["bytes"]["load"], 0)
+        self.assertEqual(self.p[0]["parts"]["Mali-G78"], {"fragment": 8e5, "vertex": 2e5, "compute": 0.0})
+
     def test_split_event_cycles(self):
-        # an event whose calls fall into two passes gives each its share of the calls
+        # event without an (RP x:y) marker, calls in two passes: each pass gets its share of the calls
         usage = {**USAGE, "3": [[12, "ColorTarget"], [20, "ColorTarget"], [30, "PS_Resource"]],
                  "1": [[10, "Clear"], [11, "ColorTarget"], [20, "PS_Resource"], [21, "ColorTarget"]]}
-        m = memory.passes(TEXTURES, usage, ACTIONS, EVENTS, ROWS, ["Mali-G78"])
+        events = [{**EVENTS[0], "path": "Cam/Draw Opaque/Loop"}] + EVENTS[1:]
+        m = memory.passes(TEXTURES, usage, ACTIONS, events, ROWS, ["Mali-G78"])
         self.assertEqual(len(m["passes"]), 4)
         self.assertAlmostEqual(m["passes"][0]["cycles"]["Mali-G78"], 5e5)
 
+    def test_native_pass_subpasses(self):
+        usage = {"1": [[10, "Clear"], [11, "ColorTarget"], [13, "ColorTarget"], [14, "ColorTarget"], [20, "PS_Resource"]],
+                 "2": [[10, "Clear"], [11, "DepthStencilTarget"], [13, "DepthStencilTarget"]],
+                 "3": [[12, "Clear"], [13, "ColorTarget"], [14, "PS_Resource"], [20, "PS_Resource"]]}
+        actions = [action(10, ["clear"]), action(11, ["draw"], "Cam/MRT", 100), action(12, ["clear"]),
+                   action(13, ["draw"], "Cam/Opaque", 5000), action(14, ["draw"], "Cam/Sky", 5000),
+                   action(20, ["draw"], "Cam/Post", 10000)]
+        events = [{"index": 0, "path": "Cam/(RP 0:0) MRT Init", "rd": {"events": [11]}},
+                  {"index": 1, "path": "Cam/(RP 0:1) Draw Opaque", "rd": {"events": [13]}},
+                  {"index": 2, "path": "Cam/(RP 0:2) Draw Skybox", "rd": {"events": [14]}},
+                  {"index": 3, "path": "Cam/(RP 1:0) Post", "rd": {"events": [20]}}]
+        m = memory.passes(TEXTURES, usage, actions, events, [row(i, 1e3, 0.0) for i in range(4)], ["Mali-G78"])
+        main = m["passes"][0]
+        self.assertEqual(main["name"], "MRT Init + Draw Opaque + Draw Skybox")
+        self.assertEqual(len(m["passes"]), 2)
+        t = {x["name"]: x for x in main["targets"]}
+        self.assertEqual(set(t), {"C", "Z", "P"})
+        self.assertTrue(t["P"]["cleared"] and not t["P"]["load"])
+        self.assertEqual(main["bytes"]["load"] + main["bytes"]["textures"], 0)
+        self.assertTrue(t["C"]["store"] and t["P"]["store"] and not t["Z"]["store"])
+
+    def test_resolve_on_tile(self):
+        textures = [{**tex(5, "M", 100, 100, "R8G8B8A8_UNORM", 160000, color=True), "samples": 4},
+                    tex(6, "R", 100, 100, "R8G8B8A8_UNORM", 40000, color=True), TEXTURES[2]]
+        usage = {"5": [[10, "Clear"], [11, "ColorTarget"], [12, "ResolveSrc"]],
+                 "6": [[12, "ResolveDst"], [20, "PS_Resource"]], "3": [[20, "ColorTarget"]]}
+        actions = [action(10, ["clear"]), action(11, ["draw"], "Cam/Opaque", 5000), action(12, ["resolve"]),
+                   action(20, ["draw"], "Cam/Post", 10000)]
+        events = [{"index": 0, "path": "Cam/(RP 0:0) Draw Opaque", "rd": {"events": [11]}},
+                  {"index": 1, "path": "Cam/(RP 1:0) Post", "rd": {"events": [20]}}]
+        rows = [row(0, 1e3, 0.0), row(1, 1e3, 0.0)]
+        m = memory.passes(textures, usage, actions, events, rows, ["Mali-G78"])
+        opaque = m["passes"][0]
+        self.assertEqual(opaque["resolves"], ["R"])
+        self.assertFalse(opaque["targets"][0]["store"])
+        self.assertAlmostEqual(opaque["bytes"]["store"], 20000)
+        self.assertEqual((m["totals"]["copies"], m["totals"]["copy_calls"]), (0.0, 0))
+        usage = {"5": [[10, "Clear"], [11, "ColorTarget"], [21, "ResolveSrc"]], "6": [[21, "ResolveDst"]],
+                 "3": [[20, "ColorTarget"]]}
+        actions = actions[:2] + [action(20, ["draw"], "Cam/Post", 10000), action(21, ["resolve"]),
+                                 action(22, ["draw"], "Cam/Late", 100)]
+        events = events + [{"index": 2, "path": "Cam/(RP 2:0) Late", "rd": {"events": [22]}}]
+        m = memory.passes(textures, usage, actions, events, rows + [row(2, 1e3, 0.0)], ["Mali-G78"])
+        self.assertTrue(m["passes"][0]["targets"][0]["store"])
+        self.assertEqual(m["passes"][0]["resolves"], [])
+        self.assertAlmostEqual(m["totals"]["copies"], 80000 + 20000)
+
+    def run_frame(self, usage, actions, events, textures=TEXTURES):
+        return memory.passes(textures, usage, actions, events, [row(e["index"], 1e3, 0.0) for e in events],
+                             ["Mali-G78"])
+
+    def test_clear_inside_a_pass_and_copy_of_its_target(self):
+        usage = {"1": [[11, "ColorTarget"], [12, "ColorTarget"], [13, "ColorTarget"], [14, "CopySrc"],
+                       [15, "ColorTarget"], [30, "PS_Resource"]],
+                 "2": [[10, "Clear"], [11, "DepthStencilTarget"], [12, "Clear"], [13, "DepthStencilTarget"],
+                       [20, "DepthStencilTarget"]],
+                 "3": [[14, "CopyDst"], [20, "ColorTarget"], [30, "PS_Resource"]]}
+        actions = [action(10, ["clear"], "Cam/Clear"), action(11, ["draw"], "Cam/A", 100),
+                   action(12, ["clear"], "Cam/Clear"), action(13, ["draw"], "Cam/A", 100),
+                   action(14, ["copy"], "Cam/Copy"), action(15, ["draw"], "Cam/A", 100),
+                   action(20, ["draw"], "Cam/B", 100)]
+        events = [{"index": 0, "path": "Cam/A", "rd": {"events": [11, 13, 15]}},
+                  {"index": 1, "path": "Cam/B", "rd": {"events": [20]}}]
+        m = self.run_frame(usage, actions, events)
+        self.assertEqual([p["calls"] for p in m["passes"]], [2, 1, 1])
+        first, after_copy, b = m["passes"]
+        self.assertTrue({t["name"]: t for t in first["targets"]}["C"]["store"])
+        self.assertTrue({t["name"]: t for t in after_copy["targets"]}["C"]["load"])
+        self.assertTrue({t["name"]: t for t in b["targets"]}["Z"]["load"])
+
+    def test_resolve_of_a_cleared_target_and_editor_work_before_the_frame(self):
+        textures = [{**tex(5, "M", 100, 100, "R8G8B8A8_UNORM", 160000, color=True), "samples": 4},
+                    tex(6, "R", 100, 100, "R8G8B8A8_UNORM", 40000, color=True), TEXTURES[2]]
+        usage = {"5": [[8, "ResolveSrc"], [9, "Clear"], [10, "ResolveSrc"]], "6": [[8, "ResolveDst"], [10, "ResolveDst"]],
+                 "3": [[20, "ColorTarget"]]}
+        actions = [action(7, ["draw"], "UIR.DrawChain"), action(8, ["resolve"], "UIR.DrawChain"),
+                   action(9, ["clear"], "Cam/Clear"), action(10, ["resolve"], "Cam/Resolve"),
+                   action(20, ["draw"], "Cam/Post", 100)]
+        m = self.run_frame(usage, actions, [{"index": 0, "path": "Cam/(RP 0:0) Post", "rd": {"events": [20]}}],
+                           textures)
+        self.assertEqual((m["totals"]["copies"], m["totals"]["copy_calls"]), (0.0, 0))
+
+    def test_target_layer_and_texture_without_a_counter(self):
+        array = {**tex(7, "Probes", 64, 64, "R8G8B8A8_UNORM", 64 * 64 * 4 * 16, color=True), "arrays": 16}
+        usage = {"7": [[11, "ColorTarget"], [30, "PS_Resource"]], "4": [[11, "PS_Resource"]]}
+        actions = [action(11, ["draw"], "Cam/Probe"), action(30, ["draw"], "Editor", 100)]
+        actions[0]["ps_invocations"] = None
+        m = self.run_frame(usage, actions, [{"index": 0, "path": "Cam/Probe", "rd": {"events": [11]}}],
+                           [array, TEXTURES[3]])
+        p = m["passes"][0]
+        self.assertEqual(p["targets"][0]["bytes"], 64 * 64 * 4 * memory.AFBC)
+        self.assertAlmostEqual(p["bytes"]["textures"], 5461 * ASTC)
+
+    def test_event_split_by_the_pixels_of_its_calls(self):
+        usage = {**USAGE, "3": [[12, "ColorTarget"], [20, "ColorTarget"], [30, "PS_Resource"]],
+                 "1": [[10, "Clear"], [11, "ColorTarget"], [20, "PS_Resource"], [21, "ColorTarget"]]}
+        actions = [dict(a) for a in ACTIONS]
+        actions[2]["ps_invocations"], actions[3]["ps_invocations"] = 1000, 3000
+        events = [{**EVENTS[0], "path": "Cam/Draw Opaque/Loop"}] + EVENTS[1:]
+        m = memory.passes(TEXTURES, usage, actions, events, ROWS, ["Mali-G78"])
+        self.assertAlmostEqual(m["passes"][0]["parts"]["Mali-G78"]["fragment"], 8e5 * 0.25)
+        self.assertAlmostEqual(m["passes"][0]["parts"]["Mali-G78"]["vertex"], 2e5 * 0.5)
+
     def test_no_calls(self):
         self.assertIsNone(memory.passes(TEXTURES, USAGE, ACTIONS, [{"index": 0, "path": "", "rd": None}], [], []))
+
+
+class DeviceFrame(unittest.TestCase):
+    def test_swapchain_is_stored(self):
+        # device frame: the swapchain image is presented, so stored
+        sw = dict(tex(5, "Swapchain Image 1", 100, 100, "R8G8B8A8_UNORM", 40000, color=True), swapchain=True,
+                  native=True)
+        usage = {"5": [[11, "ColorTarget"]]}
+        events = [{"index": 0, "path": "Cam/(RP 0:0) UI", "rd": {"events": [11]}}]
+        m = memory.passes([sw], usage, [action(11, ["draw"], "Cam/UI", 100)], events, [row(0, 1e3, 0.0)], ["Mali-G78"])
+        self.assertAlmostEqual(m["passes"][0]["bytes"]["store"], 40000 * memory.AFBC)
+        self.assertTrue(m["assumptions"]["native"])
+        # editor backbuffer: not stored
+        m = memory.passes([dict(sw, native=False)], usage, [action(11, ["draw"], "Cam/UI", 100)], events,
+                          [row(0, 1e3, 0.0)], ["Mali-G78"])
+        self.assertEqual(m["passes"][0]["bytes"]["store"], 0)
 
 
 if __name__ == "__main__":

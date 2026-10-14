@@ -1,6 +1,4 @@
-"""Results in paretogpu/out: every <folder>/<kind>.result.json (model/result.py) of a snapshot folder or of an
-analysis folder (out/_<kind>/<id>/).
-"""
+"""Result descriptions <folder>/<kind>.result.json, folder = out/<snapshot>/ or out/_<kind>/<id>/."""
 import json
 import os
 
@@ -31,7 +29,6 @@ def read_meta(folder, kind):
 
 
 def folders():
-    """The folders of out/ results can be in: out/<name>/ and out/_<kind>/<id>/."""
     if not os.path.isdir(workspace.OUT):
         return
     for name in sorted(os.listdir(workspace.OUT)):
@@ -47,7 +44,6 @@ def folders():
 
 
 def of_folder(folder):
-    """[ResultMeta] of the results in one folder (a snapshot's cost and hotspots, ...)."""
     out = []
     for fn in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
         if fn.endswith(SUFFIX):
@@ -58,6 +54,5 @@ def of_folder(folder):
 
 
 def scan(kind=None):
-    """[ResultMeta] of the results in out/ (of one kind), newest first."""
     out = [m for d in folders() for m in of_folder(d) if kind is None or m["kind"] == kind]
     return sorted(out, key=lambda m: -(m.get("created") or 0))

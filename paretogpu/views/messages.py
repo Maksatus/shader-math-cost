@@ -1,19 +1,25 @@
-"""The words of the results, in one place: core/ and app/ give warnings as {"code", ...params} (and a part's
-explanation as counts, a vertex candidate's label as a code), this module turns them into the report's language for
-the console, and the HTML pages get the same templates embedded (views/html.py, `MSG`) to do it in the browser.
-
-  text(warning)          "{code}" of WARNINGS filled with the warning's parameters; "side": a prefix ("A: ...")
-  explain_text(ex)       core/ablation.explain(): what a part does, as a short phrase
-  export()               everything a page needs: the templates, the operations, the labels
-"""
+"""core/ and app/ emit warnings as {"code", **params}; rendered here for the console and, via export() embedded as
+MSG (views/html.py), in the browser."""
 
 WARNINGS = {
-    # core/compare.py
     "no_common_cores": "У расчётов нет общих ядер: сравнить нечего.",
     "cores_differ": "Разные наборы ядер: сравниваются только общие ({cores}).",
     "api_differs": "Разный API цен: A {a}, B {b}. Цены Vulkan и GLES отличаются сами по себе.",
+    "code_differs": "Расчёты сделаны разными версиями ParetoGPU (A {a}, B {b}): часть разницы может дать сам "
+                    "инструмент, а не шейдеры или сцена. Пересчитайте оба снимка («Пересчитать» в списке снимков).",
     "malioc_differs": "Разные версии malioc (A {a}, B {b}): часть разницы даёт компилятор, а не шейдеры.",
-    "loops_n_differs": "Разное число итераций динамических циклов (A n = {a}, B n = {b}).",
+    "render_msaa": "Разный MSAA основной цели (A {a}×, B {b}×).",
+    "render_color": "Разный формат основной цели (A {a}, B {b}).",
+    "render_shadow_maps": "Разные карты теней (A {a}, B {b}): другой профиль качества или каскады.",
+    "render_passes": "Разный набор проходов: только в A — {a}; только в B — {b}. Кадры сняты с разными настройками "
+                     "рендера (профиль качества, эффекты), их цена несопоставима.",
+    "pixel_methods_differ": "Пиксели посчитаны по-разному (A: {a}; B: {b}): «renderdoc» — запуски пиксельного "
+                            "шейдера на GPU ПК, «samples» — фрагменты телефона после теста глубины. Часть разницы "
+                            "«объём работы» — разница способов, а не сцены.",
+    "vertex_methods_differ": "Вершины посчитаны по-разному (A: {a}; B: {b}): «renderdoc» — запуски вершинного шейдера "
+                             "на GPU ПК (его кэш вершин меньше, чем у Mali: в среднем +14%, у плотных сеток до +50%), "
+                             "«indices» — уникальные вершины draw на телефоне. Часть разницы «объём работы» — разница "
+                             "способов, а не сцены.",
     "resolution_differs": "Разное разрешение кадра (A {a}, B {b}): пиксели несопоставимы.",
     "quality_differs": "Разный уровень качества Unity (A {a}, B {b}).",
     "pipeline_differs": "Разный ассет пайплайна (A {a}, B {b}): проходы и эффекты кадров могут отличаться.",
@@ -21,14 +27,12 @@ WARNINGS = {
     "projects_differ": "Расчёты из разных проектов.",
     "unpriced_draws": "Draw без цены: в A {a}, в B {b}. Их стоимость не входит в сравнение.",
     "unchecked": "шейдеры не перекомпилировались перед расчётом, цены могут быть устаревшими.",
-    # core/profile.py
-    "settings_not_recorded": "Снимок сделан до записи настроек кадра: неизвестно, в каком качестве и разрешении он "
-                             "снят. Снимите кадр заново.",
     "build_target_not_mobile": "Платформа сборки в редакторе — {target}, а не Android: качество, keywords и варианты "
                                "кадра могут быть не те, что на устройстве.",
-    "scale_not_from_asset": "RenderScale в ассете пайплайна {asset}, а кадр нарисован в масштабе {frame} от Game view "
-                            "({frame_size} из {screen}): масштаб задаётся не только ассетом, верен масштаб кадра.",
-    # app/materials.py
+    "rd_count_mismatch": "У {n} draw вызовы RenderDoc не сходятся с событием Frame Debugger (индексы, вершины или "
+                         "пиксели больше цели): их пиксели и вершины могут быть от другого draw — отмечены «!».",
+    "device_discard_unshaded": "У {n} draw с discard (alpha clip) пиксели не пересчитаны без discard ({error}): они "
+                               "занижены, считаны только выжившие фрагменты.",
     "pass_unpriced": "проход {pass}: нет цены ({error})",
     "variants_unchecked": "Варианты не сверены с шейдерами (редактор не отвечал или --no-compile): цены могут быть "
                           "устаревшими.",
@@ -36,7 +40,7 @@ WARNINGS = {
                     "а проходы взяты все, кроме служебных.",
 }
 
-# what makes code heavy (core/ablation.OPS keys), the heaviest first: one, few, many of the counted thing
+# (core/ablation.OPS key, Russian plural forms one/few/many); heaviest first: explain_text keeps the first 4
 OPS = [
     ("buffers", "чтение буфера по индексу", "чтения буферов по индексу", "чтений буферов по индексу"),
     ("tex", "выборка текстуры", "выборки текстур", "выборок текстур"),
@@ -53,7 +57,7 @@ OPS = [
 PLAIN = "простая арифметика"
 IN_LOOP = "в цикле (×{n}): "
 
-# core/vertexmove.py: what kind of affine value a candidate is
+# core/vertexmove.py candidate kinds
 VERTEXMOVE = {
     "rotate": "поворот (Rotate с углом из свойства)",
     "flipbook": "флипбук / анимация по времени",
@@ -70,7 +74,7 @@ class _Params(dict):
 
 
 def text(w):
-    """The warning as the report says it. A plain string (an older result) is returned as it is."""
+    """Plain strings come from older results and pass through."""
     if isinstance(w, str):
         return w
     body = WARNINGS.get(w.get("code"), w.get("code") or "").format_map(_Params(w))
@@ -97,5 +101,4 @@ def explain_text(ex):
 
 
 def export():
-    """The templates for the pages (views/html.py embeds them as MSG)."""
     return {"warnings": WARNINGS, "ops": OPS, "plain": PLAIN, "in_loop": IN_LOOP, "vertexmove": VERTEXMOVE}

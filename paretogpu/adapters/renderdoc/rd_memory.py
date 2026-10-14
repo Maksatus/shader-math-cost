@@ -1,7 +1,6 @@
-# Runs inside RenderDoc's UI python (qrenderdoc --python rd_memory.py), not in the normal interpreter (plan K2.3).
-# Opens the capture in PARETOGPU_RDC, writes PARETOGPU_OUT: every texture of the capture (size, mips, array layers,
-# samples, format, bytes, whether it is a colour / depth target) and how every call used it (GetUsage: sampled by a
-# stage, written as a colour or depth target, cleared, copied, resolved), as [[event id, usage]].
+# Runs inside qrenderdoc --python (RenderDoc's UI python, not the normal interpreter).
+# In: capture PARETOGPU_RDC. Out: PARETOGPU_OUT {"textures": [...], "usage": {texture id: [[event id, GetUsage name]]}};
+# a traceback goes to <out>.error.
 import json
 import os
 import traceback

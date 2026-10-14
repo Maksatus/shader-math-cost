@@ -1,6 +1,5 @@
 let selN = D && D.default_n;
 const kws = k => k.length ? k.map(x => `<span class="kwc">${esc(x)}</span>`).join(" ") : `<span class="muted">без keywords</span>`;
-const dp = (a, b) => a == null || b == null ? "" : `<span class="${cls(b - a)}">${pct(b - a, a)}</span>`;
 const c1 = x => x == null ? "—" : (+x).toFixed(x >= 100 ? 0 : 1);
 
 function matSide(m, tag) {
@@ -18,7 +17,6 @@ const PIPES = [["arith", "A — арифметика"], ["fma", "FMA", 1], ["cvt
 
 const LABEL_W = 210, NUM_W = 96;
 const cols = n => `<colgroup><col style="width:${LABEL_W}px">${`<col style="width:${NUM_W}px">`.repeat(n)}</colgroup>`;
-// B − A of a price in % of A, coloured: cheaper green, dearer red
 const dPct = (u, w) => u == null || w == null ? `<td class="n"></td>` : u === w ? `<td class="n muted">=</td>` : `<td class="n ${cls(w - u)}">${pct(w - u, u)}</td>`;
 
 function pipesTable(xa, xb, k, n) {
@@ -30,14 +28,14 @@ function pipesTable(xa, xb, k, n) {
   const has = key => [la, lb, ga && ga.shortest, gb && gb.shortest, ga && ga.total, gb && gb.total].some(c => c && c[key] != null);
   const v = (c, key, t) => { const x = c && c[key]; if (x == null) return `<td class="n">—</td>`;
     const hot = t != null && Math.abs(x - t) < 1e-6 && ["arith", "ls", "v", "t"].includes(key);
-    return `<td class="n">${hot ? `<b class="hot" title="Самый загруженный блок: его циклы и есть цена (упор)">${c1(x)} ●</b>` : c1(x)}</td>`; };
+    return `<td class="n">${hot ? `<b class="hot">${c1(x)} ●</b>` : c1(x)}</td>`; };
   const d = (u, w) => u == null || w == null ? `<td class="n"></td>` : `<td class="n ${cls(w - u)}">${w === u ? "=" : (w > u ? "+" : "−") + c1(Math.abs(w - u))}</td>`;
   const dep = byNs(xa, k) || byNs(xb, k);
   const notes = [];
   if ((ga && ga.longest_na) || (gb && gb.longest_na)) notes.push(dep
     ? "У шейдера динамические циклы: malioc не считает самый длинный путь, он посчитан с циклами, прогнанными n раз."
     : "malioc не нашёл самый длинный путь: вместо него — «всего», поднятое до короткого пути там, где тот больше.");
-  const rows = PIPES.filter(([key]) => has(key)).map(([key, label, sub]) => `<tr${sub ? ` class="subp"` : ""}><td title="${esc(PIPE[key][2])}" style="cursor:help">${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
+  const rows = PIPES.filter(([key]) => has(key)).map(([key, label, sub]) => `<tr${sub ? ` class="subp"` : ""}><td>${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
     ${v(la, key, ta)}${v(lb, key, tb)}${d(la && la[key], lb && lb[key])}
     ${v(ga && ga.shortest, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.shortest, key)}${v(ga && ga.total, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.total, key)}</tr>`).join("");
   return `<h3>По конвейерам <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}, ${API_NAME[selApi] || esc(selApi)}</span></h3>
@@ -47,9 +45,7 @@ function pipesTable(xa, xb, k, n) {
     <div class="small" style="margin-top:6px">${notes.length ? `<span class="muted">${notes.join(" ")}</span> ` : ""}${refLink("pipes", "блоки ядра и пути")}</div>`;
 }
 const PARTS = {px: ["Пиксель", "пиксель"], vtx: ["Вершина", "вершину"]};
-// how much cheaper the cheaper one is, of the dearer one's price
 const cheaper = (a, b) => a == null || b == null || a === b ? null : {who: b < a ? "B" : "A", by: Math.abs(a - b) / Math.max(a, b)};
-// the price of this part changes with n (dynamic loops in this stage)
 const byNs = (x, k) => !!x && new Set(D.ns.map(m => x[k][String(m)])).size > 1;
 const p0 = x => (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
 

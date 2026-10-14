@@ -1,9 +1,4 @@
-"""Ablation of a shader measured with malioc (plan A3.2): core/ablation.py says what to ablate, this measures it.
-
-  run(src, stage, cores, n, jobs) -> per core: base pipes and price, every statement's inclusive and self cost
-Every ablated copy is a keyed rule of the engine (AblateRule): remembered by the hash of the shader's text, so a
-shader analysed again is measured only where it changed.
-"""
+"""malioc measurement of statement-ablated copies of a shader (core/ablation.py decides what to ablate)."""
 import hashlib
 
 from paretogpu.adapters.gpu import backend
@@ -26,8 +21,7 @@ def _measure(text, core, stage, gpu):
 
 
 def measure(src, core, stage, n, forced_loops, gpu=None):
-    """{"pipes", "price", "bound", "regs"} of a GLSL source on a core, dynamic loops priced at n as in the frame
-    (core/loops.py: the measurements of its plan, cycles_at(n)); or {"error"}."""
+    """{"pipes", "price", "bound", "regs", "na"} or {"error"}; dynamic loops priced at n iterations."""
     gpu = gpu or backend()
     plan = None
     if forced_loops:
@@ -63,7 +57,7 @@ class AblateRule(Rule):
 
     def memo_key(self, key):
         sid, core = key
-        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{self.gpu.tool}"
+        return f"{self.sha}|{self.stage}|{sid}|{core}|{self.n}|{self.forced[core]}|{loops.MODEL}|{self.gpu.tool}"
 
     def remember(self, value):
         return "error" not in value
@@ -74,13 +68,12 @@ class AblateRule(Rule):
 
 
 def run(src, stage, cores, n=2, jobs=None, rep=CONSOLE, tick=None, gpu=None):
-    """Ablation of every statement of main() on every core. Returns
-    {"lines": main()'s lines [{"no", "text", "stmt"}], "statements": {id: {...}}, "by_core": {core: {"base", "stmts"}}}."""
+    """-> {"lines": [{"no", "text", "stmt"}], "statements": {id: {...}}, "by_core": {core: {"base", "stmts"}}, ...}."""
     gpu = gpu or backend()
     p = parse(src, stage)
     parent, users = tree(p)
     targets = [s for s in p["statements"] if s["ablate"]]
-    # does the base need its loops forced (longest path N/A)? the same for every copy
+    # malioc gives no longest path (N/A) -> loops must be forced; decided once on the base for every copy
     probe = {c: gpu.measure(src, c, "gles", stage) for c in cores}
     forced = {c: bool(probe[c].get("ok")) and heavy.combined(probe[c])["longest"] is None for c in cores}
     base = {c: measure(src, c, stage, n, forced[c], gpu) for c in cores}

@@ -1,9 +1,4 @@
-"""The function cost site (docs/): data.js packs mali_math_cost.csv so that index.html works when opened straight
-from disk (file:// cannot fetch() a CSV); summary_<api>.csv: function x variant, median per architecture;
-theme.css: the palette every page shares (views/static/theme.css).
-
-  build(site_dir)
-"""
+"""data.js embeds mali_math_cost.csv because docs/index.html opened from file:// cannot fetch() a CSV."""
 import csv
 import json
 import os

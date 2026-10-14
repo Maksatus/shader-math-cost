@@ -6,7 +6,7 @@ const api = async (path, body) => {
   if (!r.ok && !d.error) d.error = `HTTP ${r.status}`;
   return d;
 };
-// the server stops when every window is closed (python -m paretogpu ui without --stay)
+// the server exits once every window is gone
 const WINDOW_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 const alive = () => fetch("/api/alive?id=" + WINDOW_ID).catch(() => {});
 alive(); setInterval(alive, 20000);
@@ -24,18 +24,15 @@ function dur(s) {
 const approx = s => s == null ? "?" : s < 5 ? "несколько секунд" : "≈ " + dur(s);
 const pct = x => x == null ? "—" : (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
 
-// the names of presets, commands and phases come with the schema (/api/schema: features/, model/phases.py)
 const presetText = id => ((SCH.presets || []).find(p => p.id === id) || {}).title || id;
 const stepText = cmd => (SCHEMA[cmd] || {}).title || cmd;
 const phaseText = id => (SCH.phases[id] || {}).label || id;
 const phaseUnit = id => (SCH.phases[id] || {}).unit || "";
 const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
   "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
-// settings of the simple form; the rest of the flags are in "Дополнительно"
 const SIMPLE = new Set(["project", "frame", "out", "renderdoc", "cores", "core", "materials", "suffix"]);
 let SCH = {phases: {}}, SCHEMA, OPT, recalc = null, edReady = null;
 
-/* ---------- tabs ---------- */
 function tab(name) {
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("section").forEach(s => s.classList.toggle("on", s.id === "tab-" + name));
@@ -55,13 +52,10 @@ document.addEventListener("click", e => {
   tab("ref");
 });
 
-/* ---------- environment ---------- */
 async function loadEnv() {
   const d = await api("/api/doctor");
   const short = {"malioc (Arm Performance Studio)": "malioc", "RenderDoc": "RenderDoc", "Unity CLI (unity)": "Unity CLI",
                  "Unity Editor (Hub)": "Unity"};
-  $("#env").innerHTML = d.checks.map(c => `<span class="envc ${c.status}" title="${esc(c.what + ": " + c.detail)}">${esc(short[c.what] || c.what)}</span>`).join("");
+  $("#env").innerHTML = d.checks.map(c => `<span class="envc ${c.status}">${esc(short[c.what] || c.what)}</span>`).join("");
   $("#siteInfo").textContent = d.site.updated ? `Данные замерены ${when(d.site.updated)} · таблица та же, что на сайте` : "";
 }
-
-/* ---------- form ---------- */

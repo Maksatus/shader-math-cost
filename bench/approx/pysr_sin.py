@@ -1,8 +1,6 @@
-"""PySR search for cheap sin(x) approximations on [-pi, pi].
+"""PySR search for sin(x) on [-pi, pi] with FMA-pipe operators only (builtin sin is SFU-bound on Valhall / 5th Gen).
 
-Only FMA-pipe operators are allowed (+, -, *): on Valhall / 5th Gen the builtin sin
-is SFU-bound, so a polynomial on the FMA pipe is the candidate win.
-Prints the Pareto front (complexity, max abs error, expression).
+Usage: python pysr_sin.py   (prints the Pareto front)
 """
 import numpy as np
 from pysr import PySRRegressor

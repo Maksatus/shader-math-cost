@@ -65,7 +65,7 @@ details p, details li { color: var(--muted); font-size: 13px; }
 tr.sel td { background: var(--chip); }
 tr.subp td { color: var(--muted); font-size: 12.5px; }
 th.grp { text-align: center; border-bottom: 0; }
-/* tables of one pass share one grid: label 210px, every number 96px, A | B | B − A always in the same place */
+/* fixed layout: the tables of one pass line up their columns */
 table.cmp { width: auto; table-layout: fixed; }
 table.cmp td, table.cmp th { overflow: hidden; text-overflow: ellipsis; }
 table.cmp td.n { font-family: var(--mono); font-size: 12.5px; }

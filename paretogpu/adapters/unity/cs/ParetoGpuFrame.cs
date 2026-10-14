@@ -1,27 +1,10 @@
-// Frame snapshot through the Frame Debugger (plan items K1.1, K1.2).
-//
-// Used by `python -m paretogpu frame`:
-//   adapters/unity/bridge.py call(..., "ParetoGpuFrame.cs", "Start", <out>, "frame", ...)
-// Start() returns at once; the snapshot runs on EditorApplication.update: enable the Frame Debugger (if it is
-// off), wait for the captured frame, then replay it event by event (limit = i + 1) and read each event's data.
-// The result goes to <out>/frame.json, progress to <out>/frame.progress; the Frame Debugger is restored after.
-//
-// The Frame Debugger API is internal (UnityEditorInternal.FrameDebuggerInternal), so everything goes through
-// reflection and every field of FrameDebuggerEventData is written as is: Python picks what it needs.
-//
-// Pixels and vertices come from RenderDoc (adapters/renderdoc), not from here: the replay only reads event data.
-//
-// The Frame Debugger is driven through FrameDebuggerUtility alone, as its window does (EnableFrameDebugger:
-// pause Play Mode, SetEnabled(true, ProfilerDriver.connectedProfiler); a new limit: limit = n and a scene repaint;
-// DisableFrameDebugger: SetEnabled(false, GetRemotePlayerGUID())); no window is opened.
-//
-// The settings the frame is drawn with (plan item K1.12) go next to the events: build target, quality level, the Game
-// view size and the active render pipeline asset (QualitySettings.renderPipeline, else the Graphics settings' one) as
-// its SerializedObject shows it: every visible field, and the ScriptableObjects it refers to (renderers and their
-// features in URP) the same way, two levels down. Any SRP is written alike; a pipeline that takes its settings from
-// elsewhere at run time shows its asset's values, so Python compares the asset's render scale with the frame's.
-//
-// config: {"max_events": 0} (and the job's "out", "name": cs/ParetoGpuJob.cs)
+// Frame Debugger snapshot: job "frame", config {"max_events": 0} -> <out>/frame.json. Start() returns "started"; Tick
+// (EditorApplication.update) waits for a stable event count, replays event by event (limit = i + 1) and dumps every
+// FrameDebuggerEventData field by reflection (internal API); Python picks what it needs. Driven via
+// FrameDebuggerUtility as its window does: enable = pause Play Mode + SetEnabled(true, connectedProfiler); new limit =
+// limit + scene repaint; disable = SetEnabled(false, GetRemotePlayerGUID()). The pipeline asset is dumped via
+// SerializedObject two levels deep; a pipeline that sets values at run time shows its asset's, so Python compares the
+// asset's render scale with the frame's.
 
 using System;
 using System.Collections;
@@ -45,8 +28,8 @@ public static class ParetoGpuFrame
     const BindingFlags I = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
     static Type util, dataType;
-    static int maxEvents, state, index, count, waited, stable, lastCount;
-    static bool wasEnabled, wasPaused;
+    static int maxEvents, state, index, count, waited, stable, lastCount, nudged;
+    static bool wasEnabled, wasPaused, restore;
     static int wasLimit;
     static string token;
     // run_script loads every run as a new assembly: a newer run takes the token and older Tick handlers quit
@@ -71,7 +54,7 @@ public static class ParetoGpuFrame
             return ParetoGpuJob.Fail("error", "Frame Debugger is not supported for the current graphics API");
 
         wasEnabled = (int)Prop("count") > 0;  // a disabled Frame Debugger has no events
-        // enabling the Frame Debugger pauses Play Mode and the replay moves the limit: both are set back in Stop()
+        // enabling pauses Play Mode and the replay moves the limit: Stop() restores both
         wasPaused = EditorApplication.isPaused;
         wasLimit = wasEnabled && Safe(() => Prop("limit")) is int lim ? lim : 0;
         ParetoGpuJob.KeepRenderingInBackground();
@@ -104,9 +87,9 @@ public static class ParetoGpuFrame
             UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
             if (EditorApplication.timeSinceStartup - started > 1800)
                 throw new Exception("timeout");
-            if (state == 0)  // wait until the captured frame is there and its event count is stable
+            if (state == 0)  // wait for a stable event count
             {
-                // an unfocused editor in Edit Mode does not render the Game view by itself
+                // an unfocused editor does not render the Game view by itself
                 EditorApplication.QueuePlayerLoopUpdate();
                 SceneRepaintDirty();
                 if (EditorApplication.timeSinceStartup - started > 60)
@@ -121,15 +104,30 @@ public static class ParetoGpuFrame
                 Request(0);
                 return;
             }
-            if (state == 1)  // replay up to event `index` and read its data
+            if (state == 1)
             {
+                if (restore)  // second half of a nudge (below)
+                {
+                    restore = false;
+                    SetLimit(index + 1);
+                    return;
+                }
                 bool ok = (bool)Call("GetFrameEventData", index, data);
                 int got = (int)dataType.GetField("m_FrameEventIndex", I).GetValue(data);
                 if (!ok || got != index)
                 {
                     if (++waited % 50 == 0) Progress($"waiting for event {index}: {waited} ticks");
-                    if (EditorApplication.timeSinceStartup - asked > 30)
-                        throw new Exception($"no data for event {index} of {count} in 30 s");
+                    var wait = EditorApplication.timeSinceStartup - asked;
+                    if (wait > 60)
+                        throw new Exception($"no data for event {index} of {count} in 60 s");
+                    // an unfocused editor may drop a replay: every 5 s the limit moves away for a tick and back
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    if (wait > 5 * (nudged + 1))
+                    {
+                        nudged++;
+                        restore = true;
+                        SetLimit(index > 0 ? index : index + 2);
+                    }
                     return;
                 }
                 waited = 0;
@@ -147,10 +145,11 @@ public static class ParetoGpuFrame
         }
     }
 
-    // replay up to event i (limit = i + 1); Tick reads its data once the replay is there
     static void Request(int i)
     {
         asked = EditorApplication.timeSinceStartup;
+        nudged = 0;
+        restore = false;
         SetLimit(i + 1);
     }
 
@@ -212,7 +211,6 @@ public static class ParetoGpuFrame
         return sb.ToString();
     }
 
-    // the size the Game view renders at (its resolution drop-down), else the Screen of the player loop
     static string GameViewSize()
     {
         var view = typeof(EditorWindow).Assembly.GetType("UnityEditor.PlayModeView");
@@ -251,6 +249,9 @@ public static class ParetoGpuFrame
                 && r != null && !seen.Contains(r) && !refs.Contains(r) && seen.Count + refs.Count < AssetRefs)
                 refs.Add(r);
         }
+        var active = so.FindProperty("m_Active");
+        if (active != null && active.propertyType == SerializedPropertyType.Boolean)
+            fields.Add(Str("m_Active") + ": " + (active.boolValue ? "true" : "false"));
         var nested = depth < AssetDepth ? refs.Where(r => !seen.Contains(r)).Select(r => AssetJson(r, depth + 1, seen)).ToList()
             : new List<string>();
         return $"{{\"name\": {Str(o.name)}, \"class\": {Str(o.GetType().Name)}, " +
@@ -282,7 +283,6 @@ public static class ParetoGpuFrame
         }
     }
 
-    // JSON of any value: primitives, strings, enums, arrays, Unity objects (name + id), structs/classes (fields)
     static string Value(object v, int depth)
     {
         switch (v)
@@ -318,7 +318,7 @@ public static class ParetoGpuFrame
         return "{" + string.Join(", ", fields.Select(f => Str(f.Name) + ": " + Value(Safe(() => f.GetValue(v)), depth + 1))) + "}";
     }
 
-    // names of the meshes of a (batched) draw: m_MeshInstanceIDs (6.3) or m_MeshEntityIds (6.4+)
+    // m_MeshInstanceIDs (Unity 6.3) or m_MeshEntityIds (6.4+)
     static string MeshNames()
     {
         var names = new List<string>();
@@ -342,9 +342,8 @@ public static class ParetoGpuFrame
         return "[" + string.Join(", ", names.Select(Str)) + "]";
     }
 
-    // {name: value} of the event's float, int and vector shader parameters (m_ShaderInfo: the values the draw used; a
-    // vector is [x, y, z, w]); a name met again (an array) gets a list of its values. Python reads the bounds of
-    // dynamic loops from them (core/loops.py). Matrices, textures and buffers are left out.
+    // {name: value, or [values] for an array} of the draw's float/int/vector params (vector = [x, y, z, w]);
+    // core/loops.py reads dynamic loop bounds from them. Matrices, textures and buffers are left out.
     static string ParamsJson()
     {
         var info = dataType.GetField("m_ShaderInfo", I)?.GetValue(data);
@@ -368,7 +367,7 @@ public static class ParetoGpuFrame
             (kv.Value.Count == 1 ? kv.Value[0] : "[" + string.Join(", ", kv.Value) + "]"))) + "}";
     }
 
-    // shader property values (matrices, vectors, floats, buffers) bloat the snapshot and are not needed
+    // bloat the snapshot; ParamsJson writes the needed ones
     static readonly HashSet<string> Heavy = new HashSet<string> { "m_Floats", "m_Ints", "m_Vectors", "m_Matrices", "m_Buffers", "m_CBuffers" };
 
     static object Safe(Func<object> f)
@@ -383,7 +382,7 @@ public static class ParetoGpuFrame
         UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
     }
 
-    // what the Frame Debugger window does after a change (RepaintAllNeededThings): the replay shows on the next repaint
+    // as the Frame Debugger window does (RepaintAllNeededThings): the replay shows on the next repaint
     static void SceneRepaintDirty() =>
         typeof(EditorApplication).GetMethod("SetSceneRepaintDirty", S)?.Invoke(null, null);
 

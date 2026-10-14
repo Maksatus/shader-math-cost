@@ -1,7 +1,4 @@
-"""Every module of paretogpu imports, uses no undefined global name and imports nothing it does not use.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""Every paretogpu module imports, uses no undefined global and has no unused imports."""
 import ast
 import builtins
 import dis
@@ -13,7 +10,7 @@ import unittest
 
 import paretogpu
 
-SKIP = ("rd_counters", "rd_loops", "rd_memory", "__main__")
+SKIP = ("rd_counters", "rd_loops", "rd_memory", "rd_device", "__main__")
 
 
 def _codes(co):

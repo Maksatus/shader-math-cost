@@ -1,15 +1,5 @@
-"""Two materials of a Unity project against each other: what `matcompare` runs (features/matcompare.py).
-
-A material selects its variants (core/materials.py): its shader, the color passes it is drawn with, its keywords
-plus the global keywords the pipeline sets for that pass (seen in the project's snapshots). Both materials'
-variants are compiled in the open editor and measured with malioc like a frame's (app/variants.py, the same
-variants folder of the project, so a variant is compiled once), and dynamic loops (lights, probes, ray steps) are
-priced at every n of NS (core/loops.py). No frame is needed: the result is the price of one pixel / vertex.
-
-Passes of A and B are paired by name, the rest in order (another shader may name its passes differently).
-
-  run(project, a, b, root, cores, ...) -> JSON-able result (kind "materials")
-"""
+"""Two materials compared without a frame: price of one pixel / vertex, loops at every n of NS; passes paired by
+name, the rest in order."""
 from paretogpu.app import materials
 from paretogpu.core.materials import NS, apis_of, describe, pair_passes
 from paretogpu.views.reporter import CONSOLE

@@ -1,15 +1,9 @@
-"""How many times the dynamic loops of a frame's draws really ran (plan K1.10, stage C): `cost` with --loop-pixels.
-
-A loop whose bound is not a shader parameter (a scan of a cluster mask: lights and probes per pixel; ray steps) has
-no trip count in the snapshot. The RenderDoc capture of the snapshot (frame.rdc) has it: for every draw that still
-has such a loop, a few pixels of its calls are debugged in RenderDoc (adapters/renderdoc/rd_loops.py) and the
-iterations of every outer loop of its pixel shader counted. The pixels are spread over the calls of the event by
-their PSInvocations, and so are the means. Remembered per capture and call (store/memo.py).
-
-  iterations_of(frame_dir, frame, state, api, pixels) -> {event index: {"n": [mean per outer loop], "pixels", "calls"}}
-"""
+"""Trip counts of dynamic loops whose bound is not a shader parameter (cluster-mask scans, ray steps): a few pixels per
+draw debugged in RenderDoc, sampled over its calls weighted by PSInvocations; n = mean over pixels."""
 import json
 import os
+import random
+from collections import Counter
 
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.core import loops
@@ -17,13 +11,13 @@ from paretogpu.model.variant import PLATFORM, VariantKey
 from paretogpu.store import memo as memo_store
 from paretogpu.views.reporter import CONSOLE
 
-MEMO = "rd_loops/1"
+MEMO = "rd_loops/2"
 CAPTURE = "frame.rdc"
 ACTIONS = "rd_actions.json"
 
 
 def _unknown(ev, fn, state):
-    """Whether a file of the event has an outer loop whose trip count the event's parameters do not give."""
+    """Whether the file has an outer loop whose trip count the event's params do not give."""
     profile = next(iter((state.get("loops") or {}).get(fn, {}).values()), None)
     if not profile:
         return False
@@ -31,22 +25,17 @@ def _unknown(ev, fn, state):
     return any(loops.bound_value(b, ev.get("params")) is None for b in bounds)
 
 
-def _split(total, calls):
-    """[(call, pixels)]: `total` pixels over the calls by their pixel shader runs (largest remainder): a batch of many
-    small calls gets its pixels in the large ones, a call with none is not debugged."""
-    runs = sum(ps for _, ps in calls)
-    if not runs:
+def _split(total, calls, seed=0):
+    """-> [(call, pixels)], deterministic per seed; calls with 0 picks are omitted."""
+    calls = [(eid, ps) for eid, ps in calls if ps]
+    if not calls:
         return []
-    share = [(eid, total * ps / runs) for eid, ps in calls if ps]
-    n = {eid: int(s) for eid, s in share}
-    for eid, s in sorted(share, key=lambda x: -(x[1] - int(x[1])))[:total - sum(n.values())]:
-        n[eid] += 1
-    return [(eid, k) for eid, k in n.items() if k]
+    picks = Counter(random.Random(seed).choices([eid for eid, _ in calls], weights=[ps for _, ps in calls], k=total))
+    return [(eid, picks[eid]) for eid, _ in calls if picks[eid]]
 
 
 def iterations_of(frame_dir, frame, state, api="vulkan", pixels=16, rep=CONSOLE, memo=None):
-    """{event index: {"n": [mean iterations per outer loop], "pixels": debugged, "calls": calls used}} of the draws
-    with a loop of unknown trip count; {} without a capture or with pixels = 0."""
+    """-> {event index: {"n": [mean per outer loop], "pixels", "calls"}}; {} without a capture or with pixels = 0."""
     capture = os.path.join(frame_dir, CAPTURE)
     platform = PLATFORM[api]
     want = []
@@ -64,7 +53,7 @@ def iterations_of(frame_dir, frame, state, api="vulkan", pixels=16, rep=CONSOLE,
         ps = {a["event"]: a.get("ps_invocations") or 0 for a in json.load(f)["actions"]}
     memo = memo or memo_store.default()
     sig = rdoc.signature(capture)
-    plan = {ev["index"]: _split(pixels, [(e, ps.get(e, 0)) for e in ev["rd"]["events"]]) for ev, _ in want}
+    plan = {ev["index"]: _split(pixels, [(e, ps.get(e, 0)) for e in ev["rd"]["events"]], ev["index"]) for ev, _ in want}
     asked = {(eid, n) for calls in plan.values() for eid, n in calls}
     got = {k: memo.get(MEMO, f"{sig}|{k[0]}|{k[1]}") for k in asked}
     missing = sorted(k for k, v in got.items() if v is None)
@@ -75,21 +64,22 @@ def iterations_of(frame_dir, frame, state, api="vulkan", pixels=16, rep=CONSOLE,
                                    os.path.join(frame_dir, "rd_loops.json"))
         for k in missing:
             got[k] = res.get(k[0]) or {"error": "not counted"}
-        memo.put_many(MEMO, [(f"{sig}|{k[0]}|{k[1]}", got[k]) for k in missing if "error" not in got[k]])
+        memo.put_many(MEMO, [(f"{sig}|{k[0]}|{k[1]}", got[k]) for k in missing
+                             if "error" not in got[k] and (got[k].get("samples") or not got[k].get("covered"))])
     out = {}
     for ev, fn in want:
-        size = len(next(iter(state["loops"][fn].values()))["loops"])
-        acc, weight, n_px, used = [0.0] * size, 0, 0, 0
+        priced = next(iter(state["loops"][fn].values()))["loops"]
+        size, nested = len(priced), [lp.get("word") is not None for lp in priced]
+        acc, n_px, used = [0.0] * size, 0, 0
         for eid, n in plan[ev["index"]]:
             r = got.get((eid, n)) or {}
             s = r.get("samples") or []
-            if not s or len(r.get("loops") or []) != size:
-                continue  # another number of outer loops than the priced shader: not this variant's loops
-            w = ps.get(eid, 0)
+            if not s or len(r.get("loops") or []) != size or r.get("nested", nested) != nested:
+                continue  # outer loops differ from the priced file's: not this variant
             for k in range(size):
-                acc[k] += w * sum(x[k] for x in s) / len(s)
-            weight, n_px, used = weight + w, n_px + len(s), used + 1
-        if weight:
-            out[ev["index"]] = {"n": [round(a / weight, 3) for a in acc], "pixels": n_px, "calls": used}
+                acc[k] += sum(x[k] for x in s)
+            n_px, used = n_px + len(s), used + 1
+        if n_px:
+            out[ev["index"]] = {"n": [round(a / n_px, 3) for a in acc], "pixels": n_px, "calls": used}
     rep.log(f"  loop iterations of {len(out)} of {len(want)} draws from the capture")
     return out

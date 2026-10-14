@@ -1,10 +1,5 @@
-"""The runs the UI starts: one at a time, a chain of steps run one by one in a subprocess with PARETOGPU_PROGRESS=1.
-
-Its `##progress` lines (views/reporter.py) move the phases of the steps (ui/presets.py), everything else is the log.
-A run goes on when the window is closed (the server holds it) and its log is kept in paretogpu/out/_ui/jobs. How long
-every phase took in the last runs (history.json) estimates the time left of the phases that have no count and of the
-ones still to come. A failed run gets a hint (HINTS) by the error code its command reported.
-"""
+"""One run at a time; each step is a subprocess with PARETOGPU_PROGRESS=1 whose `##progress {json}` lines
+(views/reporter.py) drive the phases, every other line is the log. history.json phase durations feed the ETA."""
 import json
 import os
 import statistics
@@ -13,18 +8,17 @@ import threading
 import time
 import traceback
 
+from paretogpu.app import device as device_app
 from paretogpu.ui import api, presets
 from paretogpu.ui.api import STATE, load_json as _load, save_json as _save
 from paretogpu.views import reporter
 
 JOBS = os.path.join(STATE, "jobs")
-LOG_LINES = 50000  # kept in memory per run; the file has all of them
+LOG_LINES = 50000  # in memory per run; the .log file has all
 ROOT = presets.ROOT
 
 
 class Runner:
-    """The current run and the ones before it."""
-
     def __init__(self):
         self.lock = threading.Lock()
         self.job = None
@@ -38,7 +32,6 @@ class Runner:
                 if j:
                     self.past.append(self.summary(j))
 
-    # --- estimates -------------------------------------------------------------------------------------------
     def typical(self, cmd, pid):
         d = self.history.get(f"{cmd}/{pid}")
         return statistics.median(d) if d else None
@@ -49,7 +42,7 @@ class Runner:
         del d[:-5]
 
     def estimate(self, job, now):
-        """Fills eta (seconds left) of every phase and step and of the whole run; None where nothing is known."""
+        """Sets eta (s left) on phases, steps and the job; None = unknown."""
         total, known = 0.0, True
         for s in job["steps"]:
             s_left, s_known = 0.0, True
@@ -83,7 +76,6 @@ class Runner:
         job["eta"] = total if job["status"] == "running" else 0
         job["eta_partial"] = not known
 
-    # --- running ---------------------------------------------------------------------------------------------
     @staticmethod
     def summary(j):
         return {k: j.get(k) for k in ("id", "title", "preset", "status", "started", "finished", "report", "error")}
@@ -261,8 +253,19 @@ class Runner:
             self.stopping = True
             proc = self.proc
         if proc and proc.poll() is None:
-            # the whole tree: malioc, qrenderdoc, the Unity CLI client (the editor itself is not a child)
+            # /T: also malioc, qrenderdoc, the Unity CLI client (the editor itself is not a child)
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        return True
+
+    def capture(self):
+        """Creates the trigger file the device step polls during phase rd_wait."""
+        with self.lock:
+            job = self.job
+            if not job or job["status"] != "running" or not job.get("frame_dir") or not waiting(job):
+                return False
+            path = device_app.trigger(job["frame_dir"])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
         return True
 
     def view(self, job_id=None, since=0):
@@ -277,45 +280,48 @@ class Runner:
                 self.estimate(job, now)
             v = {k: val for k, val in job.items() if k != "log"}
             v["now"] = now
+            v["waiting"] = job["status"] == "running" and waiting(job)
             start = max(since - job.get("log_start", 0), 0)
             v["log"] = job["log"][start:]
             v["log_next"] = job.get("log_start", 0) + len(job["log"])
             return json.loads(json.dumps(v))
 
 
-# known failures: (error code the command reports (model/errors.py), text of the log that names it when there is no
-# code, what to do, in words for someone who has not seen the CLI; `action`: a button the panel offers)
+# (error code of model/errors.py, log text matched when no code was reported, hint)
 HINTS = [
     ("unity_cli_off", "No Pipeline instance found", "Unity CLI в редакторе отключился. Включите его в Unity заново "
-     "(пакет com.unity.pipeline) и запустите ещё раз: ожидание не поможет.", None),
+     "(пакет com.unity.pipeline) и запустите ещё раз: ожидание не поможет."),
     ("editor_busy", "does not answer Unity CLI or is busy", "Unity не отвечает: откройте проект в Unity и дождитесь "
-     "конца компиляции и импорта (полоса прогресса внизу редактора), затем запустите ещё раз.", "no_compile"),
+     "конца компиляции и импорта (полоса прогресса внизу редактора), затем запустите ещё раз."),
     ("rd_not_game_frame", "is not the game frame", "RenderDoc несколько раз подряд записал только окно редактора, а не "
      "кадр игры. Сделайте вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и запустите проверку "
-     "ещё раз.", None),
+     "ещё раз."),
     ("not_playing", "is not in Play Mode", "Unity не в Play Mode: кадр в редакторе без запущенной игры не тот, что на "
-     "устройстве. Включите Play Mode, выставьте нужный кадр в окне Game и снимите кадр ещё раз.", None),
+     "устройстве. Включите Play Mode, выставьте нужный кадр в окне Game и снимите кадр ещё раз."),
     ("no_frame", "did not capture a frame", "Frame Debugger не получил кадр игры. Включите в Unity Play Mode, сделайте "
-     "вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и снимите кадр ещё раз.", None),
+     "вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и снимите кадр ещё раз."),
     ("renderdoc", "renderdoc", "Не получилось снять кадр через RenderDoc. В Unity на вкладке Game нажмите правой кнопкой "
-     "мыши → Load RenderDoc и запустите проверку ещё раз.", None),
+     "мыши → Load RenderDoc и запустите проверку ещё раз."),
     ("malioc", "malioc", "Не найден или упал malioc (Arm Performance Studio). Запустите start.bat: он покажет, чего не "
-     "хватает.", None),
-    ("no_snapshot", "no frame_events.json", "Снимок не найден или не дописан: снимите кадр заново.", None),
+     "хватает."),
+    ("no_snapshot", "no frame_events.json", "Снимок не найден или не дописан: снимите кадр заново."),
 ]
+
+
+def waiting(job):
+    return any(p["id"] == "rd_wait" and p["status"] == "running" for s in job["steps"] for p in s["phases"])
 
 
 def hint_of(job):
     codes = [s.get("error_code") for s in job["steps"] if s.get("error_code")]
     text = ("\n".join(job["log"][-400:]) + "\n" + (job.get("error") or "")).lower()
-    for code, needle, hint, action in HINTS:
+    for code, needle, hint in HINTS:
         if code in codes or (not codes and needle.lower() in text):
-            return {"text": hint, "action": action if any(s["cmd"] == "cost" for s in job["steps"]) else None}
-    for code, needle, hint, action in HINTS:
+            return {"text": hint}
+    for code, needle, hint in HINTS:
         if codes and needle.lower() in text:
-            return {"text": hint, "action": action if any(s["cmd"] == "cost" for s in job["steps"]) else None}
-    return {"text": "Что-то пошло не так, подробности в логе ниже. Если непонятно, пришлите лог тому, "
-                    "кто поддерживает ParetoGPU.", "action": None}
+            return {"text": hint}
+    return {"text": "Что-то пошло не так, подробности в логе ниже."}
 
 
 def fmt_time(s):

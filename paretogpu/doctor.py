@@ -1,9 +1,4 @@
-"""What the local UI and its commands need, checked: `python -m paretogpu.doctor` (start.bat runs it).
-
-Every check prints one line: [ OK ], [WARN] (some commands will not work) or [FAIL] (the UI will not start).
-Nothing is installed: a missing tool is only reported, with where to get it.
-Exit code: 0 all fine, 1 warnings only, 2 a failure.
-"""
+"""Run by start.bat, which branches on the exit code: 0 all fine, 1 warnings only, 2 a failure. Installs nothing."""
 import os
 import sys
 

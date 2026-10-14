@@ -1,8 +1,6 @@
-"""Measure the per-call cost of arbitrary GLSL expressions with malioc (Vulkan).
+"""Per-call malioc (Vulkan) cost of GLSL expressions in FMA units.
 
-Same method as run.py: chain of N steps x = (expr) + w_i, slope between chain
-lengths 8 and 24 minus the slope of the bare '+ w_i' chain, in units of one FMA
-(slope of the 'mad' chain on the same GPU). Cost = bottleneck arithmetic pipe.
+As run.py: slope of the chain x = (expr) + w_i minus the bare '+ w_i' chain, over the 'mad' slope; bottleneck pipe.
 """
 import concurrent.futures as cf
 import os
@@ -40,8 +38,7 @@ def _cost(malioc, core, prec, t, expr, prelude, combine):
 
 
 def measure(exprs, variant="float", prelude="", gpus=None, jobs=16):
-    """exprs: {name: glsl step expr with {x},{a},{b}}. Returns {name: {gpu: rel_fma}}
-    plus 'arch' map. Expressions are combined with '+ w_i' like run.py."""
+    """exprs: {name: GLSL step with {x},{a},{b}} -> {name: {gpu: rel_fma}, "arch": {gpu: arch}}."""
     prec, t = TYPES[variant]
     gpus = gpus or vulkan_gpus()
     tasks = {}
@@ -62,7 +59,6 @@ def measure(exprs, variant="float", prelude="", gpus=None, jobs=16):
 
 
 def table(res, names=None, base=None):
-    """Print per-architecture medians; base: name to show ratios against."""
     import statistics
     names = names or [n for n in res if n != "arch"]
     archs = list(dict.fromkeys(res["arch"].values()))

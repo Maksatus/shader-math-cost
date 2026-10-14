@@ -1,9 +1,4 @@
-"""Unity: the editor of a project and Unity CLI (com.unity.pipeline); bridge.py runs the C# scripts of cs/ in it.
-
-  editor_ready(project)  the open editor answers Unity CLI and is idle
-  cli_json(args)         a Unity CLI command: its JSON answer
-  unity_exe(project)     Unity.exe of the project's version (batchmode)
-"""
+"""Unity editor of a project and Unity CLI (com.unity.pipeline)."""
 import json
 import os
 import re
@@ -34,7 +29,6 @@ def editor_version(project):
 
 
 def hub_editor_dirs():
-    """Folders Unity Hub installs editors into: its "install location" setting (secondaryInstallPath.json), the default."""
     dirs = []
     try:
         with open(os.path.join(os.environ.get("APPDATA", ""), "UnityHub", "secondaryInstallPath.json"),
@@ -56,8 +50,18 @@ def unity_exe(project):
     return exe
 
 
+def android_package(project):
+    try:
+        with open(os.path.join(project, "ProjectSettings", "ProjectSettings.asset"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = re.search(r"applicationIdentifier:\s*\n((?:[ \t]+\S+:.*\n)+)", text)
+    ids = dict(re.findall(r"^\s+(\S+):\s*(\S*)\s*$", m.group(1), re.M)) if m else {}
+    return ids.get("Android") or None
+
+
 def project_open(project):
-    """True if an editor holds the project's lock file."""
     lock = os.path.join(project, "Temp", "UnityLockfile")
     if not os.path.exists(lock):
         return False
@@ -78,7 +82,6 @@ def cli_json(args, timeout):
 
 
 def editor_ready(project, allow_play=False):
-    """The project's editor answers Unity CLI and is idle (or in Play Mode, if allow_play)."""
     if not unity_cli():
         return False
     try:

@@ -1,23 +1,18 @@
-"""Exact shader variants compiled in the open editor (cs/ParetoGpuVariants.cs through bridge.py).
-
-ShaderData.Pass.CompileVariant for Android: the same files as "Compile and show code", including shader_feature
-variants it skips. One Unity run compiles a list of variants into a raw folder: <id>_<platform>_<stage>.bin as it
-goes, and answers variants.json at the end ({"variants": [{"id", "files", "errors", "fingerprint"}]}).
-
-  compile_variants(project, keys, raw, platforms)  -> the result (the caller places the files)
-  shader_query(project, "Fingerprints" | "Passes", shaders, raw)  -> {shader name: answer}
-  unfinished_run(raw)  -> (keys, result) of a run that did not finish (the editor crashed or the connection broke)
-"""
+"""Exact shader variants compiled in the open editor (cs/ParetoGpuVariants.cs).
+ShaderData.Pass.CompileVariant for Android gives the same files as "Compile and show code", including the shader_feature
+variants it skips. A run writes <id>_<platform>_<stage>.bin into `raw` as it goes, then variants.json
+{"variants": [{"id", "files", "errors", "fingerprint"}]}; the caller places the files."""
 import json
 import os
 import re
 
 from paretogpu.adapters.unity import bridge
 from paretogpu.adapters.unity.cli import UnityError
-from paretogpu.model.variant import NOT_FINISHED, VariantKey
+from paretogpu.model.variant import NOT_FINISHED, STOPPED, VariantKey
 
 SCRIPT = "ParetoGpuVariants.cs"
 JOB = "variants"
+PLACED = f"{JOB}.placed"
 
 
 class VariantsError(UnityError):
@@ -25,20 +20,18 @@ class VariantsError(UnityError):
 
 
 def shader_query(project, entry, shaders, raw, timeout=600):
-    """{shader name: answer} of a ParetoGpuVariants entry that takes {"shaders"} (Fingerprints, Passes) in the
-    open editor."""
+    """-> {shader name: answer} of an entry that takes {"shaders"} (Fingerprints, Passes)."""
     return bridge.call(project, SCRIPT, entry, raw, entry.lower(), {"shaders": sorted(set(shaders))}, VariantsError,
                        timeout)["shaders"]
 
 
 def current_fingerprints(project, shaders, raw, timeout=600):
-    """{shader name: fingerprint (None: not found)} from the open editor (ParetoGpuVariants.Fingerprints)."""
+    """-> {shader name: fingerprint, None if not found}."""
     return shader_query(project, "Fingerprints", shaders, raw, timeout)
 
 
 def compile_variants(project, keys, raw, platforms, timeout=1800, on_start=None, on_step=None):
-    """Compile `keys` in the open editor into `raw`; returns the result of the run.
-    on_start(total) once the editor answers; on_step(done, total): variants compiled so far."""
+    """on_start(total) once the editor answers; on_step(done, total): variants compiled so far."""
     bridge.require_editor(project, VariantsError, "it is needed to compile the variants of the frame")
     os.makedirs(raw, exist_ok=True)
     for fn in os.listdir(raw):
@@ -60,29 +53,40 @@ def compile_variants(project, keys, raw, platforms, timeout=1800, on_start=None,
     return result
 
 
-def unfinished_run(raw):
-    """(keys, result) of a Unity run that did not finish: it left its compiled files in `raw` without
-    its answer; variants without any file were not reached (or failed: the messages are lost with the run). None if
-    there is no such run."""
+def _config_keys(raw):
     config = os.path.join(raw, f"{JOB}_config.json")
-    if not os.path.exists(config) or os.path.exists(os.path.join(raw, f"{JOB}.json")):
+    if not os.path.exists(config):
         return None
     with open(config, encoding="utf-8") as f:
         cfg = json.load(f)
-    keys = [VariantKey(s, ss, pi, p, tuple(kw.split())) for s, ss, pi, p, kw in
+    return [VariantKey(s, ss, pi, p, tuple(kw.split())) for s, ss, pi, p, kw in
             zip(cfg["shaders"], cfg["subshaders"], cfg["pass_indices"], cfg["passes"], cfg["keywords"])]
+
+
+def unfinished_run(raw):
+    """(keys, result) of a run whose answer was not placed (editor crash, broken connection, or finished after Python
+    gave up). Unfinished: variants without files were not reached, the first one gets STOPPED. None if no such run."""
+    keys = _config_keys(raw)
+    answer = os.path.join(raw, f"{JOB}.json")
+    if keys is None or os.path.exists(os.path.join(raw, PLACED)):
+        return None
+    if os.path.exists(answer):
+        with open(answer, encoding="utf-8") as f:
+            result = json.load(f)
+        fits = not result.get("recovered") and len(result.get("variants") or []) == len(keys)
+        return (keys, result) if fits else None
     files = {}
     for fn in os.listdir(raw):
         m = re.fullmatch(r"(\d+)_(gles3|vulkan)_(vert|frag|comp)\.bin", fn)
         if m:
             files.setdefault(int(m.group(1)), []).append({"platform": m.group(2), "stage": m.group(3), "file": fn})
+    stop = next((i for i in range(len(keys)) if i not in files), None)
     result = {"variants": [{"id": i, "files": files.get(i, []), "fingerprint": None,
-                            "errors": [] if i in files else [NOT_FINISHED]}
+                            "errors": [] if i in files else [NOT_FINISHED] + ([STOPPED] if i == stop else [])}
                            for i in range(len(keys))]}
     return keys, result
 
 
-def mark_recovered(raw, result):
-    """Write the result of an unfinished run once its files are placed: it is not recovered again."""
-    with open(os.path.join(raw, f"{JOB}.json"), "w", encoding="utf-8", newline="\n") as f:
-        json.dump({**result, "recovered": True}, f, indent=1)
+def mark_placed(raw):
+    with open(os.path.join(raw, PLACED), "w", encoding="utf-8") as f:
+        f.write("1")

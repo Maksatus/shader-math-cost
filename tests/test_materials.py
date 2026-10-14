@@ -1,12 +1,10 @@
-"""adapters/unity/assets.py and core/materials.py on a synthetic Unity project in a temporary folder.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""adapters/unity/assets.py and core/materials.py on a synthetic Unity project."""
 import json
 import os
 import shutil
 import tempfile
 import unittest
+from collections import Counter
 
 from paretogpu.adapters.unity import assets as materials
 from paretogpu.core import materials as shaders
@@ -85,6 +83,21 @@ class ProjectTest(unittest.TestCase):
         self.assertEqual(keys[VariantKey("Test/Lit", 0, 1, "Forward Transparent", ("_ALPHA", "_FOG"))],
                          ["Assets/M/glass.mat"])
         self.assertEqual([x["material"] for x in skipped], ["Assets/M/builtin.mat"])
+
+    def test_pass_keywords_and_disabled_light_modes(self):
+        write(os.path.join(self.p, "Assets", "M", "opaque.mat"),
+              mat("opaque", "1" * 32, ["_EMISSION", "_AO"], ["forward transparent", "SRPDEFAULTUNLIT"]))
+        ms = [m for m in materials.scan(self.p) if m["path"] == "Assets/M/opaque.mat"]
+        info = shaders.snapshot_info([[]])
+        lit = [{"subshader": 0, "pass_index": 0, "pass": "Forward Opaque", "light_mode": "Forward Opaque",
+                "keywords": ["_EMISSION"]},
+               {"subshader": 0, "pass_index": 1, "pass": "Forward Transparent", "light_mode": "Forward Transparent",
+                "keywords": ["_EMISSION", "_AO"]},
+               {"subshader": 0, "pass_index": 2, "pass": "Unlit", "light_mode": None, "keywords": None}]
+        info["by_light_mode"] = {"Forward Opaque": Counter({(): 1}), "Forward Transparent": Counter({(): 1}),
+                                 None: Counter({(): 1})}
+        keys, _ = shaders.plan(ms, info, {"Test/Lit": lit})
+        self.assertEqual(sorted(keys), [VariantKey("Test/Lit", 0, 0, "Forward Opaque", ("_EMISSION",))])
 
 
 if __name__ == "__main__":

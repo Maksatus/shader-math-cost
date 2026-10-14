@@ -1,15 +1,6 @@
-// RenderDoc capture of the Game view (plan item K1.3: the reference for the pixel counts).
-//
-// Used by `python -m paretogpu frame`:
-//   adapters/unity/bridge.py call(..., "ParetoGpuRenderDoc.cs", "Start", <out>, "renderdoc", ...)
-// Needs RenderDoc loaded into the editor (Game tab menu -> Load RenderDoc). Start() pauses Play Mode if asked,
-// enables the Frame Debugger at its last event (it re-renders the whole game frame inside the Game view repaint)
-// and records that repaint like the Game view RenderDoc button; the Frame Debugger is restored after. The Frame
-// Debugger is driven through FrameDebuggerUtility alone (as its window does), no window is opened.
-// Answers {"capture": "<new .rdc>", "bytes", "was_paused"} (cs/ParetoGpuJob.cs: <out>/renderdoc.json).
-// Pause() (an entry point outside the job protocol) sets the pause state.
-//
-// config: {"pause": true}
+// RenderDoc capture of the Game view: job "renderdoc", config {"pause": true} -> {"capture": "<new .rdc>", "bytes",
+// "was_paused"}. Needs RenderDoc loaded into the editor (Game tab menu -> Load RenderDoc). Pause() is outside the job
+// protocol. The Frame Debugger is driven via FrameDebuggerUtility as its window does (no window) and restored after.
 
 using System;
 using System.IO;
@@ -44,7 +35,7 @@ public static class ParetoGpuRenderDoc
         oldTemplate = null;
     }
 
-    // will the next Game view repaint render the cameras (and so the Frame Debugger replay) itself
+    // does the next Game view repaint render the cameras (and so the Frame Debugger replay) itself
     static bool RenderInRepaint() =>
         typeof(EditorWindow).Assembly.GetType("UnityEditor.PlayModeView")?.GetProperty("renderViewCallNeededInOnGUI", S)
             ?.GetValue(null) is bool b ? b : true;
@@ -54,7 +45,7 @@ public static class ParetoGpuRenderDoc
     static object FdCall(string name, params object[] args) =>
         fdUtil.GetMethods(S).First(m => m.Name == name && m.GetParameters().Length == args.Length).Invoke(null, args);
 
-    // what the Frame Debugger window does after a change (RepaintAllNeededThings): the replay shows on the next repaint
+    // as the Frame Debugger window does (RepaintAllNeededThings): the replay shows on the next repaint
     static void SceneRepaintDirty() => typeof(EditorApplication).GetMethod("SetSceneRepaintDirty", S)?.Invoke(null, null);
 
     static void ChangeLimit(int limit)
@@ -123,10 +114,9 @@ public static class ParetoGpuRenderDoc
             {
                 if (ticks == 1) gameView.ShowTab();  // the Game view must be the visible tab of its dock area
                 if (ticks < 5) { gameView.Repaint(); return; }  // let the pause and the tab switch settle
-                // The Frame Debugger re-renders the game frame inside the Game view repaint; with its limit at the
-                // last event that repaint is the whole frame — and exactly the frame the Frame Debugger snapshot
-                // reads. GUIView.CaptureRenderDocScene() (the Game view RenderDoc button) records that repaint.
-                // (A plain frame capture fails in the editor: buffers stay mapped across editor frames.)
+                // The Frame Debugger re-renders the game frame inside the Game view repaint; at the last event that is
+                // exactly the frame the snapshot reads, and CaptureRenderDocScene (the Game view RenderDoc button)
+                // records it. A plain frame capture fails in the editor: buffers stay mapped across editor frames.
                 if (!fdOn)
                 {
                     fdUtil = AppDomain.CurrentDomain.GetAssemblies().Select(x => x.GetType("UnityEditorInternal.FrameDebuggerInternal.FrameDebuggerUtility")).First(t => t != null);
@@ -154,10 +144,12 @@ public static class ParetoGpuRenderDoc
                                                        "Mode and make the Game view visible");
                     return;
                 }
-                // A Frame Debugger already at its last event does not replay the frame: the repaint only blits its
-                // cached image and the capture holds the editor UI alone. One event back now, the last one in
-                // state 1: the limit changes, so the captured repaint replays the whole frame.
-                ChangeLimit(Math.Max(1, n - 1));
+                // Already at its last event the Frame Debugger only blits its cached image (capture = editor UI alone):
+                // one event back now, the last one in state 1, so the captured repaint replays the whole frame.
+                if (n < 2)
+                    throw new ParetoGpuJob.Failure("one_event", "the Frame Debugger frame has one event: nothing to " +
+                                                   "capture (does the camera render?)");
+                ChangeLimit(n - 1);
                 frame = n;
                 state = 1; ticks = 0;
                 limitChanged = phase = DateTime.Now;
@@ -165,16 +157,15 @@ public static class ParetoGpuRenderDoc
             }
             if (state == 1)
             {
-                // No QueuePlayerLoopUpdate from here on: in Play Mode the Game view renders its cameras inside its
-                // own repaint only when PlayModeView.renderViewCallNeededInOnGUI (NeedToPerformRendering and no
-                // player loop update waiting); a queued update renders the frame in the player loop instead, outside
-                // the repaint CaptureRenderDocScene records, and the capture holds the editor UI alone.
+                // No QueuePlayerLoopUpdate from here on: the Game view renders cameras inside its repaint only when
+                // renderViewCallNeededInOnGUI (no player loop update waiting); a queued update renders in the player
+                // loop, outside the recorded repaint, and the capture holds the editor UI alone.
                 gameView.Repaint();
                 // editor ticks can be a few ms apart: give the replay at the previous event real time too
                 if (ticks < 5 || (DateTime.Now - limitChanged).TotalSeconds < 0.3) return;
                 if (!RenderInRepaint() && Waited() < 10) return;
                 ChangeLimit(frame);
-                // write the capture straight into the output folder (the previous template is restored after)
+                // capture straight into outDir; the old template is restored after
                 oldTemplate = RdApi.GetTemplate();
                 RdApi.SetTemplate(Path.Combine(outDir, "frame"));
                 var host = typeof(EditorWindow).GetField("m_Parent", I)?.GetValue(gameView);
@@ -184,7 +175,7 @@ public static class ParetoGpuRenderDoc
                 phase = DateTime.Now;
                 return;
             }
-            // find the new capture: RenderDoc writes it to its temp folder
+            // the new capture: in outDir or RenderDoc's temp folder
             var dirs = new[] { outDir, Path.Combine(Path.GetTempPath(), "RenderDoc") };
             var cap = dirs.Where(Directory.Exists)
                 .SelectMany(d => Directory.GetFiles(d, "*.rdc", SearchOption.TopDirectoryOnly))
@@ -214,7 +205,7 @@ public static class ParetoGpuRenderDoc
         }
     }
 
-    // RENDERDOC_API_1_6_0 is a table of function pointers (renderdoc_app.h): entry 11 SetCaptureFilePathTemplate,
+    // RENDERDOC_API_1_6_0 function pointer table (renderdoc_app.h): 11 SetCaptureFilePathTemplate,
     // 12 GetCaptureFilePathTemplate. RenderDoc copies the string.
     static class RdApi
     {

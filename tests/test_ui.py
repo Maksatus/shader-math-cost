@@ -1,14 +1,11 @@
-"""ui/presets.py and ui/runner.py: what a button runs (steps, their folders and command lines) and the hint of a failed
-run; synthetic values, a temporary snapshot folder.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""ui/presets.py and ui/runner.py: steps, folders and command lines a button runs; failed-run hints."""
 import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from paretogpu.store import workspace
 from paretogpu.ui import presets, runner
@@ -36,6 +33,18 @@ class PresetsTest(unittest.TestCase):
         self.assertTrue(cost["no_compile"])
         self.assertEqual(presets.report_of("cost", cost), os.path.join(frame_dir, "frame_report.html"))
         self.assertEqual(presets.phases_of("frame", frame), ["rd_capture", "snapshot", "rd_counters"])
+
+    def test_frame_cost_of_a_phone_is_a_device_snapshot_priced_like_the_editors(self):
+        with mock.patch.object(presets, "android_package", return_value="com.game"):
+            steps, frame_dir = presets.plan("frame_cost", {"project": r"device:SER1:D:\Game", "suffix": "x",
+                                                           "cores": "Mali-G78"}, SCH)
+        self.assertEqual([c for c, _ in steps], ["device", "cost"])
+        self.assertTrue(frame_dir.endswith("_x_device"))
+        dev, cost = steps[0][1], steps[1][1]
+        self.assertEqual((dev["frame"], dev["project"], dev["app"], dev["serial"]), (frame_dir, r"D:\Game", "com.game",
+                                                                                      "SER1"))
+        self.assertEqual((cost["frame"], cost["project"]), (frame_dir, r"D:\Game"))
+        self.assertEqual(cost["variants"], workspace.variants_dir(r"D:\Game"))
 
     def test_cost_of_a_snapshot_uses_its_projects_variants(self):
         with open(os.path.join(self.dir, "frame_events.json"), "w", encoding="utf-8") as f:
@@ -71,7 +80,6 @@ class PresetsTest(unittest.TestCase):
 
 class LabelsTest(unittest.TestCase):
     def test_every_argument_has_a_label(self):
-        """The UI's forms name an argument by its label (features/spec.Arg): a new one without it shows its flag."""
         for c in presets.COMMANDS:
             for a, _ in c.flat_args():
                 self.assertTrue(a.label, f"{c.name} {a.flag}")
@@ -85,9 +93,7 @@ class HintTest(unittest.TestCase):
     def test_by_code_then_by_text(self):
         h = runner.hint_of(self.job(["x"], ["editor_busy"]))
         self.assertIn("Unity", h["text"])
-        self.assertEqual(h["action"], "no_compile")
         self.assertIn("RenderDoc", runner.hint_of(self.job(["renderdoc failed"], cmd="frame"))["text"])
-        self.assertIsNone(runner.hint_of(self.job(["does not answer Unity CLI or is busy"], cmd="frame"))["action"])
         self.assertIn("лог", runner.hint_of(self.job(["something else"]))["text"])
 
 

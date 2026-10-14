@@ -1,19 +1,11 @@
-"""The layers of paretogpu import only downwards (README, "Код"):
-
-  cli, ui, doctor, corpus  ->  features  ->  app  ->  adapters | store | views  ->  core  ->  model
-
-A module may import its own layer and the layers below it; adapters, store and views do not import each other.
-Imports inside functions count too.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""paretogpu layers (LAYERS) import only downwards; adapters, store and views do not import each other."""
 import ast
 import os
 import unittest
 
 PKG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "paretogpu")
 LAYERS = [
-    ("interface", ("paretogpu.cli", "paretogpu.__main__", "paretogpu.ui", "paretogpu.doctor", "paretogpu.corpus")),
+    ("interface", ("paretogpu.cli", "paretogpu.__main__", "paretogpu.ui", "paretogpu.doctor")),
     ("features", ("paretogpu.features",)),
     ("app", ("paretogpu.app",)),
     ("infra", ("paretogpu.adapters", "paretogpu.store", "paretogpu.views")),

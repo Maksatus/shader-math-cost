@@ -1,38 +1,25 @@
-"""Memory traffic of the frame's render passes and a rough roofline (plan item K2.3): is ALU the bottleneck at all?
+"""DRAM traffic of the frame's render passes (RenderDoc usage, adapters/renderdoc/rd_memory.py) and a roofline.
 
-Source: the snapshot's RenderDoc capture (adapters/renderdoc/rd_memory.py): every texture with its size, format and
-bytes, and how every call used it (sampled, colour / depth target, cleared, copied). Only the calls of the frame
-count: from the first to the last call of a Frame Debugger event, and the clears right before the first.
-
-A pass is a run of consecutive draws with the same colour and depth targets (Unity's native render pass on a tiled
-GPU: "(RP 1:0) Draw Opaque" and "(RP 1:1) Draw Skybox" are one). On Mali the fragments live in tile memory; DRAM
-sees per pass:
-  load      a target that holds pixels written earlier in the frame and is not cleared before the pass: read whole;
-  store     a target whose pixels are used after the pass (sampled, copied, loaded by a later pass, also outside the
-            frame: the editor showing the Game view): written whole; a target nobody uses again is not stored
-            (memoryless). What the frame needs, not what Unity's load / store actions say (Direct3D 11 in the editor
-            has none);
-  textures  every sampled texture of every call: min(shader runs x bytes per texel, the texture's bytes): one texel
-            per fragment from the right mip, read no more than once per call (minification without mips and
-            sampler state — K2.2 — are not seen);
-  copies    a copy reads its source and writes its destination whole.
-Depth + stencil counts 5 bytes a texel (Direct3D 11 pads it to 8). Targets (render textures) are AFBC-compressed on Mali: their loads, stores and samples count AFBC times their size.
-Textures of assets: the editor (Direct3D 11) holds them uncompressed (RGBA8), the device as ASTC: an 8-bit RGBA
-texture that is never a target counts ASSET_BITS bits per texel (ASTC 6x6; the real format per texture is K2.2).
-Vertex and index buffers are not counted (K2.4).
-
-Roofline of a pass on a core: shader time = its cycles (core/frame_cost, the events of the pass) / (shader cores x
-clock), memory time = bytes / bandwidth of the device (model/cores.DEVICES); the pass is memory bound when the
-memory time is longer. The frame: the sum over passes of the longer of the two.
-
-  passes(textures, usage, actions, events, rows, cores) -> {"passes", "totals", "assumptions"}
+A pass = consecutive draws of one camera's "(RP n:m)" n, subpasses merged (targets join when first bound; sampling a
+pass target is a tile read); without the marker, a run with the same colour + depth targets. Mali DRAM per pass:
+  load      a target written earlier in the frame and not cleared before its first use in the pass (one layer, top mip)
+  store     a target whose pixels are used later (incl. outside the frame); decided by what the frame needs, not by
+            Unity's load / store actions (D3D11 in the editor has none); unused again = memoryless, not stored
+  textures  per sampled texture per call: min(shader runs x bytes per texel, whole texture); whole without run counts
+  copies    source + destination whole; a resolve of the current pass's target right after it is on tile (destination
+            written with the pass, source not read / stored); a resolve of a cleared-only target clears its
+            destination (editor D3D11 resolves); a copy touching the current pass's targets ends the pass
+Sizes: D32S8 = 5 B / texel (D3D11 pads to 8); targets x AFBC; editor RGBA8 non-target assets count as ASTC
+(ASSET_BITS); device-frame ("native") textures as captured. Vertex and index buffers are not counted.
+Pass cycles: its events' cycles split by each call's share of the event's invocations, so passes sum to the frame;
+a target's tile preload gets no shader cycles. Frame time = sum over passes of max(alu_ms, mem_ms).
 """
 import re
 from collections import defaultdict
 
 from paretogpu.model.cores import DEVICES
 
-AFBC = 0.5          # AFBC compression of render targets (to check on the device: ~0.5 for game frames)
+AFBC = 0.5          # assumed AFBC ratio of render targets (~0.5 for game frames, not verified on device)
 ASSET_BITS = 3.56   # ASTC 6x6, Unity's default for Android textures
 DEPTH_BYTES = {"D32S8": 5}  # Direct3D 11 pads 32-bit depth + stencil to 8 bytes; Mali keeps 4 + 1
 UNCOMPRESSED_8BIT = ("R8G8B8A8", "B8G8R8A8", "R8G8B8X8", "B8G8R8X8")
@@ -40,11 +27,12 @@ READS = {"PS_Resource": "ps", "VS_Resource": "vs", "CS_Resource": "cs", "All_Res
          "GS_Resource": "vs", "HS_Resource": "vs", "DS_Resource": "vs", "TS_Resource": "vs", "MS_Resource": "vs"}
 RW = ("PS_RWResource", "CS_RWResource", "VS_RWResource", "All_RWResource")
 _RP = re.compile(r"\(RP (\d+):(\d+)\) ([^/]+)")
+NOT_A_USE = ("Barrier",)
+OVERWRITE = ("Clear", "CopyDst", "Discard", "CPUWrite")
 
 
 def texels(t):
-    """Texels of the texture's whole mip chain (all layers and samples)."""
-    w, h, d, n = t["width"], t["height"], max(1, t.get("depth") or 1), 0
+    w,h, d, n = t["width"], t["height"], max(1, t.get("depth") or 1), 0
     for m in range(max(1, t.get("mips") or 1)):
         n += max(1, w >> m) * max(1, h >> m) * max(1, d >> m)
     return n * max(1, t.get("arrays") or 1) * max(1, t.get("samples") or 1)
@@ -55,33 +43,60 @@ def is_target(t):
 
 
 def device_size(t):
-    """(bytes per texel of the top mip on the device, bytes of the whole texture on the device, how it was found)."""
+    """-> (device bytes per texel of top mip, device bytes of whole texture, "afbc" | "astc" | "capture")."""
     bpt = t["bytes"] / max(1, texels(t))
     fmt = t.get("format") or ""
-    real = next((b for k, b in DEPTH_BYTES.items() if fmt.startswith(k)), None)
+    real = None if t.get("native") else next((b for k, b in DEPTH_BYTES.items() if fmt.startswith(k)), None)
     if real and real < bpt:
         bpt, t = real, {**t, "bytes": real * texels(t)}
     if is_target(t):
         return bpt * AFBC, t["bytes"] * AFBC, "afbc"
-    if fmt.startswith(UNCOMPRESSED_8BIT):
+    if fmt.startswith(UNCOMPRESSED_8BIT) and not t.get("native"):
         dev = ASSET_BITS / 8
         return dev, t["bytes"] * dev / bpt, "astc"
     return bpt, t["bytes"], "capture"
 
 
 def _frame_calls(actions, events):
-    """The capture's actions of the frame, in order: from the first to the last call of a Frame Debugger event, and
-    the clears and copies right before the first."""
+    """First..last call of a Frame Debugger event, plus the clears / copies right before it that have no path or one
+    under an event's root marker (excludes the editor's own work before the frame)."""
     eids = sorted(e for ev in events for e in ((ev.get("rd") or {}).get("events") or []))
     if not eids:
         return []
     lo, hi = eids[0], eids[-1]
+    kinds = {"draw", "dispatch", "clear", "copy", "resolve"}
     order = sorted(actions, key=lambda a: a["event"])
     start = next((i for i, a in enumerate(order) if a["event"] >= lo), len(order))
-    while start > 0 and not ({"draw", "dispatch"} & set(order[start - 1]["kinds"])):
-        start -= 1
-    return [a for a in order[start:] if a["event"] <= hi and ({"draw", "dispatch", "clear", "copy", "resolve"}
-                                                              & set(a["kinds"]))]
+    first = start
+    while first > 0 and not ({"draw", "dispatch"} & set(order[first - 1]["kinds"])):
+        first -= 1
+    roots = {(ev.get("path") or "").split("/")[0] for ev in events if ev.get("rd")} - {""}
+    before = [a for a in order[first:start] if not a.get("path") or any(r in a["path"] for r in roots)]
+    return [a for a in before + order[start:] if a["event"] <= hi and kinds & set(a["kinds"])]
+
+
+def target_size(t):
+    """Device bytes of one layer of the top mip: a pass draws into one layer and mip."""
+    return device_size(t)[0] * t["width"] * t["height"] * max(1, t.get("samples") or 1)
+
+
+def _call_share(ev, eid, by_action):
+    """-> {"fragment" | "vertex" | "compute": share of the event's work done by call eid}: by invocations, else
+    1 / calls."""
+    calls = ev["rd"]["events"]
+    out = {}
+    for part, counter in (("fragment", "ps_invocations"), ("vertex", "vs_invocations"), ("compute", "cs_invocations")):
+        runs = [(by_action.get(e) or {}).get(counter) for e in calls]
+        total = sum(r or 0 for r in runs)
+        mine = (by_action.get(eid) or {}).get(counter)
+        out[part] = (mine or 0) / total if total and None not in runs else 1 / len(calls)
+    return out
+
+
+def _pass_key(ev, color, depth):
+    path =(ev or {}).get("path") or ""
+    m = _RP.search(path)
+    return ("draw", "rp", path[:m.start()], m.group(1)) if m else ("draw", "targets", color, depth)
 
 
 def _pass_name(names):
@@ -90,9 +105,8 @@ def _pass_name(names):
 
 
 def passes(textures, usage, actions, events, rows, cores):
-    """The passes of the frame with their bytes, the cycles of their events on every core and the roofline.
-    textures / usage: rd_memory.py's output; actions: rd_actions.json "actions"; events: the normalized events with
-    ev["rd"] (core/events.match); rows: frame_cost.compute()["events"] (the cost of every event on every core)."""
+    """textures / usage: rd_memory.py output; actions: rd_actions.json "actions"; events: with ev["rd"]
+    (core/events.match); rows: frame_cost.compute()["events"]. -> {"passes", "totals", "assumptions"} or None."""
     tex = {int(t["id"]): t for t in textures}
     by_event = defaultdict(lambda: defaultdict(list))  # eid -> usage -> [texture id]
     for tid, us in usage.items():
@@ -101,17 +115,21 @@ def passes(textures, usage, actions, events, rows, cores):
     calls = _frame_calls(actions, events)
     if not calls:
         return None
+    by_action = {a["event"]: a for a in actions}
     hi = calls[-1]["event"]
     owner = {e: ev for ev in events for e in ((ev.get("rd") or {}).get("events") or [])}
     cost = {r["index"]: r for r in rows}
 
+    tile_resolves = set()
+
     def used_after(tid, eid):
-        """Whether the pixels of the texture are used after event eid (in or after the frame): sampled, copied,
-        resolved, or drawn into without a clear first."""
+        """A device-frame swapchain image is always used: the present is not in the capture's usage."""
+        if tex.get(int(tid), {}).get("swapchain") and tex[int(tid)].get("native"):
+            return True
         for e, u in sorted((int(e), u) for e, u in usage.get(str(tid), usage.get(tid, []))):
-            if e <= eid:
+            if e <= eid or (u == "ResolveSrc" and e in tile_resolves) or u in NOT_A_USE:
                 continue
-            if u == "Clear" or u == "CopyDst":
+            if u in OVERWRITE:
                 return False
             return True
         return False
@@ -125,79 +143,96 @@ def passes(textures, usage, actions, events, rows, cores):
             cleared.update(use.get("Clear", []))
             continue
         if {"copy", "resolve"} & set(a["kinds"]):
-            for tid in use.get("CopySrc", []) + use.get("ResolveSrc", []):
-                loose["copy"] += device_size(tex[tid])[1] if tid in tex else 0
-            for tid in use.get("CopyDst", []) + use.get("ResolveDst", []):
-                if tid in tex:
-                    loose["copy"] += device_size(tex[tid])[1]
-                    written.add(tid)
-                    cleared.discard(tid)
-            loose["events"].append(eid)
+            src = use.get("CopySrc", []) + use.get("ResolveSrc", [])
+            dst = [tid for tid in use.get("CopyDst", []) + use.get("ResolveDst", []) if tid in tex]
+            on_tile = ("resolve" in a["kinds"] and "copy" not in a["kinds"] and cur is not None
+                       and cur["key"][0] == "draw" and src and set(src) <= cur["ids"])
+            if src and set(src) <= cleared:
+                cleared.update(dst)
+                continue
+            if on_tile:
+                tile_resolves.add(eid)
+                cur["resolves"].extend(tex[tid]["name"] for tid in dst)
+                cur["resolve_bytes"] += sum(device_size(tex[tid])[1] for tid in dst)
+            else:
+                loose["copy"] += sum(device_size(tex[tid])[1] for tid in src if tid in tex)
+                loose["copy"] += sum(device_size(tex[tid])[1] for tid in dst)
+                loose["events"].append(eid)
+                if cur is not None and (set(src) | set(dst)) & cur["ids"]:
+                    cur = None
+            written.update(dst)
+            cleared.difference_update(dst)
             continue
         color = tuple(sorted(use.get("ColorTarget", [])))
         depth = tuple(sorted(use.get("DepthStencilTarget", [])))
-        key = ("draw", color, depth) if "draw" in a["kinds"] else ("dispatch", eid)
-        if cur is None or cur["key"] != key:
-            cur = {"key": key, "calls": [], "targets": [], "tex": defaultdict(float), "names": [], "first": eid}
-            for tid in color + depth:
-                t = tex.get(tid)
-                if t is None:
-                    continue
-                load = tid in written and tid not in cleared
-                cur["targets"].append({"id": tid, "name": t["name"], "width": t["width"], "height": t["height"],
-                                       "format": t["format"], "samples": t.get("samples") or 1,
-                                       "depth": tid in depth, "cleared": tid in cleared, "load": load,
-                                       "bytes": device_size(t)[1]})
-                cleared.discard(tid)
-            out.append(cur)
-        cur["calls"].append(eid)
         ev = owner.get(eid)
+        key = _pass_key(ev, color, depth) if "draw" in a["kinds"] else ("dispatch", eid)
+        if (key[:2] == ("draw", "targets") and cur is not None and cur["key"][:2] == ("draw", "rp")
+                and color + depth and set(color + depth) <= cur["ids"]):
+            key = cur["key"]
+        if cur is None or cur["key"] != key:
+            cur = {"key": key, "calls": [], "targets": [], "ids": set(), "tex": defaultdict(float), "names": [],
+                   "first": eid, "resolves": [], "resolve_bytes": 0.0}
+            out.append(cur)
+        for tid in color + depth:
+            t = tex.get(tid)
+            if t is None or tid in cur["ids"]:
+                continue
+            cur["ids"].add(tid)
+            cur["targets"].append({"id": tid, "name": t["name"], "width": t["width"], "height": t["height"],
+                                   "format": t["format"], "samples": t.get("samples") or 1,
+                                   "depth": tid in depth, "cleared": tid in cleared,
+                                   "load": tid in written and tid not in cleared, "bytes": target_size(t)})
+            cleared.discard(tid)
+        cur["calls"].append(eid)
         m = _RP.search((ev or {}).get("path") or "")
         cur["names"].append(m.group(3) if m else (a["path"].split("/")[-1] if a["path"] else a["name"]))
-        runs = {"ps": a.get("ps_invocations") or 0, "vs": a.get("vs_invocations") or 0,
-                "cs": a.get("cs_invocations") or 0}
+        runs = {"ps": a.get("ps_invocations"), "vs": a.get("vs_invocations"), "cs": a.get("cs_invocations")}
         for u, stage in READS.items():
             for tid in use.get(u, []):
                 t = tex.get(tid)
-                if t is None or tid in color + depth:
+                if t is None or tid in cur["ids"]:
                     continue
                 per, whole, _ = device_size(t)
-                cur["tex"][tid] += min(runs[stage] * per, whole)
+                cur["tex"][tid] += whole if runs[stage] is None else min(runs[stage] * per, whole)
         for u in RW:
             for tid in use.get(u, []):
                 if tid in tex:
                     cur["tex"][tid] += device_size(tex[tid])[1]
                     written.add(tid)
         written.update(color + depth)
+        cleared.difference_update(color + depth)
 
-    # what every pass costs: stores once its last call is known, the cycles of its events split by their calls
-    share = defaultdict(lambda: defaultdict(float))  # pass index -> event index -> share of the event's calls
+    # stores need the pass's last call, so they are decided after all passes are built
+    share = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))  # pass -> event -> part -> share
     for i, p in enumerate(out):
         for eid in p["calls"]:
             ev = owner.get(eid)
             if ev:
-                share[i][ev["index"]] += 1 / len(ev["rd"]["events"])
+                for part, f in _call_share(ev, eid, by_action).items():
+                    share[i][ev["index"]][part] += f
     res = []
     for i, p in enumerate(out):
         last = p["calls"][-1]
         for t in p["targets"]:
             t["store"] = used_after(t["id"], last)
         load = sum(t["bytes"] for t in p["targets"] if t["load"])
-        store = sum(t["bytes"] for t in p["targets"] if t["store"])
+        store = sum(t["bytes"] for t in p["targets"] if t["store"]) + p["resolve_bytes"]
         texb = sum(p["tex"].values())
         total = load + store + texb
-        cycles = {c: sum(f * ((cost.get(e) or {}).get("cost", {}).get(c) or {}).get("total", 0.0)
-                         for e, f in share[i].items()) for c in cores}
+        parts = {c: {k: sum(f[k] * ((cost.get(e) or {}).get("cost", {}).get(c) or {}).get(k, 0.0)
+                            for e, f in share[i].items()) for k in ("fragment", "vertex", "compute")} for c in cores}
+        cycles = {c: sum(parts[c].values()) for c in cores}
         top = sorted(p["tex"].items(), key=lambda kv: -kv[1])[:6]
         res.append({
             "index": i, "name": _pass_name(p["names"]), "kind": p["key"][0], "first_call": p["first"],
             "calls": len(p["calls"]), "events": sorted(share[i]),
-            "targets": [{k: v for k, v in t.items() if k != "id"} for t in p["targets"]],
+            "targets": [{k: v for k, v in t.items() if k != "id"} for t in p["targets"]], "resolves": p["resolves"],
             "bytes": {"load": load, "store": store, "textures": texb, "total": total},
             "textures": [{"name": tex[tid]["name"], "format": tex[tid]["format"],
                           "size": [tex[tid]["width"], tex[tid]["height"]], "mips": tex[tid].get("mips"),
                           "how": device_size(tex[tid])[2], "bytes": b} for tid, b in top],
-            "cycles": cycles, "roofline": {c: roofline(cycles[c], total, c) for c in cores}})
+            "cycles": cycles, "parts": parts, "roofline": {c: roofline(cycles[c], total, c) for c in cores}})
     frame_bytes = sum(p["bytes"]["total"] for p in res) + loose["copy"]
     for p in res:
         p["share"] = p["bytes"]["total"] / frame_bytes if frame_bytes else 0.0
@@ -220,12 +255,12 @@ def passes(textures, usage, actions, events, rows, cores):
                                  if sum(p["cycles"][c] for p in res) else 0.0}
     return {"passes": res, "totals": totals,
             "assumptions": {"afbc": AFBC, "asset_bits": ASSET_BITS,
+                            "native": any(t.get("native") for t in textures),
                             "devices": {c: DEVICES[c] for c in cores if c in DEVICES}}}
 
 
 def roofline(cycles, nbytes, core):
-    """{"alu_ms", "mem_ms", "bound": "alu" | "memory"} of work on the core's device, or None (no device known)."""
-    d = DEVICES.get(core)
+    d =DEVICES.get(core)
     if not d:
         return None
     alu = cycles / (d["cores"] * d["mhz"] * 1e6) * 1e3

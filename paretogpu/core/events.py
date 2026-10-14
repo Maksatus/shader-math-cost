@@ -1,9 +1,3 @@
-"""Frame snapshot data (plan items K1.1, K1.3): Frame Debugger events -> event records, RenderDoc calls -> counters.
-
-normalize(raw)  frame.json (raw Frame Debugger data) -> one record per event with the shader variant, vertices,
-                render target and the frame stage (shadow / prepass / opaque / transparent / post / compute / other);
-match(events, actions)  the RenderDoc calls of every event (ev["rd"]): the next calls with the same marker path.
-"""
 import re
 
 from paretogpu.model.frame import Event
@@ -15,33 +9,59 @@ def _blend(b):
     return f"{b.get('m_SrcBlend')} {b.get('m_DstBlend')}"
 
 
+UI_MARKS = ("canvas.", "drawscreenspaceui", "gui.repaint", "uir.")
+DEPTH_COPY = ("copy depth", "copydepth", "downsample depth")
+POST_MARKS = ("postprocess", "uberpost", "finalpost", "bloom", "blit", "fullscreen", "copycolor", "final blit")
+
+
+def _fullscreen(ev):
+    return (ev.get("vertices") or 0) <= 6 and (ev.get("shader") or "").startswith("Hidden/")
+
+
 def stage_of(ev):
-    """Frame stage of a normalized event, from the light mode, render target, blend state and marker path."""
-    path, lm, rt = ev["path"].lower(), (ev["light_mode"] or "").lower(), (ev["rt"]["name"] or "").lower()
+    path, lm = (ev.get("path") or "").lower(), (ev.get("light_mode") or "").lower()
+    rt, shader = ((ev.get("rt") or {}).get("name") or "").lower(), ev.get("shader") or ""
     if ev["kind"] == "compute":
         return "compute"
     if ev["kind"] != "draw":
         return "other"
-    if "canvas." in path or (ev["shader"] or "").startswith("UI/"):
+    if any(m in path for m in UI_MARKS) or shader.startswith("UI/"):
         return "ui"
     if lm == "shadowcaster" or "shadow" in rt:
         return "shadow"
     if lm in ("depthonly", "depthnormals", "depthnormalsonly", "motionvectors") or "prepass" in path:
         return "prepass"
-    post = ("postprocess", "uberpost", "finalpost", "bloom", "blit", "fullscreen", "copycolor", "final blit")
-    if any(p in path for p in post) or (ev["vertices"] <= 6 and (ev["shader"] or "").startswith("Hidden/")):
+    if any(m in path for m in DEPTH_COPY) or "copydepth" in shader.lower():
+        return "prepass"
+    if "skybox" in path or shader.startswith("Skybox/"):
+        return "opaque"
+    if any(p in path for p in POST_MARKS) or _fullscreen(ev):
         return "post"
-    if ev["blend"] and ev["blend"] != "One Zero":
+    if ev.get("blend") and ev["blend"] != "One Zero":
         return "transparent"
     if "transparent" in path:
         return "transparent"
     return "opaque"
 
 
+def assign_stages(events):
+    """A full-screen pass inside a native render pass with opaque geometry (MRT init, sky) is opaque, not post."""
+    for ev in events:
+        ev["stage"] = stage_of(ev)
+    opaque_rp = {_native_pass(ev) for ev in events if ev["stage"] == "opaque" and not _fullscreen(ev)}
+    for ev in events:
+        if ev["stage"] == "post" and _fullscreen(ev) and _native_pass(ev) in opaque_rp - {None}:
+            ev["stage"] = "opaque"
+    return events
+
+
+def _native_pass(ev):
+    m = _RP_NUM.search(ev["path"] or "")
+    return (ev["path"][:m.start()], m.group(1)) if m else None
+
+
 def pixel_count(ev):
-    """(fragments the event shaded, how it was found): PSInvocations of its RenderDoc calls (K1.3), how many times
-    the pixel shader really ran. The Frame Debugger replay counts no pixels (its RT diff is gone: it was an
-    underestimate and the slow part of the snapshot)."""
+    """-> (PSInvocations of its RenderDoc calls or None, method); the Frame Debugger gives no pixel count."""
     if ev["kind"] != "draw":
         return 0, None
     if ev.get("rd") and ev["rd"].get("ps") is not None:
@@ -50,14 +70,13 @@ def pixel_count(ev):
 
 
 def normalize(raw) -> list[Event]:
-    """frame.json (raw Frame Debugger data) -> list of event records."""
     out = []
     for e in raw["events"]:
         x = e.get("data") or {}
         info = x.get("m_ShaderInfo") or {}
         kws = info.get("m_Keywords") or []
-        # the event type decides what the event is: the data keeps stale fields of earlier events
-        # (a clear shows the shader of the previous draw, every event the last compute shader)
+        # kind from the event type: Frame Debugger data keeps stale fields (a clear shows the previous draw's shader,
+        # every event the last compute shader)
         etype = e.get("type") or ""
         if "Dispatch" in etype:
             kind = "compute"
@@ -89,7 +108,7 @@ def normalize(raw) -> list[Event]:
             "zwrite": bool((x.get("m_DepthState") or {}).get("m_DepthWrite")),
             "cull": (x.get("m_RasterState") or {}).get("m_CullMode"),
             "batch_break": x.get("m_BatchBreakCause"),
-            # the float, int and vector shader parameters the event used: the bounds of its dynamic loops
+            # shader parameters: the bounds of dynamic loops
             "params": e.get("params") or {},
             "compute": {"shader": compute, "kernel": x.get("m_ComputeShaderKernelName"),
                         "groups": [x.get(f"m_ComputeShaderThreadGroups{a}") for a in "XYZ"],
@@ -102,47 +121,68 @@ def normalize(raw) -> list[Event]:
             ev["vertices"] = ev["indices"] = ev["instances"] = 0
         if kind == "other":
             ev["params"] = {}  # the data keeps the parameters of the last draw
-        ev["stage"] = stage_of(ev)
         ev["pixel_count"], ev["pixel_method"] = pixel_count(ev)
         out.append(ev)
-    return out
+    return assign_stages(out)
 
 
 _RP = re.compile(r"\(RP \d+:\d+\) ")
+_RP_NUM = re.compile(r"\(RP (\d+):\d+\) ")
+FULLSCREEN_SLACK = 1.01
 
 
 def _norm(path):
     return _RP.sub("", path or "").strip("/")
 
 
+def _ends(path, key):
+    p =_norm(path)
+    return p == key or (bool(key) and p.endswith("/" + key))
+
+
+def _check(ev, sel, ps):
+    """-> [what, Frame Debugger value, RenderDoc value] when the calls cannot be the event's, else None."""
+    got = sum((a.get("indices") or 0) * max(1, a.get("instances") or 0) for a in sel)
+    if ev.get("indices"):
+        if got != ev["indices"]:
+            return ["indices", ev["indices"], got]
+    elif ev.get("vertices") and got != ev["vertices"]:
+        return ["vertices", ev["vertices"], got]
+    rt = ev.get("rt") or {}
+    area = (rt.get("width") or 0) * (rt.get("height") or 0)
+    if _fullscreen(ev) and area and ps is not None and ps > FULLSCREEN_SLACK * area:
+        return ["pixels", area, ps]
+    return None
+
+
 def match(events: list[Event], actions, counters=None):
-    """Attach to every draw / compute event its RenderDoc calls:
-    ev["rd"] = {calls, events, ps / ps_invocations, vs / vs_invocations, cs_invocations, samples, gpu_ms}.
-    The calls of an event are the next calls (draws for draws, dispatches for compute) whose marker path ends with
-    the event's path; a Frame Debugger event holds m_DrawCallCount calls (several for an SRP batch).
-    counters: the counters the capture has (rd_actions.json "counters"); a counter it does not have is None, not 0
-    (Mali has no pipeline statistics). A draw whose calls do not add up to the Frame Debugger index count
-    (sum of indices x instances) gets "count_mismatch": [Frame Debugger, RenderDoc] — the order went astray.
-    Returns (matched events, events without calls, matched draws with a count mismatch)."""
+    """Sets ev["rd"] from the next m_DrawCallCount calls whose marker path ends with the event's (whole segments).
+    The scan stops at a call of the next event's path, so a missing event never takes a later one's calls.
+    A counter not in `counters` (rd_actions.json) is None, not 0: Mali has no pipeline statistics.
+    -> (matched, missing, count-mismatched draws)."""
     calls = [a for a in actions if "draw" in a["kinds"] or "dispatch" in a["kinds"]]
     pos, matched, missing, mismatched = 0, 0, 0, 0
+    wanted = [ev for ev in events if ev["kind"] in ("draw", "compute")]
 
     def total(sel, name):
         if counters is not None and name not in counters:
             return None
         return sum(a.get(name) or 0 for a in sel)
-    for ev in events:
-        if ev["kind"] not in ("draw", "compute"):
-            continue
+    for i, ev in enumerate(wanted):
         want = "dispatch" if ev["kind"] == "compute" else "draw"
         key, n = _norm(ev["path"]), max(1, ev["draw_calls"] or 1)
+        nxt = wanted[i + 1] if i + 1 < len(wanted) else None
+        nkey = _norm(nxt["path"]) if nxt else None
+        nwant = ("dispatch" if nxt["kind"] == "compute" else "draw") if nxt else None
         got, j = [], pos
         while j < len(calls) and len(got) < n:
             a = calls[j]
-            if want in a["kinds"] and (_norm(a["path"]).endswith(key) or (not key and not a["path"])):
+            if want in a["kinds"] and _ends(a["path"], key):
                 got.append(j)
             elif got:
                 break  # the calls of one event are consecutive
+            elif nxt and nkey != key and nwant in a["kinds"] and _ends(a["path"], nkey):
+                break
             j += 1
         if len(got) != n:
             ev["rd"] = None
@@ -156,10 +196,9 @@ def match(events: list[Event], actions, counters=None):
                     "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
                     "samples": total(sel, "samples_passed"),
                     "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
-        if ev["kind"] == "draw" and ev.get("indices"):
-            got_indices = sum((a.get("indices") or 0) * max(1, a.get("instances") or 0) for a in sel)
-            if got_indices != ev["indices"]:
-                ev["rd"]["count_mismatch"] = [ev["indices"], got_indices]
-                mismatched += 1
+        bad = _check(ev, sel, ps) if ev["kind"] == "draw" else None
+        if bad:
+            ev["rd"]["mismatch"], ev["rd"]["count_mismatch"] = bad[0], bad[1:]
+            mismatched += 1
         matched += 1
     return matched, missing, mismatched

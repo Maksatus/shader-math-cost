@@ -1,15 +1,6 @@
-"""Builds docs/approx.js: cheaper replacements (approximations) of table functions.
+"""Builds docs/approx.js: approximations of table functions with exact errors (check.py), hazards and malioc costs.
 
-For every approximation: HLSL code, valid input range, max error in float32 and float16, whether it stays within
-the Vulkan precision requirement of the builtin, malioc Vulkan cost of the builtin and of the approximation on
-every GPU and type (same chain method as run.py), error curve for the plot, hazards and on-device verification
-results.
-
-Errors and the numbers in the hazard texts come from check.py: every float32 and every float16 value of the domain,
-every operation rounded. Its results are cached in bench/.cache/approx_check by everything they depend on
-(coefficients, domain, type, source of check.py, fit.py and the evaluation here): a full float32 check takes minutes
-per approximation, a rebuild without changes takes seconds.
---fast: float32 on 1 of every 61 values (counts scaled), prints errors and hazards and does not write approx.js.
+check.py results are cached in bench/.cache/approx_check (a full float32 check takes minutes per approximation).
 
 Usage: python build_approx.py [--out ../../docs] [--keep-cost] [--fast]
 """
@@ -31,14 +22,14 @@ from measure import measure
 HERE = os.path.dirname(os.path.abspath(__file__))
 PI = np.pi
 INV_2PI = 0.159154943
-# Vulkan "Precision and Operation of SPIR-V Instructions": sin/cos absolute error inside [-pi, pi]
+# Vulkan spec: sin/cos absolute error inside [-pi, pi]
 SPEC_SIN = {"float": 2 ** -11, "half": 2 ** -7}
 CACHE = os.path.join(HERE, "..", ".cache", "approx_check")
 REFS = {"sin": {"ref": np.sin, "range": [-1.0, 1.0], "spec": SPEC_SIN, "beyond": 1e5,
                 "probes": [4.0, 2 * PI, 10.0, 9491.0, 1e5]}}
 FAST_STRIDE = 61
 
-# rounded to the 9 digits printed into the code, so errors are those of the published code
+# rounded to the 9 printed digits: errors are those of the published code
 _r9 = lambda c: [float(f"{v:.9g}") for v in c]
 P7 = _r9(odd_poly(np.sin, 0, PI, 4)[0])
 P5 = _r9(odd_poly(np.sin, 0, PI, 3)[0])
@@ -53,7 +44,7 @@ def horner(c, var, x2):
 
 
 def glsl_poly(name, c, reduce=False):
-    """GLSL helper for type {T}; reduce: argument in radians, any x (period reduction)."""
+    """GLSL helper for type {T}; reduce: period reduction for any x."""
     if reduce:
         body = (f"{{T}} u = x * {INV_2PI}; u = u - round(u); {{T}} u2 = u * u; "
                 f"return {horner(c, 'u', 'u2')};")
@@ -94,16 +85,15 @@ def num(v, d=2):
 
 
 def cnt(n):
-    """Thousands separated by a space from five digits on: 2086, 374 497."""
     return f"{n:,}".replace(",", " ") if n >= 10000 else str(n)
 
 
 def over1(y):
-    """Maximum above 1 with two significant digits of the excess: 1.00025, 1.0039."""
+    """1 + excess to 2 significant digits: 1.00025, 1.0039."""
     return f"{1 + float(f'{y - 1:.2g}'):g}"
 
 
-# Hazard and domain texts: strings or functions of the check numbers (facts()), so that the numbers are never typed
+# texts are strings or functions of facts(): numbers are never typed by hand
 APPROX = [
     {
         "id": "sin_fast7", "func": "sin", "name": "FastSin",
@@ -176,7 +166,7 @@ APPROX = [
 
 
 def run_check(a, dt, stride=1):
-    """check.check() of approximation a in type dt; full checks are cached by everything the result depends on."""
+    """check.check() of a in dt; full checks are cached by everything the result depends on."""
     r, v = REFS[a["func"]], "half" if dt is np.float16 else "float"
     args = {"domain": list(a.get("domain16", a["domain"]) if dt is np.float16 else a["domain"]),
             "vrange": r["range"], "tol": r["spec"][v], "beyond": r["beyond"], "probe_x": r["probes"]}

@@ -12,7 +12,7 @@ nav button { border: 0; background: transparent; color: var(--muted); padding: 7
 nav button:hover { background: var(--hover); color: var(--text); }
 nav button.on { background: var(--chip); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
 .env { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
-.envc { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--chip); color: var(--muted); cursor: help; white-space: nowrap; }
+.envc { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--chip); color: var(--muted); white-space: nowrap; }
 .envc.ok::before { content: "● "; color: var(--cheap); }
 .envc.warn::before { content: "● "; color: var(--medium); }
 .envc.fail::before { content: "● "; color: var(--heavy); }
@@ -67,7 +67,6 @@ details.more > summary { cursor: pointer; color: var(--muted); font-weight: 600;
 .banner { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;
   display: flex; gap: 10px; align-items: center; font-size: 13px; }
 .err { color: var(--heavy); margin-top: 8px; white-space: pre-wrap; font-size: 13px; }
-/* run panel */
 .jobhead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
 .jobhead h2 { margin: 0; }
 .now { margin: 14px 0 4px; font-size: 15px; font-weight: 600; }
@@ -116,7 +115,6 @@ pre.log .cmd { color: var(--accent); } pre.log .fail { color: var(--heavy); } pr
 .hist td { padding: 6px 6px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .hist tr.click { cursor: pointer; } .hist tr.click:hover td { background: var(--hover); }
 .empty { padding: 30px; text-align: center; color: var(--muted); }
-/* reports */
 table.rep { width: 100%; border-collapse: collapse; }
 table.rep th, table.rep td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 table.rep th { font-size: 12px; color: var(--muted); font-weight: 600; }

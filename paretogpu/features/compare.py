@@ -1,8 +1,3 @@
-"""Two cost runs against each other (plan items K2.1, A5.1): `python -m paretogpu compare <A> <B>`.
-
-The frame, its stages, shaders, variants and events; every change split into price (the shaders), work (pixels,
-vertices) and mix (variants) by core/compare.py -> compare.html, compare.json.
-"""
 import os
 
 from paretogpu.app import results
@@ -25,13 +20,14 @@ def run_command(args):
     if x:
         pct = f" ({100 * x['delta'] / x['a']:+.1f}%)" if x["a"] else ""
         print(f"{x['core']}: {x['a'] / 1e6:.1f} -> {x['b'] / 1e6:.1f} M cycles, {x['delta'] / 1e6:+.2f} M{pct}: "
-              f"price {x['price'] / 1e6:+.2f}, work {x['work'] / 1e6:+.2f}, mix {x['mix'] / 1e6:+.2f}"
-              + ("  (the same snapshot: only prices differ)" if cmp["same_frame"] else ""))
+              f"price {x['price'] / 1e6:+.2f}, loops {x['loops'] / 1e6:+.2f}, work {x['work'] / 1e6:+.2f}, "
+              f"mix {x['mix'] / 1e6:+.2f}"
+              + ("  (the same snapshot: only prices and loop trip counts differ)" if cmp["same_frame"] else ""))
         for s in x["shaders"][:10]:
             if abs(s["delta"]) < 1:
                 break
             print(f"  {s['delta'] / 1e6:+8.2f} M  {s['shader'][:50]:50s} price {s['price'] / 1e6:+.2f}, "
-                  f"work {s['work'] / 1e6:+.2f}, mix {s['mix'] / 1e6:+.2f}" + (f"  [{s['status']}]" if s["status"] != "both" else ""))
+                  f"loops {s['loops'] / 1e6:+.2f}, work {s['work'] / 1e6:+.2f}, mix {s['mix'] / 1e6:+.2f}" + (f"  [{s['status']}]" if s["status"] != "both" else ""))
     out = args.out or (args.b if os.path.isdir(args.b) else os.path.dirname(os.path.abspath(args.b)))
     print(f"-> {os.path.abspath(results.publish(RESULT, cmp, out))}")
     return 0
@@ -47,7 +43,7 @@ RESULT = ResultKind("compare", lambda c: "Сравнение кадров", _bri
 
 COMPARE = Command(
     "compare", "compare two cost runs: the frame, its stages and shaders, every change split into price (the shaders), "
-               "work (pixels, vertices) and mix (variants)",
+               "loops (trip counts of their dynamic loops), work (pixels, vertices) and mix (variants)",
     [Arg("a", label="Расчёт A (до)", help="before: snapshot folder (its latest cost), frame_cost.json or <snapshot>/costs/<time>.json"),
      Arg("b", label="Расчёт B (после)", help="after: the same kinds"),
      Arg("--out", label="Папка результата", help="folder for compare.html and compare.json (default: B's folder)")],

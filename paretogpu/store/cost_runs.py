@@ -1,7 +1,4 @@
-"""Every run of `cost` on a snapshot, kept: <out>/costs/<time>.json with a small <time>.meta.json for listing,
-next to frame_cost.json (the latest run). A snapshot priced again after a shader change is compared with its earlier
-runs (core/compare.py).
-"""
+"""Every `cost` run kept as <snapshot>/costs/<time>.json + <time>.meta.json; frame_cost.json is the latest run."""
 import json
 import os
 import shutil
@@ -16,7 +13,7 @@ META = ("computed_at", "frame_dir", "project", "api", "malioc", "cores", "main_c
 
 
 def archive(c, out):
-    """Keep this run of `cost` as <out>/costs/<time>.json (+ .meta.json); returns the run id (<time>)."""
+    """-> run id (<time>)."""
     d = os.path.join(out, COSTS)
     os.makedirs(d, exist_ok=True)
     rid = time.strftime("%Y%m%d_%H%M%S", time.localtime(c.get("computed_at") or time.time()))
@@ -29,13 +26,11 @@ def archive(c, out):
 
 
 def meta(c, rid=None):
-    """What the list of runs says about one: its part of core/frame_cost.summary."""
     s = frame_cost.summary(c)
     return {"id": rid, **{k: s[k] for k in META}}
 
 
 def runs(folder):
-    """Metas of the runs kept in <folder>/costs, oldest first."""
     d = os.path.join(folder, COSTS)
     out = []
     if os.path.isdir(d):
@@ -54,7 +49,6 @@ def run_path(folder, rid):
 
 
 def load(path):
-    """A cost run: frame_cost.json, a costs/<time>.json, or a snapshot folder (its latest run)."""
     if os.path.isdir(path):
         path = os.path.join(path, workspace.COST_FILE)
     with open(path, encoding="utf-8") as f:

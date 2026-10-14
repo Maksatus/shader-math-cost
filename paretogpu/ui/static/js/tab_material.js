@@ -21,7 +21,6 @@ async function msSuggest() {
   const ok = list.some(m => m.path === $("#msMat").value.trim());
   const busy = !!(job && job.status === "running");
   $("#msRun").disabled = !ok || busy;
-  $("#msRun").title = busy ? "Уже идёт запуск" : ok ? "" : "Выберите материал из списка";
   store.set("matshader", {project: $("#msProject").value, mat: $("#msMat").value.trim()});
 }
 $("#msMat").oninput = msSuggest;

@@ -1,13 +1,4 @@
-"""One material of a Unity project: everything about its shader variants, and what every line of them costs. What
-`matshader` runs (features/matshader.py).
-
-The variants are planned, compiled and measured as for the comparison of materials (app/matcompare.py): the
-material's keywords plus the pipeline's global keywords of every color pass. On top of the prices, every pass's
-fragment and vertex shader is ablated statement by statement (core/ablation.py, plan A3.2) on the chosen cores,
-dynamic loops at n iterations.
-
-  run(project, material, root, cores, ...) -> JSON-able result (kind "material")
-"""
+"""One material: its variants priced as in matcompare, plus every pass's GLES shaders ablated per statement."""
 import os
 
 from paretogpu.app import ablation as ablation_run

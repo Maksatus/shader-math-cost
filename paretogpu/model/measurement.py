@@ -1,4 +1,3 @@
-"""What malioc says about a shader on one core, and the prices made of it."""
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -7,9 +6,8 @@ PIPES = ("arith", "fma", "cvt", "sfu", "ls", "v", "t")  # short names of malioc'
 
 @dataclass(frozen=True)
 class PipeModel:
-    """The pipes of a GPU family, as core/pricing.py prices them: the busiest pipe on the path is the price; the
-    arithmetic pipe `arith` may be broken down into sub-pipes that name the bound; a vertex shader's variants
-    (IDVS: position, varying) all run per vertex."""
+    """Price = busiest pipe on the path; `arith` may split into arith_sub pipes that name the bound; all IDVS vertex
+    variants (position, varying) run per vertex."""
     pipes: tuple          # in the order bounds are named
     arith: str = None
     arith_sub: tuple = ()
@@ -21,7 +19,7 @@ Cycles = dict  # {pipe: cycles}
 
 
 class VariantPerf(TypedDict, total=False):
-    """One malioc variant of a shader: "main" (fragment, compute), "position" and "varying" (IDVS vertex)."""
+    """malioc variant: "main" (fragment, compute), "position" / "varying" (IDVS vertex)."""
     longest: Cycles   # None when malioc reports N/A (dynamic loops)
     shortest: Cycles
     total: Cycles
@@ -35,8 +33,7 @@ class VariantPerf(TypedDict, total=False):
 
 
 class Measurement(TypedDict, total=False):
-    """One shader file on one core (adapters/malioc.measure; measurements.jsonl adds file, root, shader, pass,
-    keywords). A failure is {"ok": False, "error", "file", "core", "api"}."""
+    """One file on one core. A failure is {"ok": False, "error", "file", "core", "api"}."""
     ok: bool
     error: str
     file: str
@@ -53,7 +50,6 @@ class Measurement(TypedDict, total=False):
 
 
 class Score(TypedDict):
-    """Heaviness of one stage on one core (core/pricing.score): the bottleneck cycles and why."""
     cycles: float
     path: str         # longest | total | "loop n=<n>"
     bound: list
@@ -63,9 +59,10 @@ class Score(TypedDict):
 
 
 class LoopProfile(TypedDict):
-    """A shader whose dynamic loops are forced and measured (core/loops.profile, app/rules.parametric): longest path."""
+    """Forced dynamic loops measured on the longest path (core/loops.profile)."""
     model: str        # core/loops.MODEL
     base: dict        # Cycles with every outer loop at 1 iteration
     loops: list       # [{"zero", "two", "word"}] Cycles with outer loop k at 0 / 2 / 1 with its nested loops twice
+    zero: dict        # Cycles with every outer loop at 0 (two or more loops only)
     work_regs: int
     spilling: bool

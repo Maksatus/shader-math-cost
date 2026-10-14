@@ -1,8 +1,3 @@
-"""One material of a Unity project: `python -m paretogpu matshader` (app/matshader.py).
-
-Everything about its shader variants, their prices and what every line of their code costs (ablation, plan A3.2).
-RESULT: its page.
-"""
 import os
 
 from paretogpu.app import matshader

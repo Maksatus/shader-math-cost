@@ -54,8 +54,7 @@ function resultHtml(j) {
     ${pixelsLine(s)}
     ${s.checked === false ? `<div class="warnline">⚠ Шейдеры не перекомпилировались (Unity был недоступен или выбран расчёт без компиляции): если шейдеры менялись после прошлого расчёта, цена может быть устаревшей.</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="open">Открыть полный отчёт</button>
-      <button class="btn" data-act="hotspots" title="Самые дорогие шейдеры кадра: их самые тяжёлые части и что в них">Почему тяжёлые</button>
-      ${s.unpriced_draws ? `<button class="btn" data-act="retry">Повторить упавшие (${s.unpriced_draws})</button>` : ""}
+      <button class="btn" data-act="hotspots">Почему тяжёлые</button>
       <button class="btn" data-act="folder">Папка</button></div></div>`;
 }
 
@@ -66,22 +65,19 @@ function prevHtml(p) {
   const pc = p.pct == null ? "" : ` (${p.pct > 0 ? "+" : p.pct < 0 ? "−" : "±"}${Math.abs(100 * p.pct).toFixed(1)}%)`;
   return `<div class="prev"><div class="muted small">К прошлому расчёту этого снимка (${when(p.a_time)}), ${esc(p.core)}</div>
     <div class="d ${c}">${sg(p.delta)} млн${pc}</div>
-    <div class="small">цена шейдеров <b>${sg(p.price)}</b> · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
+    <div class="small">цена шейдеров <b>${sg(p.price)}</b>${p.loops ? ` · повторы циклов <b>${sg(p.loops)}</b>` : ""} · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
     ${p.shaders && p.shaders.length ? `<div class="small" style="margin-top:4px">${p.shaders.map(x => `${esc(x.shader)} <b class="${x.delta < 0 ? "good" : "bad"}">${sg(x.delta)}</b>`).join(" · ")}</div>` : ""}
     <div style="margin-top:8px"><button class="btn sm" data-act="compare">Подробное сравнение</button></div></div>`;
 }
 
 function pixelsLine(s) {
-  // where the pixel counts came from: renderdoc is exact, diff an estimate (see the report's "Как читать")
   const pm = s.pixel_methods || {};
-  const name = {renderdoc: "RenderDoc (точно)", fullscreen: "полноэкранные проходы", diff: "Frame Debugger diff (оценка)", none: "нет"};
+  const name = {renderdoc: "RenderDoc (точно)", samples: "телефон (точно)", fullscreen: "полноэкранные проходы", diff: "Frame Debugger diff (оценка)", none: "нет"};
   const txt = Object.entries(pm).map(([k, n]) => `${name[k] || k}: ${n}`).join(" · ");
-  if (Object.keys(pm).some(k => k !== "renderdoc"))
+  if (Object.keys(pm).some(k => k !== "renderdoc" && k !== "samples"))
     return `<div class="warnline">⚠ Не у всех draw пиксели из RenderDoc: ${esc(txt)}. Снимите кадр заново.</div>`;
   return txt ? `<div class="muted small" style="margin-top:6px">Пиксели draw: ${esc(txt)}</div>` : "";
 }
-
-function costStep(j) { return j.steps.find(s => s.cmd === "cost"); }
 
 function renderJob(j) {
   const now = j.now || Date.now() / 1000;
@@ -104,8 +100,7 @@ function renderJob(j) {
     <div class="bar ${j.status === "ok" ? "ok" : j.status === "running" ? "" : "bad"}"><i style="width:${p.toFixed(1)}%"></i></div>
     <div class="meta">${j.status === "running" ? `<span>готово <b>${p.toFixed(0)}%</b></span><span>прошло <b>${dur(el)}</b></span><span>осталось <b>${esc(etaTxt)}</b></span>`
       : `<span>заняло <b>${dur(el)}</b></span>`}</div>`;
-  const hint = j.status === "failed" && j.hint ? `<div class="hint">${esc(j.hint.text)}
-      ${j.hint.action === "no_compile" ? `<div><button class="btn" data-act="nocompile">Посчитать по уже скомпилированным вариантам</button></div>` : ""}</div>` : "";
+  const hint = j.status === "failed" && j.hint ? `<div class="hint">${esc(j.hint.text)}</div>` : "";
   const res = j.status === "ok" ? resultHtml(j) : "";
   const steps = j.steps.map(s => (j.steps.length > 1 ? `<div class="stept">${esc(stepText(s.cmd))}</div>` : "") + s.phases.map(x => phaseRow(x, now)).join("")).join("");
   if (detailsOpen === null) detailsOpen = j.status === "failed";
@@ -118,26 +113,19 @@ function renderJob(j) {
   card.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act(b.dataset.act, j));
 }
 
-const OLD_PAGE_KIND = {"frame_report.html": "cost", "hotspots.html": "hotspots"};
-
 async function act(a, j) {
   const dir = j.report_path ? j.report_path.replace(/[\\/][^\\/]+$/, "") : j.frame_dir;
-  const cs = costStep(j);
   if (a === "stop" && confirm("Остановить проверку? Текущий шаг прервётся.")) await api("/api/stop", {});
   if (a === "open") {
-    // the run's page by its kind; the snapshot's other pages from the list of reports
     const name = dir.split(/[\\/]/).pop();
     const x = ((await api("/api/reports")).reports || []).find(r => r.name === name) || {name, path: dir, pages: {}};
-    // a job saved before report_kind: its kind by the page's name, else the page itself under a kind of its own
-    const kind = j.report_kind || OLD_PAGE_KIND[(j.report_path || "").split(/[\\/]/).pop()] || "page";
+    const kind = j.report_kind || "page";
     if (j.report) x.pages = {...x.pages, [kind]: j.report};
     openReport(x, kind);
   }
   if (a === "folder") api("/api/reveal", {path: dir});
   if (a === "hotspots") start("hotspots", {frame: dir});
   if (a === "compare" && j.summary && j.summary.prev) openCompare(j.summary.prev.run_a, j.summary.prev.run_b);
-  if (a === "retry" && cs) start("cost", {...cs.values, retry_failed: true});
-  if (a === "nocompile" && cs) start("cost", {...cs.values, no_compile: true});
 }
 
 function appendLog(lines) {
@@ -170,7 +158,7 @@ async function poll() {
     if (j) {
       if (job && job.id !== j.id) { job = null; logNext = 0; logEl = null; detailsOpen = null; return poll(); }
       const finished = job && job.status === "running" && j.status !== "running";
-      if (finished && j.status === "failed") detailsOpen = true;  // the log is what explains a failure
+      if (finished && j.status === "failed") detailsOpen = true;
       job = j;
       renderJob(j);
       appendLog(j.log);
@@ -179,7 +167,7 @@ async function poll() {
       if (finished) { loadHistory(); OPT = await api("/api/options"); }
     }
     updateRun();
-  } catch (e) { /* the server restarts: try again */ }
+  } catch (e) { /* server restarting: retry */ }
   timer = setTimeout(poll, job && job.status === "running" ? 700 : 3000);
 }
 
@@ -197,5 +185,3 @@ async function loadHistory() {
     $("#backCur").onclick = () => { viewId = null; logNext = 0; logEl = null; job = null; detailsOpen = null; $("#backCur").remove(); poll(); };
   });
 }
-
-/* ---------- reports ---------- */

@@ -1,12 +1,10 @@
-"""What the UI's pages read: the snapshots and their cost runs, the analyses of materials, the projects and their
-materials, the environment checks; the summary of a finished cost run for the run panel.
-"""
 import json
 import os
 import re
 import time
 import urllib.parse
 
+from paretogpu.app import code_version
 from paretogpu.core import compare, frame_cost
 from paretogpu.store import cost_runs as runs_store
 from paretogpu.store import results as store_results
@@ -50,8 +48,7 @@ PANEL = ("main_core", "api", "total", "fragment", "vertex", "compute", "coverage
 
 
 def cost_summary(folder):
-    """What the run panel shows after a cost: the frame on the main core, the costliest shaders, what has no price
-    (its part of core/frame_cost.summary) and the change since the run before."""
+    """Run panel data: PANEL keys of frame_cost.summary + prev (compare with the previous run)."""
     c = load_json(os.path.join(folder, workspace.COST_FILE), None)
     if not c:
         return None
@@ -86,7 +83,6 @@ def _cached_json(path):
     return d
 
 
-OLD_PAGES = {"cost": workspace.REPORT_PAGE, "hotspots": workspace.HOTSPOTS_PAGE}
 
 
 def snapshots():
@@ -98,10 +94,10 @@ def snapshots():
         row = {"name": name, "path": d, "time": os.path.getmtime(ev), "project": meta.get("project"),
                "unity": meta.get("unity"), "api": meta.get("graphics_api"), "play_mode": meta.get("play_mode"),
                "events": len(events), "draws": sum(1 for e in events if e.get("kind") == "draw"),
-               "renderdoc": bool(meta.get("renderdoc")), "cost_time": None, "pages": {}}
+               "renderdoc": bool(meta.get("renderdoc")), "phone": (meta.get("device") or {}).get("model"),
+               "cost_time": None, "pages": {}}
         rs = runs_store.runs(d)
         row["runs"] = [m["id"] for m in rs]
-        # the pages of the snapshot's results by their kind (every result describes itself: store/results.py)
         for m in store_results.of_folder(d):
             page = os.path.join(d, m["page"]) if m.get("page") else None
             if page and os.path.exists(page):
@@ -111,13 +107,7 @@ def snapshots():
                     t = m.get("summary") or {}
                     row.update(main_core=t.get("main_core"), total=t.get("total"), fragment=t.get("fragment"),
                                vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"),
-                               api_cost=t.get("api"))
-        # a snapshot priced before results described themselves: its pages by their file names
-        for kind, fn in OLD_PAGES.items():
-            if kind not in row["pages"] and os.path.exists(os.path.join(d, fn)):
-                row["pages"][kind] = out_url(os.path.join(d, fn))
-                if kind == "cost":
-                    row["cost_time"] = os.path.getmtime(os.path.join(d, fn))
+                               api_cost=t.get("api"), stale=t.get("code_version") != code_version.current())
         rows.append(row)
     return sorted(rows, key=lambda r: -r["time"])
 
@@ -126,7 +116,6 @@ RUN_ID = re.compile(r"\d{8}_\d{6}b*")
 
 
 def cost_runs():
-    """Every kept cost run of the snapshots in paretogpu/out, newest first: what the comparison picks from."""
     rows = []
     for snap in snapshots():
         for m in runs_store.runs(snap["path"]):
@@ -138,7 +127,7 @@ def cost_runs():
 
 
 def run_file(rid):
-    """<snapshot>/<run> -> the run's file in paretogpu/out (nothing else is read by id)."""
+    """"<snapshot>/<run>" -> run file path; validated so an id can only reach a cost run in paretogpu/out."""
     name, _, run = (rid or "").partition("/")
     folder = workspace.snapshot_dir(name)
     if not folder or not RUN_ID.fullmatch(run):
@@ -148,7 +137,6 @@ def run_file(rid):
 
 
 def results(kind=None):
-    """Every result in paretogpu/out (of one kind), newest first, with the URL of its page."""
     rows = []
     for m in store_results.scan(kind):
         page = os.path.join(m["folder"], m["page"]) if m.get("page") else None
@@ -160,7 +148,6 @@ _materials = {}  # project -> (time, rows)
 
 
 def project_materials(project, fresh=False):
-    """Materials of a Unity project for the pickers: path, name, shader (scanned once a minute at most, unless fresh)."""
     from paretogpu.adapters.unity import assets as materials
     key = os.path.normcase(os.path.abspath(project))
     hit = _materials.get(key)
@@ -173,8 +160,8 @@ def project_materials(project, fresh=False):
 
 
 def material_by_content(project, name, text):
-    """Materials of the project named `name` (a .mat dropped from Explorer has no path), the same content first.
-    A name missing from the cached list is looked up in a fresh scan (a branch switch adds materials)."""
+    """Paths of materials named `name`, same content first: a .mat dropped from Explorer has no path.
+    A miss rescans (the cached list may predate a branch switch)."""
     norm = lambda t: t.replace("\r\n", "\n").strip()
     named = [m for m in project_materials(project) if os.path.basename(m["path"]).lower() == name.lower()]
     if not named:
@@ -191,10 +178,38 @@ def material_by_content(project, name, text):
 
 
 def hub_projects():
-    """Unity Hub's project list (path, title, version), most recently opened first."""
     d = load_json(os.path.join(os.environ.get("APPDATA", ""), "UnityHub", "projects-v1.json"), {})
     rows = [v for v in (d.get("data") or {}).values() if isinstance(v, dict) and v.get("path")]
     return sorted(rows, key=lambda v: -(v.get("lastModified") or 0))
+
+
+_phones = {"time": 0, "rows": []}
+
+
+def phones(unity):
+    """Phones with a project's build installed, as pseudo-projects with path "device:<serial>:<project>"."""
+    from paretogpu.adapters import renderdoc as rdoc
+    from paretogpu.adapters.unity import cli as export
+    if time.time() - _phones["time"] < 15:
+        return _phones["rows"]
+    rows = []
+    for serial, model in rdoc.devices():
+        installed = rdoc.installed_packages(serial)
+        for p in unity:
+            pkg = export.android_package(p["path"])
+            if pkg and pkg in installed and not pkg.startswith(("com.UnityTechnologies.", "com.DefaultCompany.")):
+                rows.append({"path": f"device:{serial}:{p['path']}", "title": f"Телефон {model} · {p['title']}",
+                             "serial": serial, "model": model, "package": pkg, "project": p["path"],
+                             "version": None, "open": True, "device": True, "snapshots": 0})
+    _phones.update(time=time.time(), rows=rows)
+    return rows
+
+
+def parse_phone(value):
+    if not (value or "").startswith("device:"):
+        return None
+    serial, _, project = value[len("device:"):].partition(":")
+    return serial, project
 
 
 def options():
@@ -219,12 +234,11 @@ def options():
                                        and os.path.normcase(x["project"]) == os.path.normcase(path))})
     projects = [p["path"] for p in unity]
     variants = workspace.variants_dirs()
-    folders = variants + workspace.export_dirs()
     from paretogpu.model import cores
+    unity += phones([p for p in unity])
     return {"projects": projects, "unity_projects": unity, "snapshots": [{"path": s["path"], "name": s["name"], "project": s["project"]}
                                                 for s in snaps],
-            "variants": variants, "folders": folders, "measured": [f for f in folders
-                                                                    if os.path.exists(os.path.join(f, workspace.MEASUREMENTS_FILE))],
+            "variants": variants,
             "cores": [f"preset:{k}" for k in cores.PRESETS] + sorted({c for v in cores.PRESETS.values() for c in v}),
             "last": settings.get("last", {}), "out": OUT}
 
@@ -239,7 +253,6 @@ def remember_values(preset, values):
 
 
 def doctor_checks():
-    """paretogpu/doctor.py checks as [{status, what, detail}] for the status bar of the window."""
     import contextlib
     import io
     from paretogpu import doctor
@@ -260,6 +273,18 @@ def site_info():
 
 def editor_status(project):
     from paretogpu.adapters.unity import cli as export
+    phone = parse_phone(project)
+    if phone:
+        from paretogpu.adapters import renderdoc as rdoc
+        serial, proj = phone
+        st = {"project": True, "device": True, "cli": True, "open": True}
+        connected = serial in [s for s, _ in rdoc.devices()]
+        pkg = export.android_package(proj)
+        st["installed"] = bool(connected and pkg and pkg in rdoc.installed_packages(serial))
+        st["unlocked"] = bool(connected and rdoc.device_unlocked(serial))
+        st["connected"] = connected
+        st["ready"] = connected and st["installed"] and st["unlocked"]
+        return st
     project = os.path.abspath(project)
     if not os.path.exists(os.path.join(project, "ProjectSettings", "ProjectVersion.txt")):
         return {"project": False}

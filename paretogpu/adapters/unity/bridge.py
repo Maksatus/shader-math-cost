@@ -1,15 +1,7 @@
-"""The ParetoGPU scripts of cs/ in the open editor, one way for all of them (cs/ParetoGpuJob.cs is the protocol).
-
-Python writes <out>/<name>_config.json, runs the entry with Unity CLI (`unity command run_script`) and reads the
-answer <out>/<name>.json; <name>.progress goes to on_progress while it runs, <name>.error ("[code] message") is
-raised as the caller's error with that code. An entry that returns "started" works on editor ticks: the answer is
-waited for.
-
-  call(project, script, entry, out, name, config, error)  -> the answer
-  run(project, script, entry, args, error)                -> what an entry outside the protocol returns
-  require_editor(project, error, why)                     the editor answers Unity CLI and is idle (or playing)
-  source(script)                                          the file Unity compiles: ParetoGpuJob.cs + the script
-"""
+"""Runs cs/ scripts in the open editor via `unity command run_script` (protocol: cs/ParetoGpuJob.cs).
+Python writes <out>/<name>_config.json, the entry answers <out>/<name>.json; <name>.progress -> on_progress,
+<name>.error "[code] message" -> the caller's error with that code. An entry returning "started" works on editor ticks
+and its answer is polled for."""
 import hashlib
 import json
 import os
@@ -28,8 +20,7 @@ FAILURE = re.compile(r"\[(\w+)\] ")
 
 
 def source(script):
-    """cs/ParetoGpuJob.cs and cs/<script> as one file (run_script compiles a single file): the `using` lines of both
-    first. The file is named after the script, in a folder named by its content."""
+    """ParetoGpuJob.cs + cs/<script> merged, usings first (run_script compiles one file); folder named by content."""
     usings, bodies = [], []
     for fn in (JOB, script):
         with open(os.path.join(CS, fn), encoding="utf-8") as f:
@@ -53,7 +44,7 @@ def errors_of(d):
 
 
 def code_of(d):
-    """The error code of a failed Unity CLI answer (model/errors.py), or None for the caller's own."""
+    """Error code (model/errors.py) of a failed Unity CLI answer; None = the caller's own."""
     if "No Pipeline instance found" in json.dumps(d):
         return "unity_cli_off"
     return None
@@ -66,8 +57,7 @@ def require_editor(project, error, why, allow_play=True):
 
 
 def run(project, script, entry, args, error, timeout=120):
-    """`unity command run_script` of <Class>.<entry> of cs/<script>: the string it returns. timeout: seconds the
-    editor may run it."""
+    """-> the string <Class>.<entry> returns. timeout: seconds the editor may run it."""
     cls = os.path.splitext(script)[0]
     try:
         d = cli_json(["command", "run_script", "--project-path", project, "--timeout", str(timeout),
@@ -83,7 +73,6 @@ def run(project, script, entry, args, error, timeout=120):
 
 
 def failure(path, error):
-    """The error of a <name>.error file: "[code] message"."""
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     m = FAILURE.match(text)
@@ -92,8 +81,6 @@ def failure(path, error):
 
 
 class _Progress(threading.Thread):
-    """on_progress(text) for every new text of <name>.progress."""
-
     def __init__(self, path, on_progress):
         super().__init__(daemon=True)
         self.path, self.on_progress, self.stop = path, on_progress, threading.Event()
@@ -115,7 +102,6 @@ class _Progress(threading.Thread):
 
 
 def call(project, script, entry, out, name, config, error, timeout=600, on_progress=None):
-    """Run <Class>.<entry> of cs/<script> on the job <out>/<name> with `config`; returns its answer (parsed JSON)."""
     out = os.path.abspath(out)  # Unity resolves relative paths from its project
     os.makedirs(out, exist_ok=True)
     paths = {k: os.path.join(out, f"{name}.{k}") for k in ("json", "progress", "error")}

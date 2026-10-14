@@ -1,35 +1,17 @@
-"""Heaviness of a shader on one core (plan item A1.5, decision D-05).
-
-score = cycles of the bottleneck pipe on the longest path (malioc cycles of that core:
-compare cores of one class; across classes the pipes differ in width). The arithmetic pipe is malioc's
-arith_total ("A"), not the busiest of FMA / CVT / SFU: on Mali-G57..G78 A = max(FMA, CVT, SFU), but on G610 / G710
-the three share issue (A ≈ FMA + CVT + SFU/4) and on G715 / G720 A lies between the maximum and the sum.
-The bound is named by the sub-pipe(s) equal to A when there are any, else "arith".
-
-When malioc reports the longest path as N/A (dynamic loops, e.g. the URP / Forward+ light loops), the price of a
-frame comes from core/loops.py (the loops forced to n iterations); without it the fallback is the total cycles
-(every instruction once: both sides of every branch, every loop body once — neither a lower nor an upper bound),
-raised per pipe to the shortest path where that is larger (total counts spill traffic once), and the shader gets
-the "dynamic_loop" flag. Vertex shaders (IDVS) count Position + Varying.
-price() is the score of one stage of a variant on one core, its dynamic loops at n iterations; price_draw() the
-fragment and vertex scores of a draw's variant with their flags merged.
-
-Flags:
-  regs_gt32    more than 32 work registers in some variant: half thread occupancy
-  spilling     registers spilled to the stack
-  low_fp16     16-bit arithmetic below the threshold (default 25 %)
-  sfu_bound    the bottleneck is the SFU pipe (transcendentals, divisions, integer ops)
-  dynamic_loop longest path is N/A, the score is the total cycles (or the forced-loop price, see core/loops.py)
+"""Shader price on one core = cycles of the bottleneck pipe on malioc's longest path (compare cores of one class only).
+Arith = malioc's arith_total "A", not max(FMA, CVT, SFU): equal on G57..G78, but G610 / G710 share issue
+(A ~ FMA + CVT + SFU/4) and G715 / G720 lie between max and sum. Longest path N/A (dynamic loops): core/loops forces
+n iterations, else total cycles raised per pipe to the shortest path (total counts spills once) + "dynamic_loop".
+regs_gt32 = half thread occupancy.
 """
 from paretogpu.core import loops
 from paretogpu.model.measurement import MALI, Measurement, PipeModel, Score
 
 PIPES = MALI.pipes
-ARITH_SUB = MALI.arith_sub
 FP16_THRESHOLD = 25
 FLAGS = ("regs_gt32", "spilling", "low_fp16", "sfu_bound", "dynamic_loop")
-LOOP_ITERS = 2            # default trip count of dynamic loops (lights per pixel, probes, ray steps)
-LOOP_NS = (0, 1, 2, 4, 8)  # trip counts of the range shown in the report
+LOOP_ITERS = 2            # default dynamic loop trip count (lights, probes, ray steps)
+LOOP_NS = (0, 1, 2, 4, 8)  # trip counts of the range in the report
 
 
 def add_cycles(a, b):
@@ -39,8 +21,7 @@ def add_cycles(a, b):
 
 
 def combined(rec: Measurement, model: PipeModel = MALI):
-    """{"longest", "shortest", "total"} cycles of the record: the main variant, or
-    Position + Varying of a vertex shader (A1.4)."""
+    """-> {"longest", "shortest", "total"}: the main variant, else the sum of all (vertex: Position + Varying)."""
     vs = rec["variants"]
     if model.main_variant in vs:
         v = vs[model.main_variant]
@@ -53,8 +34,8 @@ def combined(rec: Measurement, model: PipeModel = MALI):
 
 
 def bottleneck(c, model: PipeModel = MALI):
-    """(cycles, [bound pipes]) of a cycles dict. Bifrost reports only 'arith'; on Valhall and later 'arith' is
-    malioc's arithmetic total and fma / cvt / sfu are its breakdown."""
+    """-> (cycles, [bound pipes]). Bifrost reports only 'arith'; on Valhall+ 'arith' is the total and fma / cvt / sfu
+    its breakdown, named as the bound when equal to it."""
     arith = model.arith
     vals = {p: c[p] for p in model.pipes if c.get(p) is not None}
     sub = {p: vals.pop(p) for p in model.arith_sub if p in vals}
@@ -73,14 +54,12 @@ def bottleneck(c, model: PipeModel = MALI):
 
 
 def fallback(c):
-    """Cycles used when the longest path is N/A: total, raised per pipe to the shortest path."""
-    t, s = c["total"] or {}, c["shortest"] or {}
+    t,s = c["total"] or {}, c["shortest"] or {}
     return {p: max(t.get(p) or 0, s.get(p) or 0) for p in set(t) | set(s)}
 
 
 def score(rec: Measurement, fp16_threshold=FP16_THRESHOLD, cycles=None, path=None) -> Score:
-    """Heaviness of one measured record (one file on one core). cycles / path: a price computed elsewhere
-    (core/loops.py: dynamic loops forced to n iterations), used instead of the record's own path."""
+    """cycles / path: precomputed (core/loops forced loops), used instead of the record's own path."""
     if cycles is None:
         c = combined(rec)
         if c["longest"] is not None:
@@ -105,23 +84,12 @@ def score(rec: Measurement, fp16_threshold=FP16_THRESHOLD, cycles=None, path=Non
     }
 
 
-def loop_n(shader, loop_iters, overrides):
-    """(trip count of the shader's dynamic loops, fixed): the first override whose text is in the shader name,
-    else loop_iters."""
-    for name, n in (overrides or {}).items():
-        if name and name in (shader or ""):
-            return n, True
-    return loop_iters, False
-
-
 def _n_text(n):
-    """'2' or, one per outer loop, '1.88/0/0'."""
     return "/".join(f"{round(x, 2):g}" for x in n) if isinstance(n, (list, tuple)) else str(n)
 
 
 def price(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> Score:
-    """Score of one stage's record on one core; dynamic loops priced at n iterations when loop_data has them (n: one
-    number for every outer loop or one per loop, core/loops.py)."""
+    """n: one trip count for every outer loop, or a list with one per loop (core/loops)."""
     p = (loop_data.get(file) or {}).get(core)
     if p:
         return score(recs[core], fp16_threshold, loops.cycles_at(p, n), f"loop n={_n_text(n)}")
@@ -129,9 +97,8 @@ def price(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -
 
 
 def loop_parts(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> list | None:
-    """What every outer dynamic loop of one stage costs at its trip count: [{"n", "cycles"}] in code order, cycles =
-    the price with the loop at n minus the price with it at 0 (the parts of a bottleneck need not add up to the
-    price); None without loop data."""
+    """-> [{"n", "cycles"}] per outer loop in code order, cycles = price minus price with that loop at 0 (parts of a
+    bottleneck need not sum to the price); None without loop data."""
     p = (loop_data.get(file) or {}).get(core)
     if not p:
         return None
@@ -142,10 +109,8 @@ def loop_parts(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHO
 
 
 def price_draw(recs: dict, files: dict, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> dict:
-    """The scores of a draw's variant on one core, its dynamic loops at n iterations: {"px": Score of the fragment
-    stage, "vtx": Score of the vertex stage, "flags": the fragment's and the vertex's except low_fp16 (a vertex shader
-    needs little fp16)}. recs: {stage: {core: Measurement}} of core/variants.match, files: {stage: its file}; n: the
-    trip counts of both stages, or {"fragment": n, "vertex": n}."""
+    """-> {"px": Score, "vtx": Score, "flags": merged, minus vertex low_fp16 (vertex shaders need little fp16)}.
+    recs: core/variants.match records; n: for both stages, or {"fragment": n, "vertex": n}."""
     nf, nv = (n["fragment"], n["vertex"]) if isinstance(n, dict) else (n, n)
     px = price(recs["fragment"], files["fragment"], core, nf, loop_data, fp16_threshold)
     vtx = price(recs["vertex"], files["vertex"], core, nv, loop_data, fp16_threshold)

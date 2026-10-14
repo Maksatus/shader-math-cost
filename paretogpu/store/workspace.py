@@ -1,12 +1,5 @@
-"""Where the results live: paretogpu/out and paretogpu/corpus/real. Neither ever reaches git: they hold project
-shaders and assets.
-
-  out/frame_<project>_<time>[_<suffix>]/   a snapshot (frame_events.json) and its costs (store/cost_runs.py)
-  out/variants_<project>/                  the compiled variants of a project, shared by its frames and materials
-  out/_matcompare/<time>/, _matshader/<time>/   analyses of materials (no snapshot needed)
-  out/_ui/                                 the UI's settings, run history and logs
-  corpus/real/<project>/                   shaders exported with `export`
-"""
+"""paretogpu/out (never in git): frame_<project>_<time>[_<suffix>]/ snapshots, variants_<project>/ (shared by frames
+and materials), _matcompare/<time>/, _matshader/<time>/, _ui/ (settings, history, logs)."""
 import json
 import os
 import re
@@ -14,7 +7,6 @@ import time
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(PKG, "out")
-REAL = os.path.join(PKG, "corpus", "real")
 UI = os.path.join(OUT, "_ui")
 RESULTS = {"matcompare": "_matcompare", "matshader": "_matshader"}
 SNAPSHOT_FILE = "frame_events.json"
@@ -22,7 +14,6 @@ COST_FILE = "frame_cost.json"
 COST_CSV = "frame_cost.csv"
 REPORT_PAGE = "frame_report.html"
 HOTSPOTS_PAGE = "hotspots.html"
-MEASUREMENTS_FILE = "measurements.jsonl"
 
 
 def time_id():
@@ -30,7 +21,6 @@ def time_id():
 
 
 def frame_dir_name(project, stamp, suffix=None):
-    """frame_<project>_<time>[_<suffix>]: the suffix keeps latin letters, digits, '-' and '_' only."""
     name = f"frame_{os.path.basename(os.path.abspath(project))}_{stamp}"
     suffix = re.sub(r"[^\w-]+", "_", (suffix or "").strip(), flags=re.ASCII).strip("_")
     return f"{name}_{suffix}" if suffix else name
@@ -41,12 +31,7 @@ def new_snapshot_dir(project, suffix=None):
 
 
 def variants_dir(project):
-    """One variants folder per project: a variant is compiled once and priced in every frame of the project."""
     return os.path.join(OUT, f"variants_{os.path.basename(os.path.abspath(project))}")
-
-
-def export_dir(project):
-    return os.path.join(REAL, os.path.basename(os.path.abspath(project)))
 
 
 def results_dir(kind):
@@ -58,7 +43,6 @@ def new_result_dir(kind):
 
 
 def snapshot_project(path):
-    """The Unity project a snapshot was taken in, or None."""
     try:
         with open(os.path.join(path or "", SNAPSHOT_FILE), encoding="utf-8") as f:
             return json.load(f).get("project")
@@ -71,14 +55,13 @@ def is_snapshot(path):
 
 
 def snapshot_dirs():
-    """[(name, path)] of the snapshots in out/."""
     if not os.path.isdir(OUT):
         return []
     return [(name, os.path.join(OUT, name)) for name in os.listdir(OUT) if is_snapshot(os.path.join(OUT, name))]
 
 
 def snapshot_dir(name):
-    """A snapshot folder directly in out/ by its name, or None (nothing else is deleted or opened by name)."""
+    """Only a snapshot directly in out/, else None: nothing else may be deleted or opened by name."""
     if not name or os.path.basename(name) != name or name.startswith((".", "_")):
         return None
     path = os.path.join(OUT, name)
@@ -86,19 +69,13 @@ def snapshot_dir(name):
 
 
 def variants_dirs():
-    """The variants folders in out/."""
     if not os.path.isdir(OUT):
         return []
     return [os.path.join(OUT, n) for n in sorted(os.listdir(OUT))
             if n.startswith("variants") and os.path.isdir(os.path.join(OUT, n))]
 
 
-def export_dirs():
-    return [os.path.join(REAL, n) for n in sorted(os.listdir(REAL))] if os.path.isdir(REAL) else []
-
-
 def snapshots_of(project, folders):
-    """Events of every frame_events.json under `folders` (one level of subfolders) taken in `project`."""
     out, seen = [], set()
     for folder in folders:
         if not os.path.isdir(folder):

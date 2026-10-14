@@ -1,4 +1,3 @@
-"""A frame snapshot (frame_events.json): the events of the Frame Debugger with their RenderDoc counters."""
 from typing import TypedDict
 
 RenderTarget = TypedDict("RenderTarget", {"name": str, "width": int, "height": int, "count": int,
@@ -9,7 +8,7 @@ Compute = TypedDict("Compute", {"shader": str, "kernel": str, "groups": list, "g
 # the event's RenderDoc calls (core/events.match); a counter the capture does not have is None, not 0
 RdCounters = TypedDict("RdCounters", {
     "calls": int, "events": list, "ps": int, "vs": int, "ps_invocations": int, "vs_invocations": int,
-    "cs_invocations": int, "samples": int, "gpu_ms": float, "count_mismatch": list}, total=False)
+    "cs_invocations": int, "samples": int, "gpu_ms": float, "count_mismatch": list, "mismatch": str}, total=False)
 
 # one Frame Debugger event (core/events.normalize); kind: draw | compute | other;
 # stage: shadow | prepass | opaque | transparent | post | ui | compute | other
@@ -24,7 +23,7 @@ Event = TypedDict("Event", {
 
 
 class Snapshot(TypedDict, total=False):
-    """frame_events.json: what the editor said about the frame, and its events."""
+    """frame_events.json."""
     project: str
     unity: str
     graphics_api: str

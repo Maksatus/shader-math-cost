@@ -1,7 +1,5 @@
-"""Remembered values of content-addressed artifacts (app/engine.py keyed rules): (kind, key) -> JSON value, in
-paretogpu/out/_cache/memo.sqlite. A kind holds its rule's version ("loops/1"), so a rule whose logic changes starts
-afresh; a key holds everything the value is made of (the hash of a shader's text, the core, malioc's version).
-"""
+"""(kind, key) -> JSON value. kind carries the rule's version ("loops/1"): bump it when the rule's logic changes; key
+must hold everything the value is made of (shader text hash, core, malioc version)."""
 import atexit
 import json
 import os
@@ -63,7 +61,6 @@ _guard = threading.Lock()
 
 
 def default():
-    """The memo of paretogpu/out (one per process)."""
     global _default
     with _guard:
         if _default is None:

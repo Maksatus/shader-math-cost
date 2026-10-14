@@ -1,20 +1,7 @@
-"""malioc (Mali Offline Compiler) wrapper: the frame and shader prices and the function cost table (app/bench.py).
-
-compile() runs malioc on GLSL source with a cache keyed by the source text,
-parse() turns malioc JSON into a flat record: every variant (Main for fragment
-shaders, Position and Varying for IDVS vertex shaders), cycles per pipe on the
-longest / shortest path and in total, bound pipes, registers, spilling, fp16 %
-and uniform computation. Longest path cycles are None when malioc reports N/A
-(dynamic loops, e.g. the URP additional lights loop).
-
-malioc: the newest installed Arm Performance Studio (find_malioc(); MALIOC overrides it). The cache key holds the
-malioc path, which holds the Studio version, so a new version never reads results of an old one.
-
-The cache is one SQLite file, <cache>/malioc.sqlite (WAL: many threads and processes read and write it at once),
-the entries compressed. Entries of the older cache, one JSON file per key in the same folder, are moved into it the
-first time they are asked for. Entries written by the old bench/run.py (v2) hold only the parsed main variant; they
-are still served to callers that need just that (run.py), and recompiled when the raw JSON is needed.
-"""
+"""malioc (Mali Offline Compiler) backend.
+Cache: <cache>/malioc.sqlite (WAL, shared by threads and processes), zlib JSON entries. The key holds the malioc path,
+which holds the Studio version, so a new version never reads old results. Old per-key <key>.json files migrate on
+first read; v2 entries (old bench/run.py) lack "raw" and are recompiled when raw is needed."""
 import atexit
 import glob
 import hashlib
@@ -39,7 +26,6 @@ __all__ = ["read_source", "stage_of", "STAGES", "EXT", "SPIRV_EXT"]
 
 
 def find_malioc():
-    """$MALIOC, else malioc.exe of the newest "Arm Performance Studio <version>" in Program Files, else malioc on PATH."""
     if os.environ.get("MALIOC"):
         return os.environ["MALIOC"]
     found = []
@@ -57,7 +43,7 @@ MALIOC = find_malioc()
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "bench", ".cache")
 CACHE_VERSION = 3        # v3 = v2 fields + "raw" (malioc JSON without descriptions)
 LEGACY_VERSIONS = (2, 3)  # versions that carry the v2 fields
-PIPE_NAMES = {  # malioc pipeline name -> short name
+PIPE_NAMES = {
     "arith_total": "arith", "arithmetic": "arith", "arith_fma": "fma", "arith_cvt": "cvt",
     "arith_sfu": "sfu", "load_store": "ls", "varying": "v", "texture": "t",
 }
@@ -70,7 +56,7 @@ class MaliocError(ParetoError):
 
 
 def _run(cmd, env=None):
-    """Run malioc; output decoded as UTF-8 whatever the console code page. A missing malioc is a MaliocError."""
+    """Output decoded as UTF-8 regardless of the console code page."""
     try:
         return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     except OSError as e:
@@ -88,9 +74,7 @@ def _remove_tmp_dirs():
 
 
 def _thread_tmp(tmp_root):
-    """(TEMP folder of this thread, environment for malioc). malioc writes intermediate files with fixed names to
-    %TEMP%/moc-temp, so every worker thread needs its own TEMP to run in parallel; the folders are made in the
-    system temp folder (or tmp_root) and removed at exit."""
+    """-> (dir, env). malioc writes fixed-name files to %TEMP%/moc-temp, so each thread needs its own TEMP."""
     dirs = _tls.__dict__.setdefault("dirs", {})
     if tmp_root not in dirs:
         if tmp_root:
@@ -102,7 +86,7 @@ def _thread_tmp(tmp_root):
 
 
 def list_cores(malioc=MALIOC):
-    """[(core, architecture, [apis])] as reported by `malioc --list`."""
+    """-> [(core, architecture, [apis])]."""
     out = _run([malioc, "--list"]).stdout
     cores, arch = [], None
     for line in out.splitlines():
@@ -116,7 +100,7 @@ def list_cores(malioc=MALIOC):
 
 
 def parse_cores(spec, malioc=MALIOC):
-    """--cores ('preset:mobile', 'Mali-G78,Mali-G52') -> [core], checked against the cores malioc lists."""
+    """'preset:mobile' or 'Mali-G78,Mali-G52' -> [core]."""
     def known():
         names = {c for c, _, _ in list_cores(malioc)}
         if not names:
@@ -134,16 +118,15 @@ def version(malioc=MALIOC):
 
 
 def cache_key(src, core, api, stage="fragment", malioc=MALIOC):
-    """src: GLSL text or SPIR-V bytes."""
     if isinstance(src, bytes):
         return hashlib.sha1(f"{malioc}|{api}|{core}|spirv|{stage}|".encode() + src).hexdigest()
-    # fragment keys match the old bench/run.py keys, so its cache stays valid
+    # fragment keys stay equal to old bench/run.py keys
     tail = "" if stage == "fragment" else f"|{stage}"
     return hashlib.sha1(f"{malioc}|{api}|{core}|{src}{tail}".encode()).hexdigest()
 
 
 def _strip(o):
-    """malioc JSON without descriptions and file names (they bloat the cache)."""
+    """Drops descriptions and file names (cache bloat)."""
     if isinstance(o, dict):
         return {k: _strip(v) for k, v in o.items() if k not in ("description", "filename")}
     if isinstance(o, list):
@@ -152,7 +135,7 @@ def _strip(o):
 
 
 def run_malioc(src, core, api, stage="fragment", malioc=MALIOC, tmp_root=None):
-    """Compile once, no cache. src: GLSL text or SPIR-V bytes. Returns malioc JSON; raises MaliocError."""
+    """Uncached. src: GLSL text or SPIR-V bytes. Raises MaliocError."""
     spv = isinstance(src, bytes)
     if spv and api != "vulkan":
         raise MaliocError("SPIR-V input needs the Vulkan API (--api vulkan)")
@@ -168,14 +151,14 @@ def run_malioc(src, core, api, stage="fragment", malioc=MALIOC, tmp_root=None):
     try:
         j["shaders"][0]["variants"][0]["performance"]
     except Exception:
-        # compile errors come as JSON with schema "error": keep just the messages
+        # compile errors come as JSON with schema "error"
         errs = [e for s in j.get("shaders", []) for e in s.get("errors", [])]
         raise MaliocError("\n".join(errs) if errs else (r.stdout + r.stderr)[-1500:])
     return j
 
 
 def _legacy(j):
-    """Fields of the old bench/run.py cache entry (main / first variant)."""
+    """v2 cache fields (first variant only)."""
     v = j["shaders"][0]["variants"][0]
     perf = v["performance"]
     return {
@@ -197,8 +180,6 @@ def _key_lock(key):
 
 
 class _Cache:
-    """<folder>/malioc.sqlite: key -> zlib-compressed JSON entry; a miss looks for the older <folder>/<key>.json."""
-
     def __init__(self, folder):
         self.folder = folder
         self.path = os.path.join(folder, "malioc.sqlite")
@@ -246,8 +227,7 @@ class _Cache:
 
     @staticmethod
     def _read_file(path):
-        """An entry of the older file cache, or None. On Windows a file being replaced by another process cannot be
-        opened for a moment: retry, then treat it as a miss."""
+        """Retries: on Windows a file being replaced by another process cannot be opened for a moment."""
         for attempt in range(5):
             try:
                 with open(path, encoding="utf-8") as f:
@@ -273,12 +253,11 @@ def _cache(folder):
 
 
 def compile(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE, need_raw=False):
-    """Cached malioc run. Returns {"ok": True, cycles, short, bound, props, driver[, raw][, cached]}
-    or {"ok": False, "error": text}; failures are not cached.
-    need_raw: recompile old cache entries that lack the raw JSON."""
+    """-> {"ok": True, "v", cycles, short, bound, props, driver[, raw][, cached]} or {"ok": False, "error"}
+    (failures are not cached). need_raw: recompile v2 entries that lack raw."""
     store = _cache(cache)
     key = cache_key(src, core, api, stage, malioc)
-    # variants with identical sources share the key: one thread compiles, the others wait and read
+    # identical sources share the key: one thread compiles, the others wait
     with _key_lock(key):
         res = store.get(key)
         if res and res.get("v") in LEGACY_VERSIONS and (res.get("raw") or not need_raw):
@@ -303,7 +282,7 @@ def _cycles(perf, key):
 
 
 def parse(j):
-    """Flat record from malioc JSON (raw or stripped)."""
+    """malioc JSON (raw or stripped) -> flat record."""
     sh = j["shaders"][0]
     sprops = {p["name"]: p["value"] for p in sh.get("properties", [])}
     variants = {}
@@ -336,7 +315,6 @@ def parse(j):
 
 
 def measure(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE) -> Measurement:
-    """compile() + parse(): the full record, or {"ok": False, "error": ...}."""
     r = compile(src, core, api, stage, malioc, cache, need_raw=True)
     if not r["ok"]:
         return r
@@ -346,14 +324,12 @@ def measure(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE) -> Mea
 
 
 def spills(rec):
-    """True if any variant spills (parsed record) or the v2 entry spills."""
     if "variants" in rec:
         return any(v["spilling"] for v in rec["variants"].values())
     return bool(rec["props"].get("has_stack_spilling"))
 
 
 class Mali(Backend):
-    """Arm Mali through malioc (adapters/gpu.py)."""
     name = "mali"
     pipes = MALI
     tool = MALIOC

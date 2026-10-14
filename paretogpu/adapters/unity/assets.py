@@ -1,12 +1,5 @@
-"""Materials of a Unity project and the shader variants they select (the "project shaders" tab of the frame report).
-
-Reads the .mat files as text, without Unity: the shader (by GUID -> .shader / .shadergraph -> shader name), the
-material's keywords (m_ValidKeywords; m_ShaderKeywords in old files) and the passes it switches off
-(disabledShaderPasses). Global keywords (lights, fog, shadows) are not in a material: the pipeline sets them, so
-they are taken from the frame snapshots (variants_of()).
-
-  scan(project)  -> [{"path", "name", "shader", "guid", "keywords", "disabled_passes", "error"}]
-"""
+"""Unity materials read as text, without Unity. Global keywords (lights, fog, shadows) are set by the pipeline, not
+materials: they come from the frame snapshots."""
 import json
 import os
 import re
@@ -28,7 +21,7 @@ def _walk(root, ext):
 
 
 def material_roots(project):
-    """Assets/ and the embedded packages in Packages/ (packages from the registry are not the project's)."""
+    """Assets/ + embedded Packages/ (registry packages are not the project's)."""
     roots = [os.path.join(project, "Assets")]
     pk = os.path.join(project, "Packages")
     if os.path.isdir(pk):
@@ -37,7 +30,6 @@ def material_roots(project):
 
 
 def shader_roots(project):
-    """Where shaders can live: the material roots plus the package cache (URP, pipelines from packages)."""
     roots = material_roots(project)
     cache = os.path.join(project, "Library", "PackageCache")
     if os.path.isdir(cache):
@@ -46,7 +38,7 @@ def shader_roots(project):
 
 
 def shader_name(path):
-    """Shader name of a .shader (the Shader "..." line) or a .shadergraph (its category path + file name)."""
+    """.shader: its Shader "..." line; .shadergraph: <graph category path>/<file name>."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read()
@@ -69,7 +61,6 @@ def shader_name(path):
 
 
 def shader_guids(project):
-    """{guid: shader name} of every .shader / .shadergraph of the project and its packages."""
     out = {}
     for root in shader_roots(project):
         for ext in (".shader.meta", ".shadergraph.meta"):
@@ -87,7 +78,7 @@ def shader_guids(project):
 
 
 def _list_after(text, key):
-    """The YAML list under `key:` (one `- item` per line) or an inline [] list."""
+    """YAML block list or inline [] list under `key:`; None if the key is absent."""
     m = re.search(rf"^(\s*){key}:(.*)$", text, re.M)
     if not m:
         return None
@@ -118,7 +109,7 @@ def parse_material(path):
 
 
 def scan(project):
-    """Every material of the project with its shader name, keywords and switched-off passes."""
+    """-> [{"path", "name", "shader", "guid", "keywords", "disabled_passes", "file_id"[, "error"]}]."""
     project = os.path.abspath(project)
     guids = shader_guids(project)
     out = []

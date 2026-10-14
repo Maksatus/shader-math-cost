@@ -1,7 +1,4 @@
-"""score.bottleneck() / score.score() on saved malioc 2026.5 JSON (tests/data/malioc, sources in corpus/synthetic).
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""core/pricing bottleneck() / score() on saved malioc 2026.5 JSON."""
 import json
 import os
 import unittest

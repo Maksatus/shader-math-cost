@@ -1,8 +1,4 @@
-"""parse() on saved malioc 2026.5 JSON (testdata/, sources in corpus/synthetic).
-
-Expected values are copied from the text output of malioc for the same shaders.
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""malioc.parse() on saved malioc 2026.5 JSON; expected values copied from malioc's text output."""
 import json
 import os
 import unittest
@@ -77,7 +73,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(v["work_regs"], 26)
 
     def test_legacy_fields(self):
-        # the cache entry fields bench/run.py reads, as the old run.py computed them
+        # cache entry fields bench/run.py reads
         leg = mali._legacy(load("frag_g78_gles_sin_x4"))
         self.assertEqual(leg["cycles"]["arith_sfu"], 1.0)
         self.assertEqual(leg["short"]["varying"], 0.625)

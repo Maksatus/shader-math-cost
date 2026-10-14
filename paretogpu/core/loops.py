@@ -1,43 +1,12 @@
-"""Price of shaders with dynamic loops as a function of the trip count of each loop (plan items K1.5, K1.10).
-
-malioc reports the longest path of a shader with a dynamic loop (light / probe loops of Forward+, ray marching) as
-N/A; its total cycles count every instruction once (both sides of every branch, every loop body once), which is
-neither a lower nor an upper bound. Instead the dynamic loops are forced to run an exact number of times and measured.
-
-The outer dynamic loops of a shader are numbered in code order (k = 0, 1, ...); a loop nested in one belongs to it.
-One model for every shader, whatever its loops are for (lights, probes, ray steps):
-  base     every outer loop forced to 1 iteration, the nested loops once per outer iteration
-  zero_k   loop k forced to 0, the others to 1
-  two_k    loop k forced to 2, the others to 1
-  word_k   loop k at 1 with its nested loops run twice (measured only when loop k has nested loops)
-  price(n_0, n_1, ...) = base + sum_k f_k(n_k)                                   (per pipe, longest path)
-  f_k(n < 1) = (1 - n) * (zero_k - base),   f_k(n >= 1) = (n - 1) * slope_k,   slope_k = two_k - base - max(0, word_k - base)
-(n may be fractional: a mean over pixels)
-One n for every loop is the same formula with all n_k equal. A nested loop is charged once per outer loop (in base)
-and taken out of the slope: in Forward+ it is the scan for the next word of the cluster mask, which the real shader
-does once per 32 lights / probes (~2-3 LS cycles per light / probe iteration on Mali; the terrain probe loop on G78:
-3 LS per probe instead of 5, as with the loop peeled by hand). Other ways overshoot: nested loops run 0 times leave
-the mask empty and the compiler drops the outer body; peeling the first iteration off in the source doubles a light
-loop body, which then spills. Loops with a constant bound are left alone.
-
-Forcing keeps the loop body and its breaks: a counter (phi in SPIR-V, an int in GLSL) is added and the loop's exit
-test is replaced by `counter < count`, so malioc's longest path is that many full iterations.
-  force_spirv(bytes, n, nested)  binary SPIR-V (glslang structured loops: OpLoopMerge, exit test in the header or the
-                                 block right after it), returns bytes or None if a loop has another shape;
-  force_glsl(text, n, nested)    GLSL text (`while(true){` and `for(init; cond; step){`), returns text or None;
-  n, nested: one number for every outer loop or a list, one per outer loop (a nested loop runs min(n_k, 1) * nested_k
-  times per iteration of its outer loop k).
-outer_loops(src) -> [{"nested"}] of the outer loops or None; plan(src) -> the measurements of the model, forced(src)
--> their sources. They are measured by app/rules.py (LoopRule) and app/ablation.py; cycles_at(p, n) is the price at
-any n (one number or one per outer loop).
-"""
+"""Shader price vs dynamic-loop trip counts: malioc's longest path is N/A for dynamic loops, so each outer loop's exit
+test is forced to `counter < n` (body and breaks kept) and the forced variants are measured."""
+import base64
 import bisect
 import re
 import struct
 
-MODEL = "per-loop/1"  # the measurements and formula of plan() / cycles_at(); a new model is a new name
+MODEL = "per-loop/2"  # rename whenever plan() / cycles_at() change
 
-# SPIR-V opcodes
 OP_TYPE_BOOL, OP_TYPE_INT, OP_CONSTANT_TRUE, OP_CONSTANT = 20, 21, 41, 43
 OP_FUNCTION, OP_FUNCTION_END, OP_LINE, OP_NO_LINE = 54, 56, 8, 317
 OP_IADD, OP_SLESS = 128, 177
@@ -58,13 +27,11 @@ def _targets(inst):
 
 
 def per_loop(v, k):
-    """One number for every outer loop, or the list given (k: how many outer loops)."""
     return list(v) if isinstance(v, (list, tuple)) else [v] * k
 
 
 def _owners(spans):
-    """For every (start, end) span of a loop: the index of the outer loop it belongs to (itself when outer), the outer
-    loops numbered in the order of their start."""
+    """(outer-loop number of every span, [span indices of the outer loops ordered by start])."""
     order = sorted(range(len(spans)), key=lambda i: spans[i][0])
     outer = [i for i in order if not any(spans[j][0] < spans[i][0] < spans[j][1] for j in range(len(spans)) if j != i)]
     index = {i: k for k, i in enumerate(outer)}
@@ -72,9 +39,7 @@ def _owners(spans):
             for i in range(len(spans))], outer
 
 
-def force_spirv(data, n, nested=1, describe=False):
-    """Binary SPIR-V with every dynamic loop forced (module docstring: n, nested), or None. describe: the outer loops
-    [{"nested"}] instead (None if a loop cannot be forced)."""
+def _parse_spirv(data):
     if len(data) % 4 or len(data) < 20:
         return None
     words = list(struct.unpack(f"<{len(data) // 4}I", data))
@@ -87,37 +52,14 @@ def force_spirv(data, n, nested=1, describe=False):
             return None
         insts.append(words[i:i + wc])
         i += wc
-    bound = header[3]
+    return header, insts
 
-    def new_id():
-        nonlocal bound
-        bound += 1
-        return bound - 1
 
-    int_t = next((x[1] for x in insts if x[0] & 0xFFFF == OP_TYPE_INT and x[2:4] == [32, 1]), None)
-    bool_t = next((x[1] for x in insts if x[0] & 0xFFFF == OP_TYPE_BOOL), None)
+def _loop_plans(insts):
+    """([(blocks [label, OpLabel idx, terminator idx], {label: pos}, [(header pos, merge pos, OpLoopMerge idx, exit
+    block)], outer number per loop, {loop indices that are outer})] per function, n outer loops), or None."""
     const_ids = {x[2] for x in insts if x[0] & 0xFFFF == OP_CONSTANT}
     true_ids = {x[2] for x in insts if x[0] & 0xFFFF == OP_CONSTANT_TRUE}
-    first_fn = next((k for k, x in enumerate(insts) if x[0] & 0xFFFF == OP_FUNCTION), None)
-    if first_fn is None:
-        return None
-    decls = []
-    if int_t is None:
-        int_t = new_id()
-        decls.append([(4 << 16) | OP_TYPE_INT, int_t, 32, 1])
-    if bool_t is None:
-        bool_t = new_id()
-        decls.append([(2 << 16) | OP_TYPE_BOOL, bool_t])
-    consts = {v: x[2] for x in insts if x[0] & 0xFFFF == OP_CONSTANT and len(x) == 4 and x[1] == int_t
-              for v in [x[3]]}
-
-    def const(v):
-        if v not in consts:
-            consts[v] = new_id()
-            decls.append([(4 << 16) | OP_CONSTANT, int_t, consts[v], v])
-        return consts[v]
-
-    # blocks of every function: [label id, index of OpLabel, index of the terminator]
     blocks, fn_blocks, cur = [], [], None
     defs = {}
     for k, x in enumerate(insts):
@@ -134,9 +76,7 @@ def force_spirv(data, n, nested=1, describe=False):
             fn_blocks = []
         if op in COMPARISONS and len(x) >= 5:
             defs[x[2]] = x
-
-    inserts_after, inserts_before, replace = {}, {}, {}
-    found = []  # (fb, pos, loops) of every function
+    found = []
     for fb in blocks:
         pos = {b[0]: n_ for n_, b in enumerate(fb)}
         loops = []
@@ -164,12 +104,53 @@ def force_spirv(data, n, nested=1, describe=False):
                 return None
             loops.append((n_, pos[merge], lm, exit_block))
         found.append((fb, pos, loops))
-    # the outer loops of every function, numbered in module order
     plans, base = [], 0
     for fb, pos, loops in found:
         owner, outer = _owners([(a, b) for a, b, _, _ in loops])
         plans.append((fb, pos, loops, [base + o for o in owner], set(outer)))
         base += len(outer)
+    return plans, base
+
+
+def force_spirv(data, n, nested=1, describe=False):
+    """n, nested: scalar or one per outer loop; a nested loop runs min(n_k, 1) * nested_k times. None if unforceable."""
+    parsed = _parse_spirv(data)
+    if parsed is None:
+        return None
+    header, insts = parsed
+    bound = header[3]
+
+    def new_id():
+        nonlocal bound
+        bound += 1
+        return bound - 1
+
+    int_t = next((x[1] for x in insts if x[0] & 0xFFFF == OP_TYPE_INT and x[2:4] == [32, 1]), None)
+    bool_t = next((x[1] for x in insts if x[0] & 0xFFFF == OP_TYPE_BOOL), None)
+    first_fn = next((k for k, x in enumerate(insts) if x[0] & 0xFFFF == OP_FUNCTION), None)
+    if first_fn is None:
+        return None
+    decls = []
+    if int_t is None:
+        int_t = new_id()
+        decls.append([(4 << 16) | OP_TYPE_INT, int_t, 32, 1])
+    if bool_t is None:
+        bool_t = new_id()
+        decls.append([(2 << 16) | OP_TYPE_BOOL, bool_t])
+    consts = {v: x[2] for x in insts if x[0] & 0xFFFF == OP_CONSTANT and len(x) == 4 and x[1] == int_t
+              for v in [x[3]]}
+
+    def const(v):
+        if v not in consts:
+            consts[v] = new_id()
+            decls.append([(4 << 16) | OP_CONSTANT, int_t, consts[v], v])
+        return consts[v]
+
+    lp = _loop_plans(insts)
+    if lp is None:
+        return None
+    plans, base = lp
+    inserts_after, inserts_before, replace = {}, {}, {}
     if describe:
         with_nested = {owner[i] for _, _, loops, owner, outer in plans for i in range(len(loops)) if i not in outer}
         return [{"nested": k in with_nested} for k in range(base)] if base else None
@@ -213,6 +194,276 @@ def force_spirv(data, n, nested=1, describe=False):
     return struct.pack(f"<{len(flat)}I", *flat)
 
 
+OP_EXT_INST, OP_TYPE_FLOAT, OP_TYPE_VECTOR, OP_TYPE_ARRAY, OP_TYPE_STRUCT, OP_TYPE_POINTER = 12, 22, 23, 28, 30, 32
+OP_VARIABLE, OP_LOAD, OP_STORE, OP_ACCESS_CHAIN, OP_IN_BOUNDS_ACCESS_CHAIN = 59, 61, 62, 65, 66
+OP_DECORATE, OP_MEMBER_DECORATE, OP_COMPOSITE_EXTRACT, OP_COPY_OBJECT, OP_BITCAST = 71, 72, 81, 83, 124
+CONVERT_TO_INT, CONVERT_KEEP = (109, 110), (111, 112, 113, 114)  # OpConvertFToU/S; OpConvertS/UToF, OpU/SConvert
+ADDS, SUBS = (128, 129), (130, 131)  # OpIAdd, OpFAdd; OpISub, OpFSub
+GLSL_MIN, GLSL_MAX = (37, 38, 39), (40, 41, 42)  # GLSL.std.450 FMin UMin SMin; FMax UMax SMax
+DEC_BINDING, DEC_SET, DEC_OFFSET, DEC_ARRAY_STRIDE = 33, 34, 35, 6
+STORAGE_UNIFORM, STORAGE_PRIVATE, STORAGE_FUNCTION = 2, 6, 7
+LESS, LESS_EQ, GREATER, GREATER_EQ = (176, 177), (178, 179), (172, 173), (174, 175)  # (unsigned, signed)
+EQUAL, NOT_EQUAL = 170, 171
+FLIP = {**dict(zip(LESS, GREATER)), **dict(zip(GREATER, LESS)), **dict(zip(LESS_EQ, GREATER_EQ)),
+        **dict(zip(GREATER_EQ, LESS_EQ))}
+# ops whose x[2] is a result id (not OpName & co.)
+VALUES = {OP_EXT_INST, OP_CONSTANT_TRUE, OP_CONSTANT, OP_VARIABLE, OP_LOAD, OP_ACCESS_CHAIN, OP_IN_BOUNDS_ACCESS_CHAIN,
+          OP_COMPOSITE_EXTRACT, OP_COPY_OBJECT, OP_BITCAST, OP_PHI, *CONVERT_TO_INT, *CONVERT_KEEP, *ADDS, *SUBS,
+          *COMPARISONS}
+
+
+class _Spirv:
+    def __init__(self, insts):
+        self.insts, self.made, self.where = insts, {}, {}
+        self.set, self.binding, self.offset, self.stride = {}, {}, {}, {}
+        self.block_of, self.stores, self.idom = {}, [], {}
+        blocks, cur, preds = [], None, {}
+        for k, x in enumerate(insts):
+            op = x[0] & 0xFFFF
+            if op in (OP_TYPE_BOOL, OP_TYPE_INT, OP_TYPE_FLOAT, OP_TYPE_VECTOR, OP_TYPE_ARRAY, OP_TYPE_STRUCT,
+                      OP_TYPE_POINTER):
+                self.made[x[1]] = x
+            elif op == OP_DECORATE and len(x) >= 4:
+                target = {DEC_SET: self.set, DEC_BINDING: self.binding, DEC_ARRAY_STRIDE: self.stride}.get(x[2])
+                if target is not None:
+                    target[x[1]] = x[3]
+            elif op == OP_MEMBER_DECORATE and len(x) >= 5 and x[3] == DEC_OFFSET:
+                self.offset[(x[1], x[2])] = x[4]
+            elif op == OP_LABEL:
+                cur = x[1]
+                blocks.append(cur)
+            elif op == OP_FUNCTION_END:
+                self._dominators(blocks, preds)
+                blocks, cur, preds = [], None, {}
+            elif op == OP_STORE:
+                self.stores.append((k, x[1], x[2]))
+            elif op in VALUES and len(x) >= 3:
+                self.made[x[2]] = x
+                self.where[x[2]] = k
+            if cur is not None:
+                self.block_of[k] = cur
+                for t in _targets(x):
+                    preds.setdefault(t, []).append(cur)
+                if op in TERMINATORS:
+                    cur = None
+
+    def _dominators(self, blocks, preds):
+        """Immediate dominators; meet() relies on SPIR-V block order (dominators come first)."""
+        if not blocks:
+            return
+        order = {b: i for i, b in enumerate(blocks)}
+        idom = {blocks[0]: blocks[0]}
+
+        def meet(a, b):
+            while a != b:
+                while order[a] > order[b]:
+                    a = idom[a]
+                while order[b] > order[a]:
+                    b = idom[b]
+            return a
+        changed = True
+        while changed:
+            changed = False
+            for b in blocks[1:]:
+                ps = [p for p in preds.get(b, []) if p in idom]
+                if not ps:
+                    continue
+                new = ps[0]
+                for p in ps[1:]:
+                    new = meet(p, new)
+                if idom.get(b) != new:
+                    idom[b], changed = new, True
+        self.idom.update({b: (None if b == blocks[0] else d) for b, d in idom.items()})
+
+    def dominates(self, a, b):
+        while b is not None:
+            if a == b:
+                return True
+            b = self.idom.get(b)
+        return False
+
+    def chain(self, ptr):
+        """(root variable instruction, [constant index values]) of a pointer, or (None, None)."""
+        idx = []
+        x = self.made.get(ptr)
+        while x is not None and x[0] & 0xFFFF in (OP_ACCESS_CHAIN, OP_IN_BOUNDS_ACCESS_CHAIN):
+            vals = []
+            for i in x[4:]:
+                c = self.made.get(i)
+                if c is None or c[0] & 0xFFFF != OP_CONSTANT:
+                    return None, None
+                vals.append(c[3])
+            idx = vals + idx
+            x = self.made.get(x[3])
+        if x is None or x[0] & 0xFFFF != OP_VARIABLE:
+            return None, None
+        return x, idx
+
+    def scalar(self, t):
+        x = self.made.get(t)
+        if x is None:
+            return None
+        if x[0] & 0xFFFF == OP_TYPE_FLOAT and x[2] == 32:
+            return "f"
+        if x[0] & 0xFFFF == OP_TYPE_INT and x[2] == 32:
+            return "i" if x[3] else "u"
+        return None
+
+    def uniform(self, var, idx):
+        ptr_t = self.made.get(var[1])
+        if ptr_t is None or ptr_t[0] & 0xFFFF != OP_TYPE_POINTER or var[2] not in self.binding:
+            return None
+        t, off = ptr_t[3], 0
+        for i in idx:
+            x = self.made.get(t)
+            if x is None:
+                return None
+            op = x[0] & 0xFFFF
+            if op == OP_TYPE_STRUCT and (t, i) in self.offset and i + 2 < len(x):
+                off, t = off + self.offset[(t, i)], x[2 + i]
+            elif op == OP_TYPE_VECTOR and i < x[3]:
+                off, t = off + 4 * i, x[2]
+            elif op == OP_TYPE_ARRAY and t in self.stride:
+                off, t = off + self.stride[t] * i, x[2]
+            else:
+                return None
+        kind = self.scalar(t)
+        return ["b", self.set.get(var[2], 0), self.binding[var[2]], off, kind] if kind else None
+
+    def stored(self, var, idx, at, region=None):
+        """Id last stored to exactly (var, idx) before `at` by a dominating store; None if any store to it is in region
+        (a loop-variant value is no bound)."""
+        hits = []
+        for k, ptr, val in self.stores:
+            v, i = self.chain(ptr)
+            if v is None or v[2] != var[2]:
+                continue
+            n = min(len(i), len(idx))
+            if i[:n] != idx[:n]:
+                continue
+            if region and region[0] <= k < region[1]:
+                return None
+            if k < at:
+                hits.append((k, i, val))
+        if not hits:
+            return None
+        k, i, val = hits[-1]
+        if i != idx or not self.dominates(self.block_of.get(k), self.block_of.get(at)):
+            return None
+        return val
+
+    def value(self, vid, at, region=None, depth=0):
+        x = self.made.get(vid)
+        if x is None or depth > 16:
+            return None
+        op = x[0] & 0xFFFF
+        at = self.where.get(vid, at)
+        if op == OP_CONSTANT and len(x) == 4:
+            kind = self.scalar(x[1])
+            if kind == "f":
+                return ["c", struct.unpack("<f", struct.pack("<I", x[3]))[0]]
+            if kind:
+                return ["c", float(x[3] - (1 << 32) if kind == "i" and x[3] >= 1 << 31 else x[3])]
+            return None
+        if op == OP_LOAD:
+            return self.load(x[3], [], at, region, depth)
+        if op == OP_COMPOSITE_EXTRACT and len(x) == 5:
+            src = self.made.get(x[3])
+            if src is not None and src[0] & 0xFFFF == OP_LOAD:
+                return self.load(src[3], [x[4]], self.where.get(x[3], at), region, depth)
+            return None
+        if op in CONVERT_TO_INT:
+            a = self.value(x[3], at, region, depth + 1)
+            return None if a is None else (["c", float(int(a[1]))] if a[0] == "c" else ["int", a])
+        if op in CONVERT_KEEP or op in (OP_BITCAST, OP_COPY_OBJECT):
+            return self.value(x[3], at, region, depth + 1)
+        if op in ADDS + SUBS and len(x) == 5:
+            a, b = (self.value(i, at, region, depth + 1) for i in x[3:5])
+            return [("add" if op in ADDS else "sub"), a, b] if a and b else None
+        if op == OP_EXT_INST and len(x) == 7 and x[4] in GLSL_MIN + GLSL_MAX:
+            a, b = (self.value(i, at, region, depth + 1) for i in x[5:7])
+            return [("min" if x[4] in GLSL_MIN else "max"), a, b] if a and b else None
+        return None
+
+    def load(self, ptr, extra, at, region, depth):
+        var, idx = self.chain(ptr)
+        if var is None:
+            return None
+        idx = idx + extra
+        if var[3] == STORAGE_UNIFORM:
+            return self.uniform(var, idx)
+        if var[3] in (STORAGE_PRIVATE, STORAGE_FUNCTION):
+            val = self.stored(var, idx, at, region)
+            return None if val is None else self.value(val, at, None, depth + 1)
+        return None
+
+    def counter(self, vid, region):
+        """Constant start value if vid loads a local whose only store in the loop is itself + 1, else None."""
+        x = self.made.get(vid)
+        if x is None or x[0] & 0xFFFF != OP_LOAD:
+            return None
+        var, idx = self.chain(x[3])
+        if var is None or var[3] not in (STORAGE_PRIVATE, STORAGE_FUNCTION):
+            return None
+        inside = [val for k, ptr, val in self.stores
+                  if region[0] <= k < region[1] and (self.chain(ptr)[0] or [None] * 3)[2] == var[2]]
+        if len(inside) != 1:
+            return None
+        inc = self.made.get(inside[0])
+        if inc is None or inc[0] & 0xFFFF != OP_IADD or len(inc) != 5:
+            return None
+        ones = [i for i in inc[3:5] if self.value(i, region[0]) == ["c", 1.0]]
+        others = [i for i in inc[3:5] if i not in ones]
+        if len(ones) != 1 or len(others) != 1:
+            return None
+        src = self.made.get(others[0])
+        if src is None or src[0] & 0xFFFF != OP_LOAD or self.chain(src[3]) != (var, idx):
+            return None
+        init = self.stored(var, idx, region[0])
+        first = self.value(init, region[0]) if init is not None else None
+        return first[1] if first and first[0] == "c" else None
+
+
+def spirv_bounds(data):
+    """Bound per outer dynamic loop (force_spirv numbering), None where not from uniform blocks; None if unforceable.
+    Unity's SPIR-V has no member names, so uniforms are ["b", ...] read from the call's block bytes; HLSLcc counters
+    are stored/loaded locals, not SSA."""
+    parsed = _parse_spirv(data)
+    lp = _loop_plans(parsed[1]) if parsed else None
+    if not lp or not lp[1]:
+        return None
+    insts = parsed[1]
+    sp = _Spirv(insts)
+    out = [None] * lp[1]
+    for fb, pos, loops, owner, outer in lp[0]:
+        for i, (n_, m_, lm, exit_block) in enumerate(loops):
+            if i not in outer:
+                continue
+            region = (fb[n_][1], fb[m_][1])
+            term = insts[exit_block[2]]
+            cmp = sp.made.get(term[1])
+            if cmp is None or len(cmp) != 5:
+                continue
+            op, a, b = cmp[0] & 0xFFFF, cmp[3], cmp[4]
+            first = sp.counter(a, region)
+            if first is None:
+                first = sp.counter(b, region)
+                if first is None:
+                    continue
+                a, b, op = b, a, FLIP.get(op, op)
+            # term[3] is the false label: if it exits, cmp true means stay in the loop
+            if term[3] == insts[lm][1]:
+                rel = "<" if op in LESS or op == NOT_EQUAL else "<=" if op in LESS_EQ else None
+            else:
+                rel = "<" if op in GREATER_EQ or op == EQUAL else "<=" if op in GREATER else None
+            bound = sp.value(b, exit_block[2], region) if rel else None
+            if bound is None:
+                continue
+            bound = ["add", bound, ["c", 1.0]] if rel == "<=" else bound
+            out[owner[i]] = ["sub", bound, ["c", float(first)]] if first else bound
+    return out
+
+
 def _match(s, i, open_, close):
     d = 0
     for j in range(i, len(s)):
@@ -229,9 +480,8 @@ _STATIC_COND = re.compile(r"^\s*[\w.]+\s*(<|<=|>|>=|!=)\s*-?\d+u?\s*$|^\s*-?\d+u
 
 
 def force_glsl(src, n, nested=1, describe=False):
-    """GLSL with every dynamic loop forced (module docstring: n, nested), or None. describe: the outer loops
-    [{"nested"}] instead (None if a loop cannot be forced)."""
-    loops = []  # (start, header end, body open brace, body close brace, kind, (init, step))
+    """force_spirv() for GLSL: only `while(true){` and dynamic `for(;;){` loops, else None."""
+    loops = []
     for m in re.finditer(r"\b(while|for)\s*\(", src):
         close = _match(src, m.end() - 1, "(", ")")
         if close is None:
@@ -277,14 +527,12 @@ def force(src, n, nested=1):
 
 
 def outer_loops(src):
-    """[{"nested": bool}] of the outer dynamic loops of a source in code order, or None (none, or one cannot be
-    forced)."""
+    """[{"nested": bool}] per outer dynamic loop in code order; None if none or unforceable."""
     return force_spirv(src, 0, describe=True) if isinstance(src, bytes) else force_glsl(src, 0, describe=True)
 
 
 def plan(src):
-    """The measurements of the model (module docstring) of a source: [(name, loop k or None, n per outer loop,
-    nested per outer loop)], base first; None when its loops cannot be forced."""
+    """[(name, loop k or None, n per outer loop, nested per outer loop)], base first; None if unforceable."""
     outer = outer_loops(src)
     if not outer:
         return None
@@ -294,13 +542,14 @@ def plan(src):
     for k, lp in enumerate(outer):
         out.append(("zero", k, ones[:k] + [0] + ones[k + 1:], ones))
         out.append(("two", k, ones[:k] + [2] + ones[k + 1:], ones))
-        if lp["nested"]:
+        if lp["nested"]:  # nested x2, not x0: an empty cluster mask lets the compiler drop the outer body
             out.append(("word", k, ones, ones[:k] + [2] + ones[k + 1:]))
+    if k_all > 1:
+        out.append(("zero", None, [0] * k_all, ones))
     return out
 
 
 def forced(src):
-    """(plan(src), the forced source of every measurement), or None."""
     p = plan(src)
     if p is None:
         return None
@@ -309,18 +558,20 @@ def forced(src):
 
 
 def profile(p, cycles):
-    """The loop data of one core from the plan and the cycles per pipe of every measurement in its order:
-    {"model", "base", "loops": [{"zero", "two", "word"}]}."""
-    k_all = sum(1 for name, _, _, _ in p if name == "zero")
+    """cycles: per-pipe dict of every plan() measurement, in plan order."""
+    k_all = sum(1 for name, k, _, _ in p if name == "zero" and k is not None)
     out = {"model": MODEL, "base": cycles[0], "loops": [{"zero": None, "two": None, "word": None} for _ in range(k_all)]}
     for (name, k, _, _), c in zip(p, cycles):
         if k is not None:
             out["loops"][k][name] = c
+        elif name == "zero":
+            out["zero"] = c
     return out
 
 
 def _f(lp, base, n, pipe):
-    """f_k(n) of one pipe (module docstring)."""
+    """n < 1: (1 - n) * (zero - base); else (n - 1) * slope. The nested loop (Forward+ cluster-mask word scan, once per
+    32 lights in the real shader) is charged once in base and taken out of the slope."""
     b = base.get(pipe) or 0
     if n < 1:
         return (1 - n) * ((lp["zero"].get(pipe) or 0) - b)
@@ -330,26 +581,28 @@ def _f(lp, base, n, pipe):
 
 
 def cycles_at(p, n):
-    """Cycles per pipe of the profile p (profile()) with outer loop k at n_k iterations (n: one number for every
-    loop or one per loop)."""
-    base, lps = p["base"], p["loops"]
+    """n: scalar or one per outer loop, may be fractional (a mean over pixels)."""
+    base, lps, zero = p["base"], p["loops"], p.get("zero")
     ns = per_loop(n, len(lps))
-    pipes = set(base).union(*(set(c) for lp in lps for c in lp.values() if c))
-    return {x: max(0.0, (base.get(x) or 0) + sum(_f(lp, base, m, x) for lp, m in zip(lps, ns))) for x in pipes}
+    pipes = set(base).union(*(set(c) for lp in lps for c in lp.values() if c), set(zero or {}))
+    w = 1.0
+    for m in ns:
+        w *= max(0.0, 1 - m)
+    out = {}
+    for x in pipes:
+        v = (base.get(x) or 0) + sum(_f(lp, base, m, x) for lp, m in zip(lps, ns))
+        if zero and w:  # no loop running: the compiler drops what they all fed, so blend toward measured "zero"
+            v += w * ((zero.get(x) or 0) - (base.get(x) or 0) - sum(_f(lp, base, 0, x) for lp in lps))
+        out[x] = max(0.0, v)
+    return out
 
 
-# --- what bounds a loop (plan K1.10, stage B) ---------------------------------------------------------------------
-# The bound of an outer `for` of Unity's GLES GLSL (HLSLcc) traced back to the shader's uniforms, so its trip count is
-# the value the frame's event used (Frame Debugger parameters). A bound is a small expression:
-#   ["u", name, component or None]  a uniform (a vector's component 0..3)
-#   ["c", number]                   a constant
-#   ["min" | "max" | "add" | "sub", a, b]
-# A loop whose bound is not that (a mask scan, a value read from a buffer, an assignment in a branch closed before
-# the loop) has the bound None: its n stays the default.
+# Bound expression (a loop's trip count from the event's uniforms): ["u", name, component 0..3 or None] | ["c", number]
+# | ["min" | "max" | "add" | "sub", a, b] | ["int", a] (towards zero) | ["b", set, binding, byte offset, "f"|"i"|"u"]
 
 _DECL = re.compile(r"^\s*(?:UNITY_UNIFORM\s+|uniform\s+)(?:(?:lowp|mediump|highp)\s+)?\w+\s+(\w+)\s*;", re.M)
 _MEMBER = re.compile(r"^\s*(?:(?:lowp|mediump|highp)\s+)?\w+\s+(\w+)\s*;", re.M)
-_CAST = re.compile(r"^(?:u?int|float|u?vec[234]|ivec[234]|bool)\((.*)\)$", re.S)
+_CAST = re.compile(r"^(u?int|float|u?vec[234]|ivec[234]|bool)\((.*)\)$", re.S)
 _CALL2 = re.compile(r"^(min|max)\((.*)\)$", re.S)
 _ATOM = re.compile(r"^([A-Za-z_]\w*)(?:\.([xyzw]+))?$")
 _NUM = re.compile(r"^-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?u?$")
@@ -357,7 +610,6 @@ COMPONENTS = "xyzw"
 
 
 def _uniforms(src):
-    """Names of the plain (not array) uniforms of a GLES source, in uniform blocks or not."""
     names = set(_DECL.findall(src))
     for block in re.finditer(r"uniform\s+\w+\s*\{(.*?)\};", src, re.S):
         names |= set(_MEMBER.findall(block.group(1)))
@@ -365,7 +617,6 @@ def _uniforms(src):
 
 
 def _split_args(s):
-    """'a, min(b, c)' -> ['a', 'min(b, c)'] at the top level."""
     out, depth, cur = [], 0, ""
     for ch in s:
         if ch == "," and depth == 0:
@@ -386,13 +637,12 @@ def _strip_parens(e):
 
 
 def _whole_call(e):
-    """Whether e is one call `f(...)` whose parentheses close at its end."""
     i = e.find("(")
     return i > 0 and _match(e, i, "(", ")") == len(e) - 1
 
 
 def _scopes(src):
-    """scope_at(pos): the positions of the braces open at pos, outermost first."""
+    """Returns scope_at(pos) -> positions of the braces open at pos, outermost first."""
     marks, opens = [], []
     for i, ch in enumerate(src):
         if ch == "{":
@@ -410,15 +660,16 @@ def _scopes(src):
 
 
 def _trace(src, expr, pos, uniforms, scope_at, depth=0):
-    """The bound expression of `expr` as it is at position pos, or None."""
     e = _strip_parens(expr)
     if depth > 8 or not e:
         return None
     if _NUM.match(e):
-        return ["c", float(e.rstrip("u"))]
+        v = float(e.rstrip("u"))
+        return ["c", v - 2.0 ** 32 if e.endswith("u") and v >= 2.0 ** 31 else v]
     m = _CAST.match(e)
     if m and _whole_call(e):
-        return _trace(src, m.group(1), pos, uniforms, scope_at, depth + 1)
+        a = _trace(src, m.group(2), pos, uniforms, scope_at, depth + 1)
+        return (["int", a] if m.group(1) in ("int", "uint") and a[0] not in ("int", "c") else a) if a else None
     m = _CALL2.match(e)
     if m and _whole_call(e):
         args = _split_args(m.group(2))
@@ -428,7 +679,7 @@ def _trace(src, expr, pos, uniforms, scope_at, depth=0):
         return [m.group(1), a, b] if a and b else None
     for op, name in (("+", "add"), ("-", "sub")):
         d, k = 0, None
-        for i, ch in enumerate(e):  # the last top-level + / - that is not a sign
+        for i, ch in enumerate(e):  # last top-level binary +/- (not a sign or exponent)
             d += ch == "("
             d -= ch == ")"
             if ch == op and d == 0 and i > 0 and e[i - 1] not in "eE(+-*/,":
@@ -445,7 +696,6 @@ def _trace(src, expr, pos, uniforms, scope_at, depth=0):
         return None
     if var in uniforms:
         return ["u", var, COMPONENTS.index(swz) if swz else None]
-    # the last assignment to that component before pos, in a block that also holds pos
     best = None
     for a in re.finditer(r"(?<![\w.])" + re.escape(var) + r"(?:\.([xyzw]+))?\s*=(?!=)\s*([^;]*);", src[:pos]):
         if a.group(1) is None or not swz or swz in a.group(1):
@@ -454,12 +704,14 @@ def _trace(src, expr, pos, uniforms, scope_at, depth=0):
         return None
     there = scope_at(best.start())
     if scope_at(pos)[:len(there)] != there:
-        return None  # assigned in a block closed before pos: not known to hold
+        return None  # assigned in a block closed before pos: may not have run
+    if _writes(src[best.end():pos], var, swz):
+        return None
     rhs, mask = best.group(2), best.group(1)
     if mask and swz and len(mask) > 1:
         rhs = _strip_parens(rhs)
         m = _CAST.match(rhs)
-        inner = _strip_parens(m.group(1)) if m and _whole_call(rhs) else rhs
+        inner = _strip_parens(m.group(2)) if m and _whole_call(rhs) else rhs
         a = _ATOM.match(inner)
         if not a or not a.group(2) or len(a.group(2)) != len(mask):
             return None
@@ -467,14 +719,29 @@ def _trace(src, expr, pos, uniforms, scope_at, depth=0):
     return _trace(src, rhs, best.start(), uniforms, scope_at, depth + 1)
 
 
+def _writes(code, var, swz=""):
+    for w in re.finditer(r"(?<![\w.])" + re.escape(var) + r"(?:\.([xyzw]+))?\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)|"
+                         r"(?<![\w.])" + re.escape(var) + r"(?:\.([xyzw]+))?\s*(?:\+\+|--)|"
+                         r"(?:\+\+|--)\s*" + re.escape(var) + r"(?:\.([xyzw]+))?(?!\w)", code):
+        mask = w.group(1) or w.group(2) or w.group(3)
+        if not mask or not swz or swz in mask:
+            return True
+    return False
+
+
+def _step_is_one(step, var):
+    s = re.sub(r"\s+", "", step)
+    return s in (f"{var}++", f"++{var}", f"{var}+=1", f"{var}+=1u", f"{var}={var}+1", f"{var}={var}+1u",
+                 f"{var}=1+{var}", f"{var}=1u+{var}")
+
+
 def glsl_bounds(src):
-    """The bound (see above) of every outer dynamic loop of a GLES source in code order, None where it is not a
-    function of uniforms; None for the whole source when its loops cannot be forced."""
+    """Bound per outer dynamic loop (outer_loops order), None where not from uniforms; None if unforceable."""
     outer = outer_loops(src)
     if outer is None:
         return None
     uniforms, scope_at = _uniforms(src), _scopes(src)
-    spans = []  # the dynamic loops as force_glsl() finds them
+    spans = []  # must match force_glsl()'s loop detection so outer indices agree
     for m in re.finditer(r"\b(while|for)\s*\(", src):
         close = _match(src, m.end() - 1, "(", ")")
         inner = src[m.end():close]
@@ -484,21 +751,28 @@ def glsl_bounds(src):
     _, outer_i = _owners([(s, e) for s, e, _, _ in spans])
     out = []
     for i in outer_i:
-        start, _, kind, inner = spans[i]
+        start, end, kind, inner = spans[i]
         bound = None
         if kind == "for":
-            init, cond, _ = inner.split(";")
-            var = re.search(r"(\w+)\s*=", init)
+            init, cond, step = inner.split(";")
+            var = re.match(r"^\s*(?:(?:lowp|mediump|highp)\s+)?(?:u?int\s+)?(\w+)\s*=\s*(.+?)\s*$", init, re.S)
             m = re.match(r"^\s*(\w+)\s*(<=|<)\s*(.+?)\s*$", cond, re.S)
-            if var and m and m.group(1) == var.group(1):
+            body = src[src.index("{", start):end]
+            if var and m and m.group(1) == var.group(1) and _step_is_one(step, var.group(1)) \
+                    and not _writes(body, var.group(1)):
+                first = bound_value(_trace(src, var.group(2), start, uniforms, scope_at), {})
                 b = _trace(src, m.group(3), start, uniforms, scope_at)
-                bound = (["add", b, ["c", 1.0]] if m.group(2) == "<=" else b) if b else None
+                written = any(_writes(body, a.group(1), a.group(2) or "")
+                              for a in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)(?:\.([xyzw]))?(?![\w(])", m.group(3)))
+                if b and first is not None and not written:
+                    b = ["add", b, ["c", 1.0]] if m.group(2) == "<=" else b
+                    bound = ["sub", b, ["c", first]] if first else b
         out.append(bound)
     return out if len(out) == len(outer) else None
 
 
 def bound_value(bound, params):
-    """The trip count a bound gives with an event's shader parameters ({name: number or [x, y, z, w]}), or None."""
+    """params: {name: number or [x, y, z, w], "@set.binding": base64 of the call's uniform-block bytes}."""
     if not bound:
         return None
     op = bound[0]
@@ -511,6 +785,17 @@ def bound_value(bound, params):
                 return None
             v = v[bound[2]]
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    if op == "b":
+        raw = (params or {}).get(f"@{bound[1]}.{bound[2]}")
+        if not isinstance(raw, str):
+            return None
+        data = base64.b64decode(raw)
+        if bound[3] + 4 > len(data):
+            return None
+        return float(struct.unpack_from({"f": "<f", "i": "<i", "u": "<I"}[bound[4]], data, bound[3])[0])
+    if op == "int":
+        a = bound_value(bound[1], params)
+        return None if a is None else float(int(a))
     a, b = bound_value(bound[1], params), bound_value(bound[2], params)
     if a is None or b is None:
         return None
@@ -518,12 +803,15 @@ def bound_value(bound, params):
 
 
 def bound_text(bound):
-    """'min(CR_Params0.w, 128)' of a bound."""
     if not bound:
         return None
     if bound[0] == "c":
         return f"{bound[1]:g}"
     if bound[0] == "u":
         return bound[1] + (f".{COMPONENTS[bound[2]]}" if bound[2] is not None else "")
+    if bound[0] == "b":
+        return f"block {bound[1]}.{bound[2]} +{bound[3]} ({bound[4]})"
+    if bound[0] == "int":
+        return f"int({bound_text(bound[1])})"
     a, b = bound_text(bound[1]), bound_text(bound[2])
     return f"{bound[0]}({a}, {b})" if bound[0] in ("min", "max") else f"{a} {'+' if bound[0] == 'add' else '-'} {b}"

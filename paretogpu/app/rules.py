@@ -1,53 +1,52 @@
-"""The artifacts of a frame's (or materials') variants, as rules of app/engine.py.
-
-  CompileRule  VariantKey -> {"files": {(platform, stage): file}, "errors": [..]} in the variants folder
-  MeasureRule  (file, core) -> malioc's Measurement of the file on the core
-  LoopRule     (file, core) -> LoopProfile: the file's dynamic loops forced as core/loops.plan says and measured
-"""
 import hashlib
 import os
 import threading
 
 from paretogpu.adapters.gpu import backend, read_source
 from paretogpu.adapters.unity import cli as unity
-from paretogpu.adapters.unity import split as split_unity
 from paretogpu.adapters.unity import variants as unity_variants
 from paretogpu.app.engine import MISSING, Rule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.model.measurement import LoopProfile, Measurement
 from paretogpu.model.shaderfile import api_of, stage_of
-from paretogpu.model.variant import COMPUTE_NOT_COMPILED, NOT_FINISHED
+from paretogpu.model.variant import API, COMPUTE_NOT_COMPILED, NOT_FINISHED, OUTDATED, STOPPED, STOPPED_TWICE
 from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
 
 
 def _es31(platform, data):
-    if platform != "gles3":
+    # Unity writes '#version 300 es' with layout(binding = x): 3.00 forbids it, malioc rejects; Malis run ES 3.1+
+    if platform != "gles3" or not data.startswith(b"#version 300 es") or b"layout(binding" not in data:
         return data, None
-    text, patched = split_unity.es31(data.decode("utf-8", errors="replace"))
-    return text.encode(), patched
+    return b"#version 310 es" + data[len(b"#version 300 es"):], "300 es -> 310 es"
 
 
 def recover(root):
-    """A Unity run that did not finish (the editor crashed or the connection broke) leaves its compiled files in
-    <root>/_compiled without its answer: place what is there. Returns {key: [errors]} or None."""
+    """Places what a crashed / cut-off Unity run left in <root>/_compiled; -> {key: [errors]} or None."""
     raw = store.raw_dir(root)
     found = unity_variants.unfinished_run(raw)
     if not found:
         return None
     keys, result = found
     errors = store.place(root, raw, keys, result, _es31)
-    unity_variants.mark_recovered(raw, result)
+    unity_variants.mark_placed(raw)
     return errors
 
 
+def _platform_of(error):
+    """Errors look like "vulkan frag: ..."; -> platform or None."""
+    return next((p for p in API if error.startswith(p + " ")), None)
+
+
 def compile_variants(project, keys, root, platforms, timeout=1800, rep=CONSOLE):
-    """Compile `keys` in the open editor; writes the files and manifests; returns {key: [errors]}."""
+    """-> {key: [errors]}."""
     raw = store.raw_dir(root)
     result = unity_variants.compile_variants(project, keys, raw, platforms, timeout,
                                              on_start=lambda n: rep.phase("compile", n), on_step=rep.step)
-    return store.place(root, raw, keys, result, _es31)
+    errors = store.place(root, raw, keys, result, _es31)
+    unity_variants.mark_placed(raw)
+    return errors
 
 
 def current_fingerprints(project, shaders, root):
@@ -55,12 +54,9 @@ def current_fingerprints(project, shaders, root):
 
 
 class CompileRule(Rule):
-    """Compiled variants. A stored variant is valid while all its files are there and its shader's fingerprint (Unity
-    version, Android platform defines, color space, the asset's dependency hash: the file, its includes and subgraphs)
-    is the one it was compiled with; the current fingerprints are asked from the open editor, without it the stored
-    files are used unchecked (checked = False). A variant that failed is not compiled again until its shader changes
-    (or retry_failed); a run that did not finish is not a failure. recompile: every requested variant again.
-    Compute kernels are keyed but not compiled (COMPUTE_NOT_COMPILED)."""
+    """VariantKey -> {"files": {(platform, stage): file}, "errors"}. Valid while all files exist and the shader's editor
+    fingerprint (Unity version, platform defines, color space, dependency hash) matches; no editor -> used unchecked.
+    Files of another fingerprint are never used: a failed recompile leaves no files, not the old code."""
     phase = "compile"
     keyed = False
 
@@ -70,10 +66,18 @@ class CompileRule(Rule):
         self.compile_missing, self.recompile, self.retry_failed = compile_missing, recompile, retry_failed
         self.rep = rep
         self.current = None
+        self.built = set()
 
     @property
     def checked(self):
         return self.current is not None
+
+    def usable(self, k):
+        """{} when the editor's fingerprint is known and the files were compiled with another one."""
+        files = self.have.get(k, {})
+        if self.current is None or not files or self.stored.get(k) == self.current.get(k.shader):
+            return files
+        return {}
 
     def _load(self):
         self.stored = {}
@@ -83,16 +87,19 @@ class CompileRule(Rule):
         return all((p, s) in self.have.get(k, {}) for p in self.platforms for s in k.stages)
 
     def errors_of(self, k):
-        return [e for e in (self.index.get(k) or {}).get("errors", []) if e != NOT_FINISHED]
+        """Stored errors on this rule's platforms plus platform-less ones."""
+        return [e for e in (self.index.get(k) or {}).get("errors", [])
+                if e != NOT_FINISHED and _platform_of(e) in (None, *self.platforms)]
 
     def prepare(self, keys):
         self.keys = keys
         recovered = recover(self.root) or {}
         if recovered:
-            self.rep.log(f"recovered {sum(1 for e in recovered.values() if not e)} variants of an unfinished Unity run")
+            n = sum(1 for e in recovered.values() if not e)
+            self.rep.log(f"placed {n} variants of a Unity run that was not placed (it stopped or answered after the wait)")
         self._load()
         self.index = store.load_index(self.root)  # every variant this folder has seen, of any frame: {key: entry}
-        draw = [k for k in keys if not k.is_compute]  # compute kernels are not compiled: see COMPUTE_NOT_COMPILED
+        draw = [k for k in keys if not k.is_compute]
         if self.compile_missing and draw:
             if self.project and unity.editor_ready(self.project, allow_play=True):
                 self.rep.phase("fingerprints")
@@ -106,7 +113,7 @@ class CompileRule(Rule):
                            or self.stored.get(k) != self.current.get(k.shader))]
 
     def failed_before(self, k):
-        """A variant that failed is not compiled again until its shader changes (or retry_failed)."""
+        """A failed variant is not recompiled until its shader changes (or retry_failed); unfinished run != failure."""
         if not self.errors_of(k) or self.retry_failed or self.recompile:
             return False
         return self.current is None or (self.index.get(k) or {}).get("fingerprint") == self.current.get(k.shader)
@@ -117,7 +124,13 @@ class CompileRule(Rule):
                     "errors": self.errors_of(k) if self.have.get(k) else [COMPUTE_NOT_COMPILED]}
         if (not self.complete(k) or k in self.stale) and not self.failed_before(k):
             return MISSING
-        return {"files": self.have.get(k, {}), "errors": self.errors_of(k)}
+        return self._value(k, self.errors_of(k))
+
+    def _value(self, k, errors):
+        files = self.usable(k)
+        if self.have.get(k) and not files and not errors:
+            errors = [OUTDATED]
+        return {"files": files, "errors": errors}
 
     def can_build(self):
         return self.compile_missing
@@ -132,24 +145,33 @@ class CompileRule(Rule):
         self.rep.log(f"compiling {len(keys)} of {len(self.keys)} variants in Unity ...")
         errors = compile_variants(self.project, keys, self.root, self.platforms, rep=self.rep)
         self._load()
-        return {k: {"files": self.have.get(k, {}), "errors": list(errors.get(k, []))} for k in keys}
+        self.built.update(keys)
+        return {k: self._value(k, list(errors.get(k, []))) for k in keys}
 
     def unbuilt(self, k):
-        """Not compiled in this run (--no-compile): the reason is shown, not stored (the next run compiles it)."""
+        """--no-compile: the reason is shown, not stored (the next run compiles it)."""
         return {"files": self.have.get(k, {}), "errors": self.errors_of(k), "pending": not self.complete(k)}
 
     def finish(self, values):
         for k, v in values.items():
+            fp = (self.current.get(k.shader) if k in self.built and self.current is not None
+                  else self.stored.get(k) or (self.current or {}).get(k.shader)
+                  or (self.index.get(k) or {}).get("fingerprint"))
+            old = self.index.get(k) or {}
+            stops = (old.get("stopped") or 0) + 1 if STOPPED in v["errors"] else 0
             self.index[k] = {"key": k.to_list(),
                              "files": {f"{p}/{s}": fn for (p, s), fn in sorted(self.have.get(k, {}).items())},
-                             "errors": [e for e in v["errors"] if e != NOT_FINISHED],
-                             "fingerprint": self.stored.get(k) or (self.current or {}).get(k.shader)}
-            v["files"] = self.have.get(k, {})
+                             "errors": [e for e in old.get("errors", [])
+                                        if _platform_of(e) not in (None, *self.platforms)]
+                                       + [e for e in v["errors"] if e not in (NOT_FINISHED, OUTDATED, STOPPED)]
+                                       + ([STOPPED_TWICE] if stops >= 2 else []),
+                             "fingerprint": fp, **({"stopped": stops} if stops else {})}
+            v["files"] = self.usable(k)
         store.save_index(self.root, self.index)
 
 
 class _Hashes:
-    """sha1 of files, each read once (a file is measured on several cores)."""
+    """sha1 per file, read once (a file is measured on several cores)."""
 
     def __init__(self, root):
         self.root, self.done, self.lock = root, {}, threading.Lock()
@@ -166,8 +188,8 @@ class _Hashes:
 
 
 class MeasureRule(Rule):
-    """malioc on one file (relative to `root`) and one core: GLSL for `api`, SPIR-V always for Vulkan; the stage comes
-    from the extension. The value keeps whether it came from a cache ("cached"); failures are not remembered."""
+    """(file relative to root, core) -> Measurement; SPIR-V is always Vulkan, stage from the extension; memo hits get
+    "cached"."""
     phase = "measure"
     memo = "measure/1"
 
@@ -210,9 +232,8 @@ class MeasureRule(Rule):
 
 
 def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
-    """The loop profile (core/loops.profile: base and every outer loop at 0 and 2 iterations, word; combined variants,
-    longest path) with "work_regs" and "spilling" of the forced sources (loops.forced(src)) on one core, or None
-    (cannot be forced, malioc failed, still N/A)."""
+    """-> loops.profile() + "work_regs", "spilling" of loops.forced(src) on one core; None if not forceable, malioc
+    failed or still N/A."""
     if forced is None:
         return None
     plan, srcs = forced
@@ -232,9 +253,7 @@ def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
 
 
 class LoopRule(Rule):
-    """The dynamic loops of a file forced as core/loops.plan says (every outer loop at 0 and 2 iterations, the others at
-    1) and measured on one core; None when its loops cannot be forced (it is priced by total cycles then; not
-    remembered)."""
+    """(file, core) -> LoopProfile; None when its loops cannot be forced (then priced by total cycles)."""
     phase = "loops"
     memo = "loops/3"
 

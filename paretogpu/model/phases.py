@@ -1,7 +1,4 @@
-"""The steps a command goes through (views/reporter.phase, app/engine.Rule.phase, features: Command.phases), declared
-once: the id every step reports as, its name for the UI and the unit its progress counts (None: no count).
-tests/test_phases.py checks that every id the code reports is declared here.
-"""
+"""id -> (UI name, progress unit or None); every phase id the code reports must be declared (tests/test_phases.py)."""
 
 PHASES = {
     "rd_capture": ("Захват кадра в RenderDoc", None),
@@ -15,9 +12,11 @@ PHASES = {
     "bounds": ("Границы циклов (GLES)", None),
     "rd_loops": ("Повторы циклов (RenderDoc)", None),
     "rd_memory": ("Память по проходам (RenderDoc)", None),
+    "rd_start": ("Запуск игры на телефоне", None),
+    "rd_wait": ("Игра на телефоне: ждёт «Снять кадр»", None),
+    "rd_device": ("Кадр на устройстве (RenderDoc for Arm)", None),
     "ablation": ("Разбор по строкам (malioc)", "замеров"),
     "report": ("Расчёт и отчёт", None),
-    "unity_export": ("Экспорт шейдеров из Unity", None),
     "bench_compile": ("Замеры malioc", "шейдеров"),
     "site": ("Сборка сайта", None),
     "run": ("Выполнение", None),
@@ -25,5 +24,4 @@ PHASES = {
 
 
 def labels():
-    """{id: {"label", "unit"}} for the UI (/api/schema)."""
     return {k: {"label": v[0], "unit": v[1]} for k, v in PHASES.items()}

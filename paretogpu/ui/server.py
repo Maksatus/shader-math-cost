@@ -1,15 +1,4 @@
-"""Local web UI: `python -m paretogpu ui`.
-
-One window (Edge in app mode, else the default browser) on http://127.0.0.1:<port>:
-  /            static/index.html: tabs "function costs" (docs/, the site as on GitHub), "project test" (the commands
-               with their progress), "reports" (the snapshots in paretogpu/out); its parts in static/: app.css and
-               one script per tab in js/ (run in the order index.html lists them)
-  /static/...  ui/static/;  /shared/...  views/static/ (theme.css: the palette every page shares)
-  /site/...    docs/
-  /out/...     paretogpu/out: reports of the project's frames; served only here, they never reach git or the site
-  /api/...     JSON
-What a button runs: ui/presets.py; running it with its progress: ui/runner.py; what the pages read: ui/api.py.
-"""
+"""/out/ (paretogpu/out, project frame reports) is served only here: it must never reach git or the docs/ site."""
 import http.server
 import json
 import mimetypes
@@ -40,13 +29,12 @@ STATIC = os.path.join(HERE, "static")
 
 RUNNER = None
 SCHEMA = None
-CLOSE_GRACE = 6  # s without open windows before the server stops: a reloaded page says "alive" again by then
-SILENT_CLOSED = 180  # s without "alive" = the window is gone (a minimized window still says it once a minute)
+CLOSE_GRACE = 6  # s; a reloaded page says "alive" again within this
+SILENT_CLOSED = 180  # s without "alive" = gone (browsers throttle a minimized window's timer to once a minute)
 
 
 class Windows:
-    """Open UI pages: each says "alive" every 20 s and "bye" when it is closed (a page killed without "bye" is
-    dropped after SILENT_CLOSED)."""
+    """Pages send "alive" every 20 s and "bye" on close; a page killed without "bye" expires after SILENT_CLOSED."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -73,7 +61,6 @@ WINDOWS = Windows()
 
 
 def stop_when_closed(httpd):
-    """Stops the server once every window is closed, after the running job (if any) has finished."""
     closed_at, waiting = None, False
     while True:
         time.sleep(1)
@@ -209,11 +196,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self._host_ok() and urllib.parse.urlparse(self.path).path == "/api/bye":
-            # sendBeacon from a closing page (no custom header possible); the id is random, so no other page can guess it
+            # sendBeacon cannot set the custom header; the id is random, so no other page can guess it
             n = int(self.headers.get("Content-Length") or 0)
             WINDOWS.bye(self.rfile.read(n).decode("utf-8", "replace").strip())
             return self._json({"ok": True})
-        # a custom header makes a cross-origin request preflighted, and no CORS is answered: other pages cannot post
+        # custom header forces a CORS preflight, which is never answered: other origins cannot post
         if not self._host_ok() or self.headers.get("X-ParetoGPU") != "1":
             return self.send_error(403)
         n = int(self.headers.get("Content-Length") or 0)
@@ -235,6 +222,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({"paths": api.material_by_content(project, body.get("name") or "", body.get("text") or "")})
             if p == "/api/stop":
                 return self._json({"stopped": RUNNER.stop()})
+            if p == "/api/capture":
+                return self._json({"captured": RUNNER.capture()})
             if p == "/api/reveal":
                 path = workspace.snapshot_dir(body.get("name")) if body.get("name") else os.path.abspath(body.get("path", ""))
                 if path and os.path.isdir(path):

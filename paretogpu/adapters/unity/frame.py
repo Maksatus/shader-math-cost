@@ -1,9 +1,5 @@
-"""The Frame Debugger snapshot of the open editor (cs/ParetoGpuFrame.cs, plan item K1.1).
-
-capture() runs ParetoGpuFrame.cs in the open editor (bridge.py) and waits for <out>/frame.json: the raw Frame Debugger
-data of every event of the frame the Game view shows and the settings it is drawn with (quality level, Game view size,
-render pipeline asset).
-"""
+"""Frame Debugger snapshot (cs/ParetoGpuFrame.cs) -> <out>/frame.json: raw data of every event of the frame the Game
+view shows, plus its settings (quality level, Game view size, render pipeline asset)."""
 import os
 import re
 
@@ -18,8 +14,7 @@ class SnapshotError(UnityError):
 
 
 def capture(project, out, timeout=1800, max_events=0, log=None, on_step=None):
-    """Snapshot the frame of the open editor into <out>/frame.json; returns the parsed raw data.
-    log(text): the progress Unity writes; on_step(done, total, note): events read so far."""
+    """log(text): Unity's progress text; on_step(done, total, note): events read so far."""
     project, out = os.path.abspath(project), os.path.abspath(out)
     on_step = on_step or (lambda done, total=None, note=None: None)
     bridge.require_editor(project, SnapshotError, "the snapshot needs the open editor with the frame in the Game view")

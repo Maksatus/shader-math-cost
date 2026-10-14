@@ -1,8 +1,4 @@
-"""Regression tests for the fixes after the 2026-10-06 review: RenderDoc counters and call matching, malioc errors
-and non-ASCII sources, splitting of "Compile and show code" output, the variant report. Synthetic data only.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""RenderDoc counters and call matching, stages, malioc errors and non-ASCII sources."""
 import json
 import os
 import shutil
@@ -11,12 +7,10 @@ import unittest
 from unittest import mock
 
 from paretogpu.adapters import malioc as mali
-from paretogpu.adapters.unity import split as split_unity
 from paretogpu.app.rules import MeasureRule
 from paretogpu.core import events as renderdoc
-from paretogpu.core import ranking as report
 
-SYNTH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "paretogpu", "corpus", "synthetic")
+SYNTH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "glsl")
 
 
 def draw(index, path, indices, calls=1):
@@ -46,7 +40,7 @@ class RenderDocMatchTest(unittest.TestCase):
         self.assertEqual(evs[0]["rd"]["vs_invocations"], 0)
 
     def test_extra_call_is_reported(self):
-        # RenderDoc has one more draw on the path: the order shifts and the index counts disagree
+        # one extra RenderDoc draw on the path shifts the order: index counts disagree
         evs = [draw(0, "Cam/Opaque", 6), draw(1, "Cam/Opaque", 36)]
         acts = [action(10, "Cam/Opaque", 3), action(11, "Cam/Opaque", 6), action(12, "Cam/Opaque", 36)]
         matched, missing, mismatched = renderdoc.match(evs, acts, ["ps_invocations"])
@@ -57,6 +51,45 @@ class RenderDocMatchTest(unittest.TestCase):
         evs = [draw(0, "Cam/Opaque", 30, calls=2)]
         acts = [action(10, "Cam/Opaque", 6, instances=3), action(11, "Cam/Opaque", 12, instances=0)]
         self.assertEqual(renderdoc.match(evs, acts, []), (1, 0, 0))
+
+    def test_non_indexed_and_full_screen_are_checked(self):
+        blit = {**draw(0, "Cam/Bloom", 0), "vertices": 3, "shader": "Hidden/Bloom", "rt": {"width": 100, "height": 50}}
+        evs = [blit, {**blit, "index": 1}]
+        acts = [action(10, "Cam/Bloom", 6, ps=5000), action(11, "Cam/Bloom", 3, ps=20000)]
+        self.assertEqual(renderdoc.match(evs, acts, ["ps_invocations"]), (2, 0, 2))
+        self.assertEqual((evs[0]["rd"]["mismatch"], evs[0]["rd"]["count_mismatch"]), ("vertices", [3, 6]))
+        self.assertEqual((evs[1]["rd"]["mismatch"], evs[1]["rd"]["count_mismatch"]), ("pixels", [5000, 20000]))
+
+    def test_an_event_without_calls_does_not_take_later_ones(self):
+        evs = [draw(0, "Cam/Shadows", 6), draw(1, "Cam/Opaque", 36)]
+        acts = [action(10, "Cam/Opaque", 36), action(20, "Cam/Shadows", 6)]
+        self.assertEqual(renderdoc.match(evs, acts, []), (1, 1, 0))
+        self.assertIsNone(evs[0]["rd"])
+        self.assertEqual(evs[1]["rd"]["events"], [10])
+
+    def test_paths_match_whole_segments(self):
+        evs = [draw(0, "Blit", 3), draw(1, "", 3)]
+        acts = [action(10, "Cam/FinalBlit", 3), action(11, "Cam/Blit", 3), action(12, "", 3)]
+        renderdoc.match(evs, acts, [])
+        self.assertEqual((evs[0]["rd"]["events"], evs[1]["rd"]["events"]), ([11], [12]))
+
+
+class StageTest(unittest.TestCase):
+    def ev(self, path, shader, vertices=3, light_mode=None, rt="CameraColor", blend=None):
+        return {"kind": "draw", "path": "Cam/ExecuteRenderGraph/" + path, "shader": shader, "vertices": vertices,
+                "light_mode": light_mode, "rt": {"name": rt}, "blend": blend}
+
+    def test_stages(self):
+        evs = [self.ev("(RP 1:0) MRT Init", "Hidden/MRT"),
+               self.ev("(RP 1:1) Draw Opaque/RenderLoop.Draw", "Lit", 9000, "Forward Opaque"),
+               self.ev("(RP 1:2) Draw Skybox", "Hidden/Sky"),
+               self.ev("(RP 2:0) Copy Depth", "Hidden/CopyDepth", rt="_CameraDepthTexture"),
+               self.ev("(RP 3:0) Draw Fog", "Hidden/FogOpaque"),
+               self.ev("(RP 4:0) Bloom", "Hidden/Bloom"),
+               self.ev("DrawScreenSpaceUI/GUI.Repaint", "Hidden/TextCore/Distance Field SSD", 148,
+                       blend="SrcAlpha OneMinusSrcAlpha")]
+        self.assertEqual([e["stage"] for e in renderdoc.assign_stages(evs)],
+                         ["opaque", "opaque", "opaque", "prepass", "post", "post", "ui"])
 
 
 class MaliocTest(unittest.TestCase):
@@ -77,88 +110,6 @@ class MaliocTest(unittest.TestCase):
     def test_empty_core_list(self):
         with self.assertRaises(ValueError):
             mali.parse_cores(" , ")
-
-
-COMPILED = """Shader "Test/Lit" {
-SubShader {
- Pass {
-  Name "Forward"
-//////////////////////////////////////////////////////
-Keywords: _A
--- Vertex shader for "gles3":
-// Compile errors generating this shader.
-
-//////////////////////////////////////////////////////
-Keywords: <none>
--- Hardware tier variant: Tier 1
--- Vertex shader for "gles3":
-Shader Disassembly:
-#ifdef VERTEX
-#version 300 es
-void main(){ gl_Position = vec4(0.0); }
-#endif
-#ifdef FRAGMENT
-#version 300 es
-precision mediump float;
-layout(location = 0) out vec4 o;
-void main(){ o = vec4(1.0); }
-#endif
- }
-}
-}
-"""
-
-
-class SplitTest(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.mkdtemp()
-        self.src = os.path.join(self.dir, "Compiled-Test.shader")
-        with open(self.src, "w", encoding="utf-8") as f:
-            f.write(COMPILED)
-
-    def tearDown(self):
-        shutil.rmtree(self.dir, ignore_errors=True)
-
-    def test_compile_errors_are_reported(self):
-        shader, outputs, errors = split_unity.split(self.src, os.path.join(self.dir, "out"))
-        self.assertEqual(shader, "Test/Lit")
-        self.assertEqual(len(errors), 1)
-        self.assertIn("[_A] vertex gles3", errors[0])
-        self.assertEqual(sorted(m["file"] for man in outputs.values() for m in man),
-                         ["00_Forward__none__tier1.frag", "00_Forward__none__tier1.vert"])
-
-    def test_stale_files_of_an_earlier_split_are_removed(self):
-        out = os.path.join(self.dir, "out")
-        _, outputs, _ = split_unity.split(self.src, out)
-        d = next(iter(outputs))
-        with open(os.path.join(d, "manifest.json"), encoding="utf-8") as f:
-            man = json.load(f)
-        open(os.path.join(d, "old.frag"), "w").close()
-        open(os.path.join(d, "mine.txt"), "w").close()  # not written by a split: kept
-        with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
-            json.dump(man + [dict(man[0], file="old.frag")], f)
-        split_unity.split(self.src, out)
-        self.assertEqual(sorted(os.listdir(d)), ["00_Forward__none__tier1.frag", "00_Forward__none__tier1.vert", "manifest.json",
-                                                 "mine.txt"])
-
-
-def rec(file, core, arch, cycles, api="gles", stage="fragment"):
-    c = {"arith": cycles, "fma": cycles, "cvt": 0.0, "sfu": 0.0, "ls": 0.0, "v": 0.0, "t": 0.0}
-    v = {"longest": c, "shortest": c, "total": c, "bound": ["fma"], "work_regs": 8, "spilling": False,
-         "fp16_pct": 50, "occupancy": 100}
-    return {"file": file, "core": core, "arch": arch, "api": api, "stage": stage, "malioc": "x", "driver": "x",
-            "variants": {"main": v}, "uniform_computation": False, "root": "D:/shaders"}
-
-
-class ReportTest(unittest.TestCase):
-    def test_rank_by_main_core_and_per_api(self):
-        recs = [rec("a.frag", "Mali-G52", "Bifrost", 100), rec("a.frag", "Mali-G78", "Valhall", 1),
-                rec("b.frag", "Mali-G52", "Bifrost", 10), rec("b.frag", "Mali-G78", "Valhall", 5),
-                rec("c.frag.spv", "Mali-G78", "Valhall", 3, api="vulkan")]
-        rows, _, _ = report.build_rows(recs)
-        self.assertEqual([(r["file"], r["main"]["core"], r["rank"]) for r in rows],
-                         [("b.frag", "Mali-G78", 1), ("c.frag.spv", "Mali-G78", 1), ("a.frag", "Mali-G78", 2)])
-
 
 
 if __name__ == "__main__":

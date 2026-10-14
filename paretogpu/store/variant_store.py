@@ -1,10 +1,6 @@
-"""The folder of compiled shader variants of a project (shared by its frames and materials).
-
-  <variants>/<shader>/          GLSL (.vert / .frag) for GLES3
-  <variants>/<shader>_vulkan/   SPIR-V (.vert.spv / .frag.spv) for Vulkan
-  <variants>/<shader>/manifest.json   every file: shader, subshader, pass, keywords, stage, platform, fingerprint
-  <variants>/variants.json      every variant the folder has seen, of any frame: its files, errors, fingerprint
-  <variants>/_compiled/         the raw output of the last Unity run (placed into the folders by place())
+"""Compiled variants folder of a project:
+  <shader>/ GLSL .vert/.frag (GLES3); <shader>_vulkan/ SPIR-V .vert.spv/.frag.spv; each with manifest.json
+  variants.json: every variant ever seen (files, errors, fingerprint); _compiled/: raw output of the last Unity run
 """
 import json
 import os
@@ -20,9 +16,8 @@ def raw_dir(root):
 
 
 def load_manifests(root, fingerprints=None, platforms=None):
-    """{key: {(platform, stage): relative file}} of the variants already in the folder (entries whose file is gone
-    are skipped). fingerprints: a dict filled with {key: fingerprint the files were compiled with (None if unknown)},
-    from the files of `platforms` only (files of a platform not compiled now keep an older fingerprint)."""
+    """-> {key: {(platform, stage): relative file}}. Fills `fingerprints` {key: fp, None if files disagree} from
+    `platforms` files only (other platforms' files keep an older fingerprint)."""
     have = {}
     if not os.path.isdir(root):
         return have
@@ -43,8 +38,7 @@ def load_manifests(root, fingerprints=None, platforms=None):
 
 
 def place(root, raw, keys, result, patch=None):
-    """Compiled files of a run -> <root>/<shader>[_vulkan]/ + manifest.json; returns {key: [errors]}.
-    patch(platform, data) -> (data, note or None): a fix applied to every file before it is written."""
+    """-> {key: [errors]}. patch(platform, data) -> (data, note or None) is applied to every file before writing."""
     manifests, errors = {}, {}
     for v in result["variants"]:
         k = keys[v["id"]]
@@ -72,13 +66,19 @@ def place(root, raw, keys, result, patch=None):
             with open(path, encoding="utf-8") as f:
                 old = json.load(f)
         names = {e["file"] for e in entries}
-        with open(path, "w", encoding="utf-8", newline="\n") as f:
-            json.dump([e for e in old if e["file"] not in names] + entries, f, indent=1, ensure_ascii=False)
+        _write_json(path, [e for e in old if e["file"] not in names] + entries)
     return errors
 
 
+def _write_json(path, data):
+    """Atomic: a run stopped while writing leaves the old file."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, indent=1, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 def load_index(root):
-    """{key: entry} of variants.json: every variant this folder has seen, of any frame."""
     index = {}
     path = os.path.join(root, INDEX)
     if os.path.exists(path):
@@ -89,13 +89,11 @@ def load_index(root):
 
 
 def save_index(root, index):
-    with open(os.path.join(root, INDEX), "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"variants": list(index.values())}, f, indent=1, ensure_ascii=False)
+    _write_json(os.path.join(root, INDEX), {"variants": list(index.values())})
 
 
 def gles_file(root, file):
-    """The GLES file of a variant from its file of any API (<shader>_vulkan/<name>.frag.spv -> <shader>/<name>.frag),
-    or None when it is not compiled."""
+    """<shader>_vulkan/<name>.frag.spv -> <root>/<shader>/<name>.frag, or None when not compiled."""
     folder, name = os.path.split(file.replace("\\", "/"))
     if folder.endswith("_vulkan"):
         folder = folder[:-len("_vulkan")]

@@ -1,19 +1,14 @@
-"""What the UI can run: presets (one button = a chain of steps), the commands' forms, their command lines.
-
-A step is `python -m paretogpu <cmd>` (features/: its arguments, phases, the page it writes, the folders the UI fills
-in). plan(preset, values) -> the steps with their values.
-"""
 import os
 import sys
 
+from paretogpu.adapters.unity.cli import android_package
 from paretogpu.features import BY_NAME, COMMANDS
 from paretogpu.model.phases import labels as phase_labels
 from paretogpu.store import workspace
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
-# a preset is what one button runs: its steps; `hide`: arguments the server fills in (the chain's own folders).
-# export, measure and report stay in the console: the UI is for checking a frame without knowing the CLI
+# one button = steps run in order; `hide`: args the server fills in (the chain's own folders)
 PRESETS = [
     {"id": "frame_cost", "title": "Проверка кадра",
      "steps": [{"cmd": "frame", "hide": ["out"]}, {"cmd": "cost", "hide": ["frame", "out", "project"]}]},
@@ -26,22 +21,19 @@ PRESETS = [
 
 
 def schema():
-    """{command: {"help", "title", "args": [...]}} of the commands (features/)."""
     return {c.name: c.schema() for c in COMMANDS}
 
 
 def phases_of(cmd, v):
-    """Phases a step goes through, in order (the ids Reporter.phase() prints); [] = one phase, "run"."""
+    """[] -> the runner uses one phase, "run"."""
     return BY_NAME[cmd].phases_of(v) if cmd in BY_NAME else []
 
 
 def report_of(cmd, v):
-    """The page a step writes, or None."""
     return BY_NAME[cmd].report_of(v) if cmd in BY_NAME else None
 
 
 def kind_of(cmd):
-    """The kind of result a step leaves (ResultKind.name), or None."""
     r = BY_NAME[cmd].result if cmd in BY_NAME else None
     return r.name if r else None
 
@@ -66,18 +58,29 @@ def argv_of(cmd, values, sch):
 
 
 def plan(preset_id, values, sch):
-    """([(cmd, values of the step)], the snapshot folder the chain makes or None) of a preset; ValueError if it
-    cannot run with these values."""
+    """-> ([(cmd, values)], snapshot dir the chain makes or None); ValueError if it cannot run."""
     preset = next((p for p in PRESETS if p["id"] == preset_id), None)
     if not preset:
         raise ValueError(f"unknown preset {preset_id}")
     frame_dir = None
-    if preset_id == "frame_cost":  # the snapshot is made by the first step and priced by the second
+    phone = (values.get("project") or "").startswith("device:")
+    first = []
+    if preset_id == "frame_cost" and phone:  # `device` replaces the `frame` step
+        serial, _, project = values["project"][len("device:"):].partition(":")
+        frame_dir = workspace.new_snapshot_dir(project, "_".join(x for x in (values.get("suffix"), "device") if x))
+        pkg = android_package(project)
+        if not pkg:
+            raise ValueError("нет Android-пакета проекта (ProjectSettings: applicationIdentifier)")
+        first = [("device", {"frame": frame_dir, "project": project, "app": pkg, "serial": serial})]
+        values = {**values, "project": project}
+    elif preset_id == "frame_cost":
         if not values.get("project"):
             raise ValueError("укажите Unity-проект")
         frame_dir = workspace.new_snapshot_dir(values["project"], values.get("suffix"))
-    steps = []
+    steps = list(first)
     for st in preset["steps"]:
+        if first and st["cmd"] == "frame":
+            continue
         cmd = st["cmd"]
         mine = {a["dest"] for a in sch[cmd]["args"]}
         v = {k: values[k] for k in mine if k in values and k not in st.get("hide", [])}
@@ -98,5 +101,4 @@ def plan(preset_id, values, sch):
 
 
 def ui_schema():
-    """What /api/schema answers: the commands with their forms, the presets with their titles, the phases."""
     return {"commands": schema(), "presets": PRESETS, "phases": phase_labels()}

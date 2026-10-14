@@ -1,8 +1,4 @@
-"""adapters/unity/bridge.py: the C# file Unity compiles, and the job protocol (answer, progress, error with a code)
-with a fake editor in place of Unity CLI.
-
-Run: python -m unittest discover tests   (from the repository root)
-"""
+"""adapters/unity/bridge.py: compiled C# source and the job protocol, with a fake editor."""
 import json
 import os
 import shutil
@@ -21,8 +17,6 @@ class Failed(UnityError):
 
 
 class Editor:
-    """In place of bridge.run: the entry reads its config and acts like a cs/ script."""
-
     def __init__(self, act, started=False):
         self.act, self.started = act, started
 

@@ -1,20 +1,6 @@
-"""GPU backends: how the shaders of one GPU family are measured. The rules of the app (app/rules.py, app/ablation.py)
-and the commands ask a Backend, never a tool directly; Mali (adapters/malioc.py, malioc) is the first one.
-
-A backend gives:
-  name, pipes          its pipe model (model/measurement.PipeModel): what core/pricing.py prices
-  tool                 what its measurements depend on besides the shader (the tool and its version): part of the
-                       keys measurements are remembered under
-  version()            the tool's version
-  cores()              [(core, architecture, [APIs])]
-  parse_cores(spec)    --cores ("preset:mobile", "Mali-G78,Mali-G52") -> [core]
-  measure(src, core, api, stage) -> Measurement (model/measurement.py), {"ok": False, "error"} on a failure
-  spills(rec)          the record spills registers
-  Error                the exception of a tool that cannot run
-
-  backend(name=None) -> the backend (PARETOGPU_GPU, default "mali")
-To add one: a module of adapters/ with a Backend subclass that calls register() when imported, and its name in KNOWN.
-"""
+"""GPU backends: rules and commands measure through backend(), never a tool directly.
+Backend.tool (tool path+version) is part of measurement cache keys; measure() returns {"ok": False, "error"} on failure.
+New backend: a Backend subclass that calls register() on import, plus its module in KNOWN."""
 import importlib
 import os
 

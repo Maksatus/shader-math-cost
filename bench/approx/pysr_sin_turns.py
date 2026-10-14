@@ -1,6 +1,6 @@
-"""PySR search for sin(2*pi*t) for any t (phase in turns), with round / frac / abs
-available, to see whether it finds range reduction by itself.
-Prints the Pareto front (complexity, max abs error on t in [-3, 3], expression).
+"""PySR search for sin(2*pi*t), any t, with round / frac / abs: does it find range reduction by itself?
+
+Usage: python pysr_sin_turns.py   (prints the Pareto front on t in [-3, 3])
 """
 import numpy as np
 import sympy

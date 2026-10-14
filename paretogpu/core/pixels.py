@@ -1,33 +1,21 @@
-"""Pixels and vertices of every draw event for the frame cost (plan items K1.3 rule, K1.5).
-
-Source of the fragment count, best first (decision in K1.3):
-  renderdoc   PSInvocations of the event's calls (ev["rd"], adapters/renderdoc): how many times the pixel
-              shader really ran, with overdraw, alpha test and the draw order — the reference;
-  fullscreen  a full-screen pass (procedural triangle / quad in post): the render target area;
-  diff        changed pixels of the render target (Frame Debugger replay, K1.2) — the fallback.
-Vertices: Frame Debugger m_VertexCount (all instances included).
-"""
+"""Draw pixels = rd["ps_invocations"]: RenderDoc PSInvocations, or Samples Passed in a device frame (core/device)."""
 from paretogpu.model.frame import Event
+
+MISMATCH_NOTE = ("the RenderDoc calls do not match the Frame Debugger event ({what} {fd} vs {rd}): the pixels and "
+                 "vertices may be another draw's")
 
 
 def resolve(events: list[Event]) -> dict:
-    """{event index: {"pixels", "method", "low", "high", "note"}} for every draw event.
-    low / high bound the fragment count where the method is an estimate (None when unknown)."""
     out = {}
     for ev in events:
         if ev["kind"] != "draw":
             continue
         rd = ev.get("rd") or {}
-        diff, method = ev.get("pixel_count"), ev.get("pixel_method")
-        w, h = ev["rt"]["width"] or 0, ev["rt"]["height"] or 0
-        r = {"pixels": diff, "method": method or "unknown", "low": None, "high": None, "note": None}
-        if rd.get("ps_invocations") is not None:
-            r.update(pixels=rd["ps_invocations"], method="renderdoc")
-        elif method == "renderdoc":
-            pass
-        elif method == "fullscreen":
-            r.update(pixels=w * h, high=w * h)
+        r = {"pixels": rd.get("ps_invocations"), "method": rd.get("pixel_method") or "renderdoc", "note": None}
         if r["pixels"] is None:
             r.update(pixels=0, method="none", note="no pixel count")
+        elif rd.get("count_mismatch"):
+            fd, got = rd["count_mismatch"]
+            r["note"] = MISMATCH_NOTE.format(what=rd.get("mismatch") or "indices", fd=fd, rd=got)
         out[ev["index"]] = r
     return out

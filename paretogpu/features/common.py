@@ -1,4 +1,3 @@
-"""What the commands share: the cores and jobs arguments, and how a command stops."""
 import argparse
 import sys
 
@@ -18,7 +17,7 @@ def positive_int(v):
 
 
 def fail(message, e=None, code=None):
-    """Stop the command: the message for the console, the error code (model/errors.py) for the UI."""
+    """message -> console; error code (model/errors.py) -> the UI's hint."""
     rep.error(code or getattr(e, "code", "error"))
     sys.exit(message)
 
@@ -31,8 +30,7 @@ def parse_cores(args):
 
 
 def default_variants(values):
-    """The UI's values with the project's variants folder when none is given: a variant is compiled once and priced
-    in every frame of the project."""
+    """Defaults variants to the project's shared folder: a variant is compiled once for all its frames."""
     if not values.get("variants"):
         project = values.get("project") or workspace.snapshot_project(values.get("frame"))
         if project:
