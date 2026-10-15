@@ -9,7 +9,7 @@ async function loadReports() {
     <table class="rep"><tr><th></th><th>Когда</th><th>Проект</th><th class="n">Draw</th><th class="n">Кадр, млн циклов</th><th>Пиксели / вершины</th><th></th></tr>` +
     reps.map((x, i) => {
       const t = x.total || 0, f = t ? x.fragment / t : 0, v = t ? x.vertex / t : 0;
-      return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.phone ? " · " + esc(x.phone) : x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></td>
+      return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><div class="repwhen">${x.thumb ? `<img class="repthumb" src="${esc(x.thumb)}" alt="" loading="lazy">` : `<span class="repthumb"></span>`}<div><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.phone ? " · " + esc(x.phone) : x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></div></div></td>
       <td>${esc(x.project || "—")}</td><td class="n">${x.draws}</td>
       <td class="n">${x.total ? `<b>${M(x.total, 1)}</b><div class="muted small">${esc(x.main_core)}</div>${x.stale ? `<div class="small" style="color:var(--medium)">старый расчёт · пересчитайте</div>` : ""}` : `<span class="muted">не посчитан</span>`}</td>
       <td>${x.total ? `<div class="split" style="width:140px"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i></div><span class="muted small">${pct(f)} / ${pct(v)}</span>` : ""}</td>

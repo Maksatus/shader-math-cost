@@ -2,6 +2,12 @@ body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
 main { max-width: 1800px; margin: 0 auto; padding: 0 16px; }
 header { padding-top: 18px; }
+.costhead { display: flex; gap: 16px; align-items: flex-start; }
+.costhead-text { min-width: 0; flex: 1; }
+.frthumb { order: 2; flex: none; height: 96px; max-width: 30vw; object-fit: contain; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); cursor: zoom-in; transition: height .15s; }
+.frthumb.big { height: 360px; max-width: 60vw; cursor: zoom-out; }
+@media (max-width: 700px) { .frthumb { display: none; } }
 h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 16px; margin: 22px 0 6px; }
 h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }

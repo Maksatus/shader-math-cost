@@ -95,10 +95,12 @@ def common(prep, sides, cores, api, apis, ns=NS):
 
 
 def project_variants(project, events, folders, root, compile_missing=True, rep=CONSOLE):
-    """-> ({variant key: [material paths]}, [skipped materials])."""
+    """events: the priced frame's (None for a device frame: its keywords are unknown) -> ({variant key: [material
+    paths]}, [skipped materials])."""
     mats = materials.scan(project)
-    snaps = [events] + workspace.snapshots_of(project, folders)
-    info = plan_.snapshot_info(snaps)
+    snaps = workspace.snapshots_of(project, folders)
+    info = plan_.snapshot_info(snaps, events)
+    snaps = snaps + ([events] if events else [])
     names = plan_.material_shaders(mats)
     editor = None
     if names and compile_missing:

@@ -2,6 +2,7 @@
 reads). A device frame's SPIR-V is measured as it is, never compiled."""
 import hashlib
 import os
+import re
 import shutil
 
 from paretogpu.adapters.unity import variants as unity_variants
@@ -17,6 +18,7 @@ from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
 
 NOT_COMPILED_YET = "not compiled yet (--no-compile)"
+UNNAMED = re.compile(r"^(Graphics Pipeline|Shader Module) \d+$")
 PASSES = "passes/2"
 
 
@@ -41,8 +43,9 @@ def shader_passes(project, shaders, root, memo=None):
 
 def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
     """Matches device draws to project variants by byte-equal SPIR-V (Unity compiles the same code in the editor); ties
-    -> fewest keywords. Depth-only draws match by vertex code alone, shared by several shaders (Unity names the module
-    after the first), so the shader drawing the same mesh elsewhere wins; else unknown. -> number of draws matched."""
+    -> fewest keywords. A named draw takes only its shader's variants; an unnamed one (RenderDoc's "Graphics Pipeline
+    N" / "Shader Module N") the code's shader if only one has it. Depth-only draws match by vertex code alone, shared by several shaders (Unity names the
+    module after the first), so the shader drawing the same mesh elsewhere wins; else unknown. -> draws matched."""
     draws = [ev for ev in events if (ev.get("code") or {}).get("vert") and ev["kind"] == "draw"]
     if not draws:
         return 0
@@ -55,7 +58,7 @@ def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
         v, f = files.get(("vulkan", "vert")), files.get(("vulkan", "frag"))
         if v and f:
             dv = digest(os.path.join(root, v))
-            pairs.setdefault((k.shader, dv, digest(os.path.join(root, f))), []).append((k, {"vert": v, "frag": f}))
+            pairs.setdefault((dv, digest(os.path.join(root, f))), []).append((k, {"vert": v, "frag": f}))
             verts.setdefault(dv, []).append((k, {"vert": v}))
 
     def take(ev, found):
@@ -67,8 +70,10 @@ def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
     for ev in draws:
         code = ev["code"]
         if code.get("frag"):
-            found = pairs.get((ev["shader"], digest(os.path.join(frame_dir, code["vert"])),
-                               digest(os.path.join(frame_dir, code["frag"]))))
+            found = pairs.get((digest(os.path.join(frame_dir, code["vert"])),
+                               digest(os.path.join(frame_dir, code["frag"])))) or []
+            found = ([x for x in found if x[0].shader == ev["shader"]] if not UNNAMED.match(ev["shader"] or "")
+                     else found if len({x[0].shader for x in found}) == 1 else [])
             if found:
                 take(ev, found)
                 color.append(ev)

@@ -64,7 +64,8 @@ def cost_summary(folder):
         except (OSError, ValueError):
             prev = None
     s = frame_cost.summary(c)
-    return {"prev": prev, **{k: s[k] for k in PANEL}}
+    warnings = [messages.text(w) for w in (c.get("profile") or {}).get("warnings") or []]
+    return {"prev": prev, "warnings": warnings, **{k: s[k] for k in PANEL}}
 
 
 _cache = {}
@@ -95,7 +96,10 @@ def snapshots():
                "unity": meta.get("unity"), "api": meta.get("graphics_api"), "play_mode": meta.get("play_mode"),
                "events": len(events), "draws": sum(1 for e in events if e.get("kind") == "draw"),
                "renderdoc": bool(meta.get("renderdoc")), "phone": (meta.get("device") or {}).get("model"),
-               "cost_time": None, "pages": {}}
+               "cost_time": None, "pages": {}, "thumb": None}
+        thumb = os.path.join(d, workspace.THUMB)
+        if os.path.exists(thumb):
+            row["thumb"] = f"{out_url(thumb)}?v={int(os.path.getmtime(thumb))}"
         rs = runs_store.runs(d)
         row["runs"] = [m["id"] for m in rs]
         for m in store_results.of_folder(d):

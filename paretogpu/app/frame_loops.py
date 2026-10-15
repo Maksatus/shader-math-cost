@@ -1,9 +1,7 @@
-"""Trip counts of dynamic loops whose bound is not a shader parameter (cluster-mask scans, ray steps): a few pixels per
-draw debugged in RenderDoc, sampled over its calls weighted by PSInvocations; n = mean over pixels."""
-import json
+"""Trip counts of dynamic loops whose bound is not a shader parameter (cluster-mask scans, ray steps): every call of the
+draw replayed with a fragment shader that writes its loops' trip counts as its colour (rd_loops.py), over all its
+pixels; a device frame is replayed on its device. n = mean over the pixels of the draw's calls."""
 import os
-import random
-from collections import Counter
 
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.core import loops
@@ -11,9 +9,12 @@ from paretogpu.model.variant import PLATFORM, VariantKey
 from paretogpu.store import memo as memo_store
 from paretogpu.views.reporter import CONSOLE
 
-MEMO = "rd_loops/2"
+MEMO = "rd_loops/6"
 CAPTURE = "frame.rdc"
-ACTIONS = "rd_actions.json"
+
+
+class LoopCountError(rdoc.RenderDocError):
+    code = "loops"
 
 
 def _unknown(ev, fn, state):
@@ -25,18 +26,11 @@ def _unknown(ev, fn, state):
     return any(loops.bound_value(b, ev.get("params")) is None for b in bounds)
 
 
-def _split(total, calls, seed=0):
-    """-> [(call, pixels)], deterministic per seed; calls with 0 picks are omitted."""
-    calls = [(eid, ps) for eid, ps in calls if ps]
-    if not calls:
-        return []
-    picks = Counter(random.Random(seed).choices([eid for eid, _ in calls], weights=[ps for _, ps in calls], k=total))
-    return [(eid, picks[eid]) for eid, _ in calls if picks[eid]]
-
-
-def iterations_of(frame_dir, frame, state, api="vulkan", pixels=16, rep=CONSOLE, memo=None):
-    """-> {event index: {"n": [mean per outer loop], "pixels", "calls"}}; {} without a capture or with pixels = 0."""
-    capture = os.path.join(frame_dir, CAPTURE)
+def iterations_of(frame_dir, frame, state, api="vulkan", rep=CONSOLE, memo=None):
+    """-> {event index: {"n": [mean per outer loop], "pixels", "calls"}}. LoopCountError when a draw's loops cannot be
+    counted: its price would rest on a guessed trip count."""
+    device = frame.get("source") == "device"
+    capture = (frame.get("renderdoc") or {}).get("capture") or "" if device else os.path.join(frame_dir, CAPTURE)
     platform = PLATFORM[api]
     want = []
     for ev in frame["events"]:
@@ -45,41 +39,43 @@ def iterations_of(frame_dir, frame, state, api="vulkan", pixels=16, rep=CONSOLE,
         fn = (state["files"].get(VariantKey.of(ev)) or {}).get((platform, "frag"))
         if fn and _unknown(ev, fn, state):
             want.append((ev, fn))
-    if not want or pixels <= 0 or not os.path.exists(capture) or not os.path.exists(os.path.join(frame_dir, ACTIONS)):
+    if not want:
         rep.skip("rd_loops")
         return {}
+    if not os.path.exists(capture):
+        raise LoopCountError(f"{len(want)} draws have loops of unknown trip count and the capture {capture} is missing")
     rep.phase("rd_loops")
-    with open(os.path.join(frame_dir, ACTIONS), encoding="utf-8") as f:
-        ps = {a["event"]: a.get("ps_invocations") or 0 for a in json.load(f)["actions"]}
     memo = memo or memo_store.default()
     sig = rdoc.signature(capture)
-    plan = {ev["index"]: _split(pixels, [(e, ps.get(e, 0)) for e in ev["rd"]["events"]], ev["index"]) for ev, _ in want}
-    asked = {(eid, n) for calls in plan.values() for eid, n in calls}
-    got = {k: memo.get(MEMO, f"{sig}|{k[0]}|{k[1]}") for k in asked}
-    missing = sorted(k for k, v in got.items() if v is None)
+    keys = {ev["index"]: ",".join(map(str, sorted(ev["rd"]["events"]))) for ev, _ in want}
+    got = {k: memo.get(MEMO, f"{sig}|{k}") for k in keys.values()}
+    missing = [k for k, v in got.items() if v is None]
     if missing:
-        rep.log(f"counting the loop iterations of {len(want)} draws in RenderDoc: {sum(n for _, n in missing)} pixels "
-                f"of {len(missing)} calls ...")
-        res = rdoc.loop_iterations(capture, [{"eid": e, "pixels": n} for e, n in missing],
-                                   os.path.join(frame_dir, "rd_loops.json"))
+        rep.log(f"counting the loop iterations of {len(missing)} draws in RenderDoc"
+                f"{' on the device' if device else ''} ...")
+        res = rdoc.loop_iterations(capture, [{"key": k, "calls": [int(e) for e in k.split(",")]} for k in missing],
+                                   os.path.join(frame_dir, "rd_loops.json"),
+                                   serial=(frame.get("device") or {}).get("serial") if device else None)
         for k in missing:
-            got[k] = res.get(k[0]) or {"error": "not counted"}
-        memo.put_many(MEMO, [(f"{sig}|{k[0]}|{k[1]}", got[k]) for k in missing
-                             if "error" not in got[k] and (got[k].get("samples") or not got[k].get("covered"))])
-    out = {}
+            got[k] = res.get(k) or {"error": "not counted"}
+        if res.get("_seconds"):
+            rep.log("  seconds: " + ", ".join(f"{k} {v:g}" for k, v in sorted(res["_seconds"].items())))
+        memo.put_many(MEMO, [(f"{sig}|{k}", got[k]) for k in missing if "error" not in got[k]])
+    out, failed = {}, []
     for ev, fn in want:
         priced = next(iter(state["loops"][fn].values()))["loops"]
-        size, nested = len(priced), [lp.get("word") is not None for lp in priced]
-        acc, n_px, used = [0.0] * size, 0, 0
-        for eid, n in plan[ev["index"]]:
-            r = got.get((eid, n)) or {}
-            s = r.get("samples") or []
-            if not s or len(r.get("loops") or []) != size or r.get("nested", nested) != nested:
-                continue  # outer loops differ from the priced file's: not this variant
-            for k in range(size):
-                acc[k] += sum(x[k] for x in s)
-            n_px, used = n_px + len(s), used + 1
-        if n_px:
-            out[ev["index"]] = {"n": [round(a / n_px, 3) for a in acc], "pixels": n_px, "calls": used}
-    rep.log(f"  loop iterations of {len(out)} of {len(want)} draws from the capture")
+        nested = [lp.get("word") is not None for lp in priced]
+        r = got[keys[ev["index"]]]
+        if "error" in r:
+            failed.append(f"event {ev['index']}: {r['error']}")
+        elif r["loops"] != len(priced) or r["nested"] != nested:
+            failed.append(f"event {ev['index']}: its shader has {r['loops']} outer loops, the priced variant "
+                          f"{len(priced)}")
+        elif r["pixels"]:
+            out[ev["index"]] = {"n": [round(m, 3) for m in r["means"]], "pixels": r["pixels"], "lost": r["lost"],
+                                "calls": len(ev["rd"]["events"])}
+    if failed:
+        raise LoopCountError(f"loop trip counts of {len(failed)} draws not counted: " + "; ".join(failed[:5]))
+    rep.log(f"  loop iterations of {len(out)} of {len(want)} draws from the capture"
+            + (f" ({len(want) - len(out)} wrote no pixel)" if len(out) < len(want) else ""))
     return out

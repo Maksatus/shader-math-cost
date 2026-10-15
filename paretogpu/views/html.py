@@ -1,5 +1,6 @@
 """Self-contained result pages. A new result kind = one static/result/<kind>.js setting VIEWS[kind]
 (+ optional <kind>.css); shared/*.js are also served to the UI window as /shared/shared/..."""
+import base64
 import html
 import json
 import os
@@ -44,10 +45,16 @@ def render_result(doc, title="Сравнение кадров"):
             .replace("<title>Сравнение</title>", f"<title>{html.escape(title)}</title>"))
 
 
-def write_frame_report(cost, path, title):
-    """frame_cost.json has no "kind" field; the page needs "cost"."""
+def write_frame_report(cost, path, title, thumb_path=None):
+    """frame_cost.json has no "kind" field; the page needs "cost". thumb_path: the snapshot's frame preview, inlined."""
+    thumb = None
+    try:
+        with open(thumb_path or "", "rb") as f:
+            thumb = "data:image/png;base64," + base64.b64encode(f.read()).decode()
+    except OSError:
+        pass
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(render_result({"kind": "cost", **cost}, title))
+        f.write(render_result({"kind": "cost", **cost, "thumb": thumb}, title))
 
 
 def write_result(doc, out_dir, name, title="Сравнение кадров"):

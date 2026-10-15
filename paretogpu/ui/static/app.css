@@ -119,6 +119,9 @@ table.rep { width: 100%; border-collapse: collapse; }
 table.rep th, table.rep td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 table.rep th { font-size: 12px; color: var(--muted); font-weight: 600; }
 table.rep td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.repwhen { display: flex; gap: 10px; align-items: flex-start; }
+.repthumb { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line);
+  flex: none; background: var(--line); }
 .viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .cmpbar select { width: auto; min-width: 260px; max-width: 420px; }
 .cmpbar .ab { font-weight: 800; color: var(--muted); }

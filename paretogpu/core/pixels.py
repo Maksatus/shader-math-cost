@@ -1,4 +1,5 @@
-"""Draw pixels = rd["ps_invocations"]: RenderDoc PSInvocations, or Samples Passed in a device frame (core/device)."""
+"""Draw pixels = fragment shader threads: rd["threads"] from the draw's quads (app/frame_quads, PC and device alike);
+without them rd["ps_invocations"]: RenderDoc PSInvocations, or Samples Passed in a device frame (core/device)."""
 from paretogpu.model.frame import Event
 
 MISMATCH_NOTE = ("the RenderDoc calls do not match the Frame Debugger event ({what} {fd} vs {rd}): the pixels and "
@@ -14,6 +15,11 @@ def resolve(events: list[Event]) -> dict:
         r = {"pixels": rd.get("ps_invocations"), "method": rd.get("pixel_method") or "renderdoc", "note": None}
         if r["pixels"] is None:
             r.update(pixels=0, method="none", note="no pixel count")
+        elif rd.get("threads") is not None:
+            r.update(pixels=rd["threads"], method="quads")
+        elif ev.get("code") is not None and "frag" not in ev["code"]:
+            # device Samples Passed of a depth-only draw; the PC's PSInvocations are 0 there
+            r.update(pixels=0, note="depth only: no fragment shader")
         elif rd.get("count_mismatch"):
             fd, got = rd["count_mismatch"]
             r["note"] = MISMATCH_NOTE.format(what=rd.get("mismatch") or "indices", fd=fd, rd=got)

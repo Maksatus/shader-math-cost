@@ -2,6 +2,7 @@ import os
 
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import cost
+from paretogpu.app.frame_loops import LoopCountError
 from paretogpu.app import results
 from paretogpu.core import frame_cost
 from paretogpu.core import profile
@@ -21,16 +22,19 @@ def run_command(args):
         fail(f"--materials needs the Unity project (--project), got {project}", code="input")
     try:
         c, state = cost.run(args.frame, root, cores, args.api, project, args.materials,
-                            compile_missing=not args.no_compile, loop_pixels=args.loop_pixels)
+                            compile_missing=not args.no_compile)
     except VariantsError as e:
         fail(f"variants failed: {e}", e)
+    except LoopCountError as e:
+        fail(f"loop trip counts failed: {e}", e)
     except ValueError as e:
         fail(str(e), e, "input")
     out = args.out or args.frame
     os.makedirs(out, exist_ok=True)
     tables.write_frame_cost(c, out)
     run_id = cost_runs.archive(c, out)
-    html.write_frame_report(c, os.path.join(out, RESULT.page), RESULT.title(c))
+    html.write_frame_report(c, os.path.join(out, RESULT.page), RESULT.title(c),
+                           os.path.join(args.frame, workspace.THUMB))
     results.publish(RESULT, c, out, os.path.basename(os.path.abspath(args.frame)))
     print_summary(c, len(state["keys"]), args.api)
     for name in (RESULT.page, workspace.COST_CSV, RESULT.data, f"{cost_runs.COSTS}/{run_id}.json"):
@@ -116,13 +120,10 @@ COST = Command(
      Arg("--materials", action="store_true", label="Все материалы проекта",
          help="also price the shader variants of every material of the project (the \"project shaders\" tab): passes "
               "and global keywords from the project's snapshots, other shaders' passes from the open editor"),
-     Arg("--loop-pixels", type=int, default=16, label="Пикселей на draw для подсчёта циклов",
-         help="pixels of every draw with a loop of unknown trip count (lights / probes per pixel) debugged in the "
-              "snapshot's RenderDoc capture to count how many times its loops ran (0: none; default %(default)s)"),
      Arg("--out", help="output folder (default: the snapshot folder)", label="Папка результата")],
     run_command, title="Цена кадра",
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
-                                                                         "bounds", "rd_loops", "rd_memory",
+                                                                         "bounds", "rd_loops", "rd_geometry", "rd_memory",
                                                                          "report"],
     report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page),
     ui_values=default_variants, result=RESULT)

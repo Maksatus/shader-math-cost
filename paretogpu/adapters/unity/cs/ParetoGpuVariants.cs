@@ -1,9 +1,11 @@
 // Exact shader variants for malioc. Run: job "variants", config = parallel arrays, one entry per variant, id = index
 // (JsonUtility in a run_script assembly reads arrays of strings/numbers, not of this script's classes):
 //   {"shaders", "subshaders", "pass_indices", "passes", "keywords": space separated, "platforms": ["gles3", "vulkan"]}
-// Writes <out>/<id>_<platform>_<vert|frag>.bin as it goes (gles3: GLSL text, vulkan: SPIR-V; CompileVariant(...,
-// forExternalTool: true) for Android), progress "variants i/n"; answers {"unity", "variants": [{"id", "files",
-// "fingerprint", "errors"}]}. Compute kernels (subshader -1) are refused: FindKernel / HasKernel /
+// Writes <out>/<id>_gles3_<vert|frag>.bin as it goes (GLSL, CompileVariant(..., forExternalTool: true) for Android);
+// vulkan: the shader's "Compile and show code" text (ShaderUtil.OpenCompiledShader, the build's compiler and variant
+// set) once per shader as <out>/vulkan_<n>.txt, files {"platform", "stage", "text"} (adapters/unity/compiled_text.py
+// assembles them; CompileVariant fails for Vulkan in 6.4 on Forward+, SSAO, URP post). Progress "variants i/n";
+// answers {"unity", "variants": [{"id", "files", "fingerprint", "errors"}]}. Compute kernels (subshader -1) are refused: FindKernel / HasKernel /
 // ShaderUtil.CompileComputeShaderVariant crashed the 6000.3.18f1 editor from here.
 // Fingerprints: {"shaders"} -> {"unity", "shaders": {name: fingerprint}}, nothing compiled; a change means recompile.
 
@@ -52,6 +54,7 @@ public static class ParetoGpuVariants
     {
         var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         var byName = new Dictionary<string, Shader>();
+        var texts = new Dictionary<string, string>();
         var lines = new List<string>();
         var variants = Enumerable.Range(0, cfg.shaders.Length).Select(i => new Variant
         {
@@ -86,6 +89,15 @@ public static class ParetoGpuVariants
                     if (!Platforms.TryGetValue(plat, out var sp))
                     {
                         errors.Add($"unknown platform {plat}");
+                        continue;
+                    }
+                    if (plat == "vulkan")
+                    {
+                        if (!texts.TryGetValue(v.shader, out var text))
+                            texts[v.shader] = text = CompiledText(shader, texts.Count);
+                        foreach (var (type, ext) in Stages)
+                            if (pass.HasShaderStage(type))
+                                files.Add($"{{\"platform\": \"vulkan\", \"stage\": {Str(ext)}, \"text\": {Str(text)}}}");
                         continue;
                     }
                     foreach (var (type, ext) in Stages)
@@ -202,6 +214,25 @@ public static class ParetoGpuVariants
                                  string.Join(",\n ", items) + "}}\n");
     }
 
+    // "Compile and show code" for Vulkan, variants of the build only (as the inspector's default) -> file in the job folder
+    static string CompiledText(Shader shader, int n)
+    {
+        var temp = Path.GetFullPath("Temp");
+        foreach (var f in Directory.GetFiles(temp, "Compiled-*.shader"))
+            File.Delete(f);
+        var open = typeof(ShaderUtil).GetMethod("OpenCompiledShader", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
+                   ?? throw new Exception("ShaderUtil.OpenCompiledShader is missing in this Unity");
+        open.Invoke(null, new object[] { shader, 3, 1 << (int)ShaderCompilerPlatform.Vulkan, false, false, true });
+        var made = Directory.GetFiles(temp, "Compiled-*.shader").FirstOrDefault()
+                   ?? throw new Exception("Compile and show code wrote no file");
+        var name = $"vulkan_{n}.txt";
+        File.Copy(made, Path.Combine(ParetoGpuJob.Folder, name), true);
+        File.Delete(made);
+        return name;
+    }
+
+    const string CompileMethod = "vulkan-compiled-text/2";  // part of the fingerprint: a new method recompiles all
+
     // Unity version, Android platform defines, color space, and for an asset its dependency hash (covers includes,
     // subgraphs); built-in shaders change only with Unity.
     static string Fingerprint(Shader shader)
@@ -210,7 +241,7 @@ public static class ParetoGpuVariants
         var asset = string.IsNullOrEmpty(path) || path.StartsWith("Resources/") || path.StartsWith("Library/")
             ? "builtin"
             : path + "#" + AssetDatabase.GetAssetDependencyHash(path);
-        return string.Join("|", Application.unityVersion, PlayerSettings.colorSpace.ToString(),
+        return string.Join("|", CompileMethod, Application.unityVersion, PlayerSettings.colorSpace.ToString(),
                            PlatformDefines(ShaderCompilerPlatform.GLES3x), PlatformDefines(ShaderCompilerPlatform.Vulkan), asset);
     }
 

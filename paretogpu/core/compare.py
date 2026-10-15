@@ -2,6 +2,8 @@
 Per variant and stage (w = pixels / vertices / threads, p = cycles / w, r = reference price with every loop once):
   price = (rB - rA) * (wA + wB) / 2           code change at fixed trip counts
   loops = (pB - pA) * (wA + wB) / 2 - price   dynamic loop trip counts changed
+  (trip counts equal on both sides: price = (pB - pA) * (wA + wB) / 2, loops = 0; r would misplace an edit of a loop
+  body run n != 1 times)
   work  = (wB - wA) * (pA + pB) / 2           work changed (scene, camera, LOD)
 price + loops + work = B - A exactly; a variant on one side only is `mix`. Warning texts: views/messages.py.
 """
@@ -52,7 +54,7 @@ def _side(c, core):
             v = variants[vk] = {"variant": vk, "shader": e.get("shader") or vk, "pass": e.get("pass"),
                                 "keywords": e.get("keywords") or [], "kind": e.get("kind"), "events": [],
                                 "work": Counter(), "cost": Counter(), "ref": Counter(), "total": 0.0,
-                                "flags": set(),
+                                "flags": set(), "trips": Counter(),
                                 "stats": {k: x.get(k) for k in ("px_price", "vtx_price", "cs_price", "px_regs",
                                                                  "vtx_regs", "px_fp16", "px_bound", "vtx_bound",
                                                                  "cs_bound", "px_path", "px_ref", "vtx_ref",
@@ -66,6 +68,7 @@ def _side(c, core):
             v["ref"][stage] += ref * (e.get(work) or 0)
         v["total"] += x.get("total") or 0.0
         v["flags"] |= set(x.get("flags") or [])
+        v["trips"][_trips(e)] += 1
         key = (e.get("object"), e.get("stage"), e.get("rt"))
         seen[(vk,) + key] += 1
         v["events"].append({"key": key + (seen[(vk,) + key],), "index": e["index"], "object": e.get("object"),
@@ -74,6 +77,11 @@ def _side(c, core):
                             "total": x.get("total") or 0.0})
         stages[e.get("stage") or "other"] += x.get("total") or 0.0
     return variants, stages, unpriced - set(variants)
+
+
+def _trips(e):
+    lp = e.get("loop") or {}
+    return tuple(x.get("n") for x in lp["loops"]) if lp.get("loops") else lp.get("n")
 
 
 def _price(v, stage, field):
@@ -113,12 +121,13 @@ def _variant_row(va, vb):
            "mix": 0.0, "stages": {}}
     row["delta"] = row["b"] - row["a"]
     if va and vb:
+        same_trips = va["trips"] == vb["trips"] and None not in va["trips"]
         for stage, _, field in STAGES:
             wa, wb = va["work"][stage], vb["work"][stage]
             if not (wa or wb or va["cost"][stage] or vb["cost"][stage]):
                 continue
             pa, pb = _price(va, stage, field), _price(vb, stage, field)
-            ra, rb = _ref(va, stage, field), _ref(vb, stage, field)
+            ra, rb = (pa, pb) if same_trips else (_ref(va, stage, field), _ref(vb, stage, field))
             price, work = (rb - ra) * (wa + wb) / 2, (wb - wa) * (pa + pb) / 2
             looped = (pb - pa) * (wa + wb) / 2 - price
             row["price"] += price

@@ -7,6 +7,7 @@ import time
 from paretogpu.adapters.renderdoc import RenderDocError
 from paretogpu.app import code_version
 from paretogpu.app import frame_loops
+from paretogpu.app import frame_quads
 from paretogpu.app import frame_memory
 from paretogpu.app import materials as project_materials
 from paretogpu.app import variants
@@ -21,7 +22,7 @@ from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
 
-def run(frame_dir, root, cores, api="vulkan", project=None, materials=False, compile_missing=True, loop_pixels=16,
+def run(frame_dir, root, cores, api="vulkan", project=None, materials=False, compile_missing=True,
         rep=CONSOLE) -> tuple[CostRun, VariantState]:
     with open(os.path.join(frame_dir, workspace.SNAPSHOT_FILE), encoding="utf-8") as f:
         frame = json.load(f)
@@ -31,20 +32,19 @@ def run(frame_dir, root, cores, api="vulkan", project=None, materials=False, com
     mat_keys = mat_skipped = None
     if materials:
         rep.phase("materials")
+        own = events if frame.get("source") != "device" else None
         mat_keys, mat_skipped = project_materials.project_variants(
-            project, events, [os.path.dirname(os.path.abspath(frame_dir)), workspace.OUT], root,
+            project, own, [os.path.dirname(os.path.abspath(frame_dir)), workspace.OUT], root,
             compile_missing=compile_missing, rep=rep)
-    variants.identify(events, frame_dir, root, rep)
+    if variants.identify(events, frame_dir, root, rep):
+        events = assign_stages(events)  # the identified passes tell the stages
     state = variants.run(events + ([k.as_event() for k in mat_keys] if mat_keys else []), project, root, cores,
                          [PLATFORM[api]], compile_missing=compile_missing, rep=rep,
                          captured=variants.place_captured(events, frame_dir, root))
     state["loops"] = variants.loops_of(state, root, cores, rep=rep)
     state["loop_bounds"] = variants.bounds_of(state, project, root, compile_missing, rep)
-    try:
-        state["loop_iters"] = frame_loops.iterations_of(frame_dir, frame, state, api, loop_pixels, rep)
-    except RenderDocError as e:
-        rep.log(f"  loop iterations not counted: {e}")
-        state["loop_iters"] = {}
+    state["loop_iters"] = frame_loops.iterations_of(frame_dir, frame, state, api, rep)
+    quad_warnings = frame_quads.threads_of(frame_dir, frame, events, rep)
     try:
         capture = frame_memory.read(frame_dir, rep)
     except RenderDocError as e:
@@ -57,6 +57,7 @@ def run(frame_dir, root, cores, api="vulkan", project=None, materials=False, com
     prof = profile.describe(frame, profile.frame_size(c["events"]))
     c["profile"] = {**prof, "warnings": profile.warnings(prof),
                     "render": profile.render(c["events"], c.get("memory"), frame.get("screen"))}
+    c["profile"]["warnings"] += quad_warnings
     astray = sum(1 for e in events if (e.get("rd") or {}).get("count_mismatch"))
     if astray:
         c["profile"]["warnings"].append({"code": "rd_count_mismatch", "n": astray})

@@ -14,11 +14,12 @@ def run_command(args):
     os.makedirs(args.frame, exist_ok=True)
     try:
         path = device_app.capture(args.frame, args.app, args.serial, args.wait)
+        print(f"-> {os.path.abspath(path)}")
+        project = args.project or workspace.snapshot_project(args.frame)
+        snap = device_app.build(args.frame, path, project)
     except RenderDocError as e:
         fail(f"device frame failed: {e}", e)
-    print(f"-> {os.path.abspath(path)}")
-    project = args.project or workspace.snapshot_project(args.frame)
-    print_snapshot(device_app.build(args.frame, path, project), args.frame)
+    print_snapshot(snap, args.frame)
     print(f"price it with `cost {args.frame}`")
     return 0
 

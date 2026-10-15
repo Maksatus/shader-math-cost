@@ -229,6 +229,11 @@ class CapturedTest(unittest.TestCase):
         return {"index": 0, "kind": "draw", "shader": shader, "pass": None, "subshader": 0, "pass_index": 0,
                 "keywords": [], "meshes": [mesh], "code": code}
 
+    def test_unnamed_module_takes_the_code_s_shader(self):
+        evs = [self.ev("f.frag.spv", "Graphics Pipeline 7")]
+        self.assertEqual(variants.identify(evs, self.frame, self.root, QUIET), 1)
+        self.assertEqual(VariantKey.of(evs[0]), self.key)
+
     def test_identify_and_place(self):
         evs = [self.ev("f.frag.spv"), self.ev("g.frag.spv"), self.ev("f.frag.spv", "Other")]
         self.assertEqual(variants.identify(evs, self.frame, self.root, QUIET), 1)

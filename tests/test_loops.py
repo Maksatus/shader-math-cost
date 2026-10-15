@@ -57,20 +57,6 @@ class GlslTest(unittest.TestCase):
         self.assertEqual(loops.cycles_at(p, 0.5)["ls"], 10.0 - 0.5 * 6.0)  # between 0 and 1 repeats
         self.assertEqual(loops.cycles_at(p, 1.5)["ls"], 10.0 + 0.5 * 5.0)
 
-    def test_pixels_split_over_calls(self):
-        from paretogpu.app.frame_loops import _split
-        s = _split(16, [(1, 1225346), (2, 48044), (3, 0)], seed=7)
-        self.assertEqual((sum(n for _, n in s), 3 in dict(s)), (16, False))
-        self.assertEqual(s, _split(16, [(1, 1225346), (2, 48044), (3, 0)], seed=7))
-        batch = [(i, 1000 if i < 10 else 100) for i in range(200)]
-        got = {}
-        for seed in range(200):
-            for eid, n in _split(16, batch, seed):
-                got[eid] = got.get(eid, 0) + n
-        big = sum(n for eid, n in got.items() if eid < 10) / (16 * 200)
-        self.assertAlmostEqual(big, 10000 / 29000, delta=0.03)
-        self.assertEqual(_split(16, [(1, 0)]), [])
-
     def test_every_loop_has_its_n(self):
         p = {"base": {"ls": 10.0, "fma": 5.0},
              "loops": [{"zero": {"ls": 6.0, "fma": 4.0}, "two": {"ls": 13.0, "fma": 6.0}, "word": None},
@@ -145,44 +131,41 @@ void main(){
         self.assertIsNone(loops.force_glsl("void main(){ for(int i = 0 ; i<4 ; i++){ x += 1.0; } }", 2))
 
 
-def _dxbc_parser():
-    """The DXBC parsing functions of rd_loops.py (the script itself runs only inside qrenderdoc)."""
-    import ast
-    import re
-    import paretogpu
-    path = os.path.join(os.path.dirname(paretogpu.__file__), "adapters", "renderdoc", "rd_loops.py")
-    with open(path, encoding="utf-8") as f:
-        tree = ast.parse(f.read())
-    keep = [n for n in tree.body if isinstance(n, ast.FunctionDef)
-            and n.name in ("_instructions", "_reg", "_constant", "outer_loops")]
-    ns = {"re": re}
-    exec(compile(ast.Module(body=keep, type_ignores=[]), path, "exec"), ns)
-    return ns
+class LoopCounterTest(unittest.TestCase):
+    """rd_loop_counter: the fragment shader rd_loops.py swaps in to read trip counts as colour."""
 
+    def counter(self):
+        import importlib.util
+        import paretogpu
+        path = os.path.join(os.path.dirname(paretogpu.__file__), "adapters", "renderdoc", "rd_loop_counter.py")
+        spec = importlib.util.spec_from_file_location("rd_loop_counter", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
-class DxbcTest(unittest.TestCase):
-    def test_outer_dynamic_loops(self):
-        dis = """   0: mov r0.x, l(0)
-   1: loop
-   2:   uge r0.y, r0.x, l(4)
-   3:   breakc_nz r0.y
-   4:   mov r1.x, cb0[3].w
-   5:   loop
-   6:     ige r1.y, r1.z, r1.x
-   7:     breakc_nz r1.y
-   8:     continuec_nz r2.x
-   9:     iadd r1.z, r1.z, l(1)
-  10:   endloop
-  11:   iadd r0.x, r0.x, l(1)
-  12: endloop
-  13: loop
-  14:   breakc_z r3.x
-  15:   loop
-  16:     breakc_z r4.x
-  17:   endloop
-  18: endloop"""
-        loops_, nested, continues = _dxbc_parser()["outer_loops"](dis)
-        self.assertEqual((loops_, nested, continues), ([(5, 10), (13, 18)], [False, True], [[8], []]))
+    def test_counting_module_is_valid(self):
+        lc = self.counter()
+        data = read(LIGHTS_SPV, True)
+        conts, nested = lc.outer_loops(data)
+        self.assertEqual(len(conts), len(loops.force_spirv(data, 2, describe=True)))
+        for part in (conts[:2], conts[2:]):
+            if not part:
+                continue
+            out = lc.counting(data, part, 1.0)
+            self.assertGreater(struct.unpack_from("<I", out, 12)[0], struct.unpack_from("<I", data, 12)[0])
+            val = spirv_val()
+            if val:
+                fd, path = tempfile.mkstemp(suffix=".spv")
+                os.write(fd, out)
+                os.close(fd)
+                try:
+                    r = subprocess.run([val, path], capture_output=True, text=True)
+                finally:
+                    os.remove(path)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_no_dynamic_loop(self):
+        self.assertEqual(self.counter().outer_loops(read(STATIC_SPV, True)), ([], []))
 
 
 class SpirvTest(unittest.TestCase):

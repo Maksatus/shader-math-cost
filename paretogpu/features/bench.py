@@ -2,7 +2,7 @@ import csv
 import os
 
 from paretogpu.app import bench
-from paretogpu.features.common import positive_int
+from paretogpu.features.common import fail, positive_int
 from paretogpu.features.spec import Arg, Command
 from paretogpu.store import workspace
 from paretogpu.views import site
@@ -14,9 +14,19 @@ ERRORS = os.path.join(workspace.OUT, "_bench", "errors.txt")
 
 def run_command(args):
     if not args.site_only:
-        rows, errors, warnings = bench.run(args.gpus, args.jobs, rep)
+        try:
+            rows, errors, warnings = bench.run(args.gpus, args.jobs, rep)
+        except ValueError as e:
+            fail(str(e), code="input")
+        if not rows:
+            fail("no measurement succeeded: the CSV is left as it was", code="input")
         os.makedirs(args.out, exist_ok=True)
         out = os.path.join(args.out, "mali_math_cost.csv")
+        if args.gpus and os.path.exists(out):
+            measured = {r["gpu"] for r in rows}
+            with open(out, newline="", encoding="utf-8") as f:
+                kept = [r for r in csv.DictReader(f) if r["gpu"] not in measured]
+            rows = kept + rows
         with open(out, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0]))
             w.writeheader()

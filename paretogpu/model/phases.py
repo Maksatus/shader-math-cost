@@ -11,6 +11,7 @@ PHASES = {
     "loops": ("Циклы в шейдерах (malioc)", "замеров"),
     "bounds": ("Границы циклов (GLES)", None),
     "rd_loops": ("Повторы циклов (RenderDoc)", None),
+    "rd_geometry": ("Потоки шейдера по геометрии (RenderDoc)", None),
     "rd_memory": ("Память по проходам (RenderDoc)", None),
     "rd_start": ("Запуск игры на телефоне", None),
     "rd_wait": ("Игра на телефоне: ждёт «Снять кадр»", None),

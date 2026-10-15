@@ -2,12 +2,15 @@
 refused: no game code runs in it)."""
 import os
 import shutil
+import struct
+import subprocess
 
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.adapters.unity import frame as unity_frame
 from paretogpu.adapters.unity.frame import SnapshotError
 from paretogpu.core.events import match, normalize, pixel_count
 from paretogpu.model.frame import Snapshot
+from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
 
@@ -53,6 +56,14 @@ def renderdoc_pixels(project, out, rd, events, rep=CONSOLE):
             "counters": acts["counters"], "attempts": attempt}
 
 
+def save_thumbnail(capture_path, folder, rotate=False, rep=CONSOLE):
+    """Mini preview of the measured frame for the report and the snapshot list; a failure only logs."""
+    try:
+        rdoc.thumbnail(capture_path, os.path.join(folder, workspace.THUMB), rotate=rotate)
+    except (rdoc.RenderDocError, OSError, ValueError, struct.error, subprocess.TimeoutExpired) as e:
+        rep.log(f"  no frame preview: {str(e).strip().splitlines()[-1] if str(e).strip() else e}")
+
+
 def run(project, out, timeout=1800, max_events=0, rep=CONSOLE, renderdoc=True) -> Snapshot:
     """renderdoc=False only for tests: the events then have no pixels."""
     out = os.path.abspath(out)
@@ -70,6 +81,7 @@ def run(project, out, timeout=1800, max_events=0, rep=CONSOLE, renderdoc=True) -
         if rd:
             # Play Mode stays paused until the capture is checked, so a retake is of the same frame
             meta["renderdoc"] = renderdoc_pixels(project, out, rd, events, rep)
+            save_thumbnail(meta["renderdoc"]["capture"], out, rep=rep)
     finally:
         if rd:
             rdoc.resume(project, was_paused)

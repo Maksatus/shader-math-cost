@@ -198,7 +198,11 @@ def run(gpu_names="", jobs=None, rep=CONSOLE):
     malioc_version = ".".join(mali.version(MALIOC_NEW).split(".")[:2])  # the CSV column: "2026.5"
     gpus = [(MALIOC_NEW, n, a, apis) for n, a, apis in list_gpus(MALIOC_NEW)]
     if gpu_names:
-        want = set(gpu_names.split(","))
+        want = {x.strip() for x in gpu_names.split(",") if x.strip()}
+        unknown = want - {g[1] for g in gpus}
+        if unknown:
+            raise ValueError(f"unknown GPUs: {', '.join(sorted(unknown))} "
+                             f"(malioc knows: {', '.join(g[1] for g in gpus)})")
         gpus = [g for g in gpus if g[1] in want]
     rep.log(f"{len(gpus)} GPUs: " + ", ".join(g[1] for g in gpus))
     plan = _plan(gpus)

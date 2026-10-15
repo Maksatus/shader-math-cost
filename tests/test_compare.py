@@ -54,6 +54,19 @@ class Compare(unittest.TestCase):
         self.assertAlmostEqual(x["loops"], (29.0 - 20.0) * 1250 + 1250)
         self.assertAlmostEqual(x["price"] + x["loops"] + x["work"] + x["mix"], x["delta"])
 
+    def test_loop_body_edit_at_same_trip_counts_is_price(self):
+        def lit(price, ref, n):
+            e = event(0, "Lit", 1000, price)
+            e["cost"][CORE].update({"px_ref": ref, "vtx_ref": 0.0, "px_path": f"loop n={n}"})
+            e["loop"] = {"n": 2, "loops": [{"n": n, "from": "uniform"}]}
+            return e
+        x = compare.compare(run([lit(10.0, 14.0, 0)]), run([lit(10.0, 13.0, 0)], frame_dir="G"))["by_core"][CORE]
+        self.assertAlmostEqual(x["price"], 0.0)
+        self.assertAlmostEqual(x["loops"], 0.0)
+        x = compare.compare(run([lit(28.0, 14.0, 3)]), run([lit(25.0, 13.0, 3)], frame_dir="G"))["by_core"][CORE]
+        self.assertAlmostEqual(x["price"], -3000.0)
+        self.assertAlmostEqual(x["loops"], 0.0)
+
     def test_unpriced_on_one_side_is_not_new(self):
         unpriced = event(1, "Water", 100, 5.0)
         unpriced["cost"] = {}

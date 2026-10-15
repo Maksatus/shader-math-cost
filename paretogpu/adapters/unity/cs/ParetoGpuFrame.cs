@@ -162,6 +162,7 @@ public static class ParetoGpuFrame
           .Append(", \"graphics_api\": ").Append(Str(SystemInfo.graphicsDeviceType.ToString()))
           .Append(", \"quality\": ").Append(Str(QualitySettings.names[QualitySettings.GetQualityLevel()]))
           .Append(", \"quality_level\": ").Append(QualitySettings.GetQualityLevel())
+          .Append(", \"android_quality\": [").Append(string.Join(", ", QualitySettings.GetActiveQualityLevelsForPlatform("Android").Select(i => Str(QualitySettings.names[i])))).Append("]")
           .Append(", \"build_target\": ").Append(Str(EditorUserBuildSettings.activeBuildTarget.ToString()))
           .Append(", \"screen\": ").Append(GameViewSize())
           .Append(",\n \"pipeline\": ").Append(PipelineJson())

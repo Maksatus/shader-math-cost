@@ -1,10 +1,13 @@
 function renderCost() {
-  $("#app").innerHTML = `<header>
+  $("#app").innerHTML = `<header class="costhead">
+    ${D.thumb ? `<img class="frthumb" id="frThumb" src="${D.thumb}" alt="Замеренный кадр" title="Замеренный кадр (клик — крупнее)">` : ""}
+    <div class="costhead-text">
     <h1 id="title"></h1>
     <p class="sub" id="meta"></p>
     <p class="sub" id="profile"></p>
     <div class="pwarn hide" id="profileWarn"></div>
     <p class="sub"><a class="costhelp" id="costLink" target="_blank">Как читать отчёт — справочник ↗</a></p>
+    </div>
   </header>
   <div class="tabs" id="tabs"></div>
   <div class="controls">
@@ -40,6 +43,8 @@ function renderCost() {
     `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
   const objName = s => String(s || "").replace(/^\(RP \d+:\d+\) /, "");
 
+  const thumb = document.getElementById("frThumb");
+  if (thumb) thumb.onclick = () => thumb.classList.toggle("big");
   const f = D.frame, cov = D.coverage;
   document.title = document.getElementById("title").textContent =
     `Стоимость кадра: ${f.project ? f.project.split(/[\\/]/).pop() : ""} ${((D.profile || {}).frame_size || []).join("×")}`.trim();

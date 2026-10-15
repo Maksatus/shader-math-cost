@@ -49,6 +49,7 @@ function resultHtml(j) {
     <div class="legend"><span><i style="background:var(--part-px)"></i>пиксели ${pct(f)}</span><span><i style="background:var(--part-vx)"></i>вершины ${pct(v)}</span><span><i style="background:var(--part-cs)"></i>compute ${pct(c)}</span></div>
     <div class="muted small" style="margin-top:12px">Самые дорогие шейдеры (доля кадра)</div>
     <table class="top5">${top}</table>
+    ${(s.warnings || []).map(w => `<div class="warnline">⚠ ${esc(w)}</div>`).join("")}
     ${s.unpriced_draws ? `<div class="warnline">⚠ ${s.unpriced_draws} draw без цены: шейдер не скомпилировался или замер упал. Их стоимость не входит в итог.</div>` : ""}
     ${s.unpriced_compute ? `<div class="muted small" style="margin-top:6px">Compute-шейдеры без цены (${s.unpriced_compute}): их компиляция из скрипта роняет Unity 6000.3.</div>` : ""}
     ${pixelsLine(s)}
@@ -66,16 +67,17 @@ function prevHtml(p) {
   return `<div class="prev"><div class="muted small">К прошлому расчёту этого снимка (${when(p.a_time)}), ${esc(p.core)}</div>
     <div class="d ${c}">${sg(p.delta)} млн${pc}</div>
     <div class="small">цена шейдеров <b>${sg(p.price)}</b>${p.loops ? ` · повторы циклов <b>${sg(p.loops)}</b>` : ""} · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
+    ${(p.warnings || []).map(w => `<div class="small warnline">⚠ ${esc(w)}</div>`).join("")}
     ${p.shaders && p.shaders.length ? `<div class="small" style="margin-top:4px">${p.shaders.map(x => `${esc(x.shader)} <b class="${x.delta < 0 ? "good" : "bad"}">${sg(x.delta)}</b>`).join(" · ")}</div>` : ""}
     <div style="margin-top:8px"><button class="btn sm" data-act="compare">Подробное сравнение</button></div></div>`;
 }
 
 function pixelsLine(s) {
   const pm = s.pixel_methods || {};
-  const name = {renderdoc: "RenderDoc (точно)", samples: "телефон (точно)", fullscreen: "полноэкранные проходы", diff: "Frame Debugger diff (оценка)", none: "нет"};
+  const name = {quads: "квады геометрии (точно)", renderdoc: "RenderDoc (точно)", samples: "телефон (Samples Passed)", fullscreen: "полноэкранные проходы", diff: "Frame Debugger diff (оценка)", none: "нет"};
   const txt = Object.entries(pm).map(([k, n]) => `${name[k] || k}: ${n}`).join(" · ");
-  if (Object.keys(pm).some(k => k !== "renderdoc" && k !== "samples"))
-    return `<div class="warnline">⚠ Не у всех draw пиксели из RenderDoc: ${esc(txt)}. Снимите кадр заново.</div>`;
+  if (Object.keys(pm).some(k => k !== "quads"))
+    return `<div class="warnline">⚠ Не у всех draw потоки шейдера посчитаны по геометрии: ${esc(txt)}.</div>`;
   return txt ? `<div class="muted small" style="margin-top:6px">Пиксели draw: ${esc(txt)}</div>` : "";
 }
 

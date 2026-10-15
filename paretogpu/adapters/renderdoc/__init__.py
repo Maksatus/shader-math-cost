@@ -9,9 +9,11 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import time
 import winreg
+import zlib
 
 from paretogpu.adapters.unity import bridge
 from paretogpu.model.errors import ParetoError
@@ -20,8 +22,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = "ParetoGpuRenderDoc.cs"
 COUNTERS = os.path.join(HERE, "rd_counters.py")
 LOOPS = os.path.join(HERE, "rd_loops.py")
+GEOMETRY = os.path.join(HERE, "rd_geometry.py")
 MEMORY = os.path.join(HERE, "rd_memory.py")
 DEVICE = os.path.join(HERE, "rd_device.py")
+THUMB = os.path.join(HERE, "rd_thumb.py")
 DEVICE_WAITING = "the app is running: waiting for the capture"
 
 
@@ -46,6 +50,18 @@ def qrenderdoc():
     raise RenderDocError("qrenderdoc.exe not found: install RenderDoc or set RENDERDOC_DIR")
 
 
+def spirv_as():
+    """SPIR-V assembler of RenderDoc's plugins (adapters/unity/compiled_text.py)."""
+    for find in (qrenderdoc, arm_qrenderdoc):
+        try:
+            exe = os.path.join(os.path.dirname(find()), "plugins", "spirv", "spirv-as.exe")
+        except RenderDocError:
+            continue
+        if os.path.exists(exe):
+            return exe
+    raise RenderDocError("spirv-as.exe not found in RenderDoc's plugins/spirv: install RenderDoc")
+
+
 def arm_qrenderdoc():
     if os.environ.get("RENDERDOC_ARM_DIR"):
         exe = os.path.join(os.environ["RENDERDOC_ARM_DIR"], "qrenderdoc.exe")
@@ -58,7 +74,8 @@ def arm_qrenderdoc():
         if m and os.path.exists(exe):
             found.append((tuple(int(x) for x in m.group(1).split(".")), exe))
     if not found:
-        raise RenderDocError("RenderDoc for Arm GPUs not found: install Arm Performance Studio or set RENDERDOC_ARM_DIR")
+        raise RenderDocError("RenderDoc for Arm GPUs not found: install Arm Performance Studio or set RENDERDOC_ARM_DIR",
+                             code="device")
     return max(found)[1]
 
 
@@ -73,7 +90,7 @@ def adb():
     for c in cands:
         if c and os.path.exists(c):
             return c
-    raise RenderDocError("adb not found: install the Android SDK platform tools or set ADB")
+    raise RenderDocError("adb not found: install the Android SDK platform tools or set ADB", code="device")
 
 
 def launch_activity(package, serial=None):
@@ -85,7 +102,7 @@ def launch_activity(package, serial=None):
     out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout.strip().splitlines()
     act = next((x.strip() for x in reversed(out) if x.strip().startswith(package + "/")), None)
     if not act:
-        raise RenderDocError(f"{package} is not installed on the device (or has no launcher activity)")
+        raise RenderDocError(f"{package} is not installed on the device (or has no launcher activity)", code="device")
     return act
 
 
@@ -118,12 +135,12 @@ def device_serial(serial=None):
     devs = [x.split()[0] for x in out[1:] if x.strip().endswith("device")]
     if serial:
         if serial not in devs:
-            raise RenderDocError(f"adb does not see {serial} (it sees: {', '.join(devs) or 'none'})")
+            raise RenderDocError(f"adb does not see {serial} (it sees: {', '.join(devs) or 'none'})", code="device")
         return serial
     if not devs:
-        raise RenderDocError("no Android device: connect it by USB with USB debugging on")
+        raise RenderDocError("no Android device: connect it by USB with USB debugging on", code="device")
     if len(devs) > 1:
-        raise RenderDocError(f"several devices ({', '.join(devs)}): pass --serial")
+        raise RenderDocError(f"several devices ({', '.join(devs)}): pass --serial", code="device")
     return devs[0]
 
 
@@ -150,7 +167,16 @@ def device_unlocked(serial):
 def device_frame(job, out_json, timeout=2400, on_progress=None):
     """job {"serial", "app", "trigger", "wait", "capture", "shaders"} -> rd_device.py answer.
     timeout: seconds counted from the capture on (the app may run as long as the user needs before it)."""
-    for x in (out_json, out_json + ".error", out_json + ".progress"):
+    first = out_json[:-len(".json")] + ".capture.json"
+    _device_phase({**job, "phase": "capture"}, first, timeout, on_progress)
+    for x in (first, first + ".in", first + ".progress"):
+        if os.path.exists(x):
+            os.remove(x)
+    return _device_phase({**job, "phase": "replay"}, out_json, timeout, on_progress)
+
+
+def _device_phase(job, out_json, timeout, on_progress):
+    for x in (out_json, out_json + ".error", out_json + ".progress", out_json + ".log"):
         if os.path.exists(x):
             os.remove(x)
     with open(out_json + ".in", "w", encoding="utf-8") as f:
@@ -158,13 +184,14 @@ def device_frame(job, out_json, timeout=2400, on_progress=None):
     path = os.environ.get("PATH", "")
     env = dict(os.environ, PARETOGPU_IN=out_json + ".in", PARETOGPU_OUT=out_json, PARETOGPU_LIB=HERE,
                PATH=os.path.dirname(adb()) + os.pathsep + path)  # RenderDoc finds the device through adb
-    proc = subprocess.Popen([arm_qrenderdoc(), "--python", DEVICE], env=env, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+    log = open(out_json + ".log", "w", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen([arm_qrenderdoc(), "--python", DEVICE], env=env, stdout=log, stderr=subprocess.STDOUT)
     t0, last = time.time(), None
     try:
         while proc.poll() is None:
             if time.time() - t0 > timeout:
-                raise RenderDocError(f"RenderDoc for Arm did not finish in {timeout} s (last step: {last})")
+                raise RenderDocError(f"RenderDoc for Arm did not finish in {timeout} s (last step: {last})",
+                                     code="device")
             try:
                 with open(out_json + ".progress", encoding="utf-8") as f:
                     text = f.read().strip()
@@ -179,11 +206,18 @@ def device_frame(job, out_json, timeout=2400, on_progress=None):
     finally:
         if proc.poll() is None:
             proc.kill()
+        log.close()
     if os.path.exists(out_json + ".error"):
         with open(out_json + ".error", encoding="utf-8") as f:
-            raise RenderDocError(f.read()[-2000:])
+            text = f.read().strip()
+        last_line = text.splitlines()[-1] if text else ""
+        raise RenderDocError(last_line[len("RuntimeError: "):] if last_line.startswith("RuntimeError: ")
+                             else text[-2000:], code="device")
     if not os.path.exists(out_json):
-        raise RenderDocError("RenderDoc for Arm wrote no answer (a first-run dialog open? start it once by hand)")
+        with open(out_json + ".log", encoding="utf-8", errors="replace") as f:
+            tail = f.read()[-1500:].strip()
+        raise RenderDocError(f"RenderDoc for Arm exited with no answer at step «{last}» (exit code {proc.returncode})"
+                             + (f"; its output:\n{tail}" if tail else ""), code="device")
     with open(out_json, encoding="utf-8") as f:
         return json.load(f)
 
@@ -222,6 +256,59 @@ def memory(capture_path, out_json, timeout=900):
     return _script(MEMORY, capture_path, out_json, timeout, "textures")
 
 
+def thumbnail(capture_path, out_png, size=480, rotate=False, timeout=120):
+    """The capture's embedded thumbnail (the presented frame) -> PNG, long side <= size; rotate: 90° clockwise
+    (a phone's pre-rotated swapchain)."""
+    bmp = out_png + ".bmp"
+    for p in (bmp, bmp + ".error"):
+        if os.path.exists(p):
+            os.remove(p)
+    env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_OUT=bmp, PARETOGPU_SIZE=str(size))
+    subprocess.run([qrenderdoc(), "--python", THUMB], env=env, timeout=timeout,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.path.exists(bmp + ".error"):
+        with open(bmp + ".error", encoding="utf-8") as f:
+            err = f.read()[-2000:]
+        os.remove(bmp + ".error")
+        raise RenderDocError(err)
+    if not os.path.exists(bmp):
+        raise RenderDocError("qrenderdoc wrote no thumbnail")
+    with open(bmp, "rb") as f:
+        data = f.read()
+    os.remove(bmp)
+    w, h, rows = _bmp_rows(data)
+    if rotate:
+        rows = [bytes(b for y in range(h - 1, -1, -1) for b in rows[y][3 * x:3 * x + 3]) for x in range(w)]
+        w, h = h, w
+    raw = b"".join(b"\0" + r for r in rows)
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    with open(out_png + ".tmp", "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+    os.replace(out_png + ".tmp", out_png)
+    return out_png
+
+
+def _bmp_rows(data):
+    """24/32-bit uncompressed BMP -> (w, h, RGB rows top to bottom)."""
+    off, = struct.unpack_from("<I", data, 10)
+    w, h, _, bpp, comp = struct.unpack_from("<iiHHI", data, 18)
+    if bpp not in (24, 32) or comp not in (0, 3):
+        raise RenderDocError(f"unexpected thumbnail BMP: {bpp} bpp, compression {comp}")
+    px, stride = bpp // 8, (w * bpp // 8 + 3) & ~3
+    rows = []
+    for y in range(abs(h)):
+        line = data[off + y * stride:off + y * stride + w * px]
+        rgb = bytearray(w * 3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = line[2::px], line[1::px], line[0::px]
+        rows.append(bytes(rgb))
+    if h > 0:
+        rows.reverse()
+    return w, abs(h), rows
+
+
 def signature(path):
     st = os.stat(path)
     with open(path, "rb") as f:
@@ -256,12 +343,52 @@ def workers_for(capture_path, calls):
     return max(1, min(MAX_WORKERS, (os.cpu_count() or 4) // 4, by_memory, calls))
 
 
-def loop_iterations(capture_path, asked, out_json, timeout=3600, workers=None):
-    """asked [{"eid", "pixels"}] -> {eid: {"loops", "nested", "covered", "tried", "samples": [[iterations per outer
-    loop]]} or {"error"}}. Calls split in frame order over processes that each replay the capture; RenderDocError only
-    if all fail."""
-    asked = sorted(asked, key=lambda a: a["eid"])
-    k = workers or workers_for(capture_path, len(asked))
+def geometry(capture_path, asked, out_json, timeout=3600, serial=None, on_progress=None):
+    """asked [[eid, instances]] -> (rd_geometry.py meta {eid: info}, path of its float32 triangles). serial: a device
+    capture, replayed on that device by RenderDoc for Arm."""
+    for x in (out_json, out_json + ".bin", out_json + ".error", out_json + ".progress"):
+        if os.path.exists(x):
+            os.remove(x)
+    with open(out_json + ".in", "w", encoding="utf-8") as f:
+        json.dump(asked, f)
+    env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_IN=out_json + ".in", PARETOGPU_OUT=out_json,
+               PARETOGPU_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
+    if serial:
+        env.update(PARETOGPU_DEVICE=serial, PATH=os.path.dirname(adb()) + os.pathsep + os.environ.get("PATH", ""))
+    proc = subprocess.Popen([arm_qrenderdoc() if serial else qrenderdoc(), "--python", GEOMETRY], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    t0, last = time.time(), None
+    try:
+        while proc.poll() is None:
+            if time.time() - t0 > timeout:
+                raise RenderDocError(f"qrenderdoc did not read the geometry in {timeout} s")
+            try:
+                with open(out_json + ".progress", encoding="utf-8") as f:
+                    text = f.read().strip()
+            except OSError:
+                text = None
+            if text and text != last and on_progress:
+                on_progress(text)
+            last = text or last
+            time.sleep(0.5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    if os.path.exists(out_json + ".error"):
+        with open(out_json + ".error", encoding="utf-8") as f:
+            raise RenderDocError(f.read()[-2000:])
+    if not os.path.exists(out_json):
+        raise RenderDocError("qrenderdoc wrote no geometry")
+    with open(out_json, encoding="utf-8") as f:
+        return json.load(f), out_json + ".bin"
+
+
+def loop_iterations(capture_path, asked, out_json, timeout=3600, workers=None, serial=None):
+    """asked [{"key", "calls": [eid]}] (one draw event each) -> {key: {"loops", "nested", "pixels", "sums"} or
+    {"error"}} (rd_loops.py). Events split in frame order over processes that each replay the capture; RenderDocError
+    only if all fail. serial: a device capture, replayed on that device by RenderDoc for Arm (one process)."""
+    asked = sorted(asked, key=lambda a: a["calls"][0])
+    k = 1 if serial else workers or workers_for(capture_path, len(asked))
     parts = [asked[i * len(asked) // k:(i + 1) * len(asked) // k] for i in range(k)]
     runs = []
     for i, part in enumerate(p for p in parts if p):
@@ -271,8 +398,12 @@ def loop_iterations(capture_path, asked, out_json, timeout=3600, workers=None):
                 os.remove(x)
         with open(out + ".in", "w", encoding="utf-8") as f:
             json.dump(part, f)
-        env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_IN=out + ".in", PARETOGPU_OUT=out)
-        runs.append((out, subprocess.Popen([qrenderdoc(), "--python", LOOPS], env=env, stdout=subprocess.DEVNULL,
+        env = dict(os.environ, PARETOGPU_RDC=capture_path, PARETOGPU_IN=out + ".in", PARETOGPU_OUT=out,
+                   PARETOGPU_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
+        if serial:
+            env.update(PARETOGPU_DEVICE=serial, PATH=os.path.dirname(adb()) + os.pathsep + os.environ.get("PATH", ""))
+        exe = arm_qrenderdoc() if serial else qrenderdoc()
+        runs.append((out, subprocess.Popen([exe, "--python", LOOPS], env=env, stdout=subprocess.DEVNULL,
                                            stderr=subprocess.DEVNULL)))
     res, errors, t0 = {}, [], time.time()
     try:
@@ -289,10 +420,14 @@ def loop_iterations(capture_path, asked, out_json, timeout=3600, workers=None):
                 error = "qrenderdoc wrote no loop iterations"
             if error is None:
                 with open(out, encoding="utf-8") as f:
-                    res.update({int(e): v for e, v in json.load(f).items()})
+                    part_res = json.load(f)
+                    seconds = part_res.pop("_seconds", {})
+                    res.update(part_res)
+                    for k, v in seconds.items():
+                        res.setdefault("_seconds", {})[k] = res.get("_seconds", {}).get(k, 0) + v
             else:
                 errors.append(error)
-                res.update({a["eid"]: {"error": error} for a in part})
+                res.update({a["key"]: {"error": error} for a in part})
     finally:
         for _, proc in runs:
             if proc.poll() is None:

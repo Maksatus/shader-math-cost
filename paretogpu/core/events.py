@@ -19,7 +19,8 @@ def _fullscreen(ev):
 
 
 def stage_of(ev):
-    path, lm = (ev.get("path") or "").lower(), (ev.get("light_mode") or "").lower()
+    # a device draw has no LightMode, only its identified pass: URP names those passes after their LightMode
+    path, lm = (ev.get("path") or "").lower(), (ev.get("light_mode") or ev.get("pass") or "").lower()
     rt, shader = ((ev.get("rt") or {}).get("name") or "").lower(), ev.get("shader") or ""
     if ev["kind"] == "compute":
         return "compute"
@@ -127,12 +128,13 @@ def normalize(raw) -> list[Event]:
 
 
 _RP = re.compile(r"\(RP \d+:\d+\) ")
+CMD = re.compile(r"^vkCmd\w+\(\d*\)$")  # a Vulkan command buffer executed inside another: not a marker
 _RP_NUM = re.compile(r"\(RP (\d+):\d+\) ")
 FULLSCREEN_SLACK = 1.01
 
 
 def _norm(path):
-    return _RP.sub("", path or "").strip("/")
+    return "/".join(s for s in _RP.sub("", path or "").split("/") if s and not CMD.match(s))
 
 
 def _ends(path, key):

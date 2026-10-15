@@ -20,13 +20,16 @@ def frame_size(rows):
 def _frame_scale(size, screen):
     if not size or not screen or not all(screen):
         return None
+    if (size[0] > size[1]) != (screen[0] > screen[1]):  # a phone's swapchain stays portrait (pre-rotation)
+        screen = screen[::-1]
     sx, sy = size[0] / screen[0], size[1] / screen[1]
     return round((sx + sy) / 2, 3) if abs(sx - sy) <= 0.02 * max(sx, sy) else None
 
 
 def describe(meta, size=None):
     return {
-        "quality": meta.get("quality"), "build_target": meta.get("build_target"), "screen": meta.get("screen"),
+        "quality": meta.get("quality"), "android_quality": meta.get("android_quality"),
+        "build_target": meta.get("build_target"), "screen": meta.get("screen"),
         "frame_size": size, "pipeline": (meta.get("pipeline") or {}).get("name"),
         "frame_scale": _frame_scale(size, meta.get("screen")),
         "device": meta.get("device") if meta.get("source") == "device" else None,
@@ -34,8 +37,13 @@ def describe(meta, size=None):
 
 
 def warnings(info):
-    bt = info["build_target"]
-    return [{"code": "build_target_not_mobile", "target": bt}] if bt and bt not in MOBILE_TARGETS else []
+    bt, out = info["build_target"], []
+    if bt and bt not in MOBILE_TARGETS:
+        out.append({"code": "build_target_not_mobile", "target": bt})
+    android = info.get("android_quality")
+    if android and info.get("quality") and info["quality"] not in android:
+        out.append({"code": "quality_not_android", "quality": info["quality"], "android": ", ".join(android)})
+    return out
 
 
 def _size(s):
@@ -57,8 +65,14 @@ def render(rows, memory=None, screen=None):
         m = markers(r.get("path"))[:1]
         if m and m[0] not in passes:
             passes.append(m[0])
+    # the target the opaque pass draws most pixels into (not the first of its size: a prepass's normals come first)
+    drawn = Counter()
+    for r in rows or []:
+        if r.get("stage") == "opaque" and r.get("rt"):
+            drawn[r["rt"]] += r.get("pixels") or 0
+    name = drawn.most_common(1)[0][0] if drawn else None
     main = next((t for p in (memory or {}).get("passes") or [] for t in p.get("targets") or []
-                 if size and [t.get("width"), t.get("height")] == size and not t.get("depth")), None)
+                 if t.get("name") == name and not t.get("depth")), None)
     shadows = sorted({tuple(r["rt_size"]) for r in rows or []
                       if r.get("stage") == "shadow" and all(r.get("rt_size") or [])})
     return {"size": size, "scale": _frame_scale(size, screen), "msaa": (main or {}).get("samples"),

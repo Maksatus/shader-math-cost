@@ -23,6 +23,14 @@ def check_python():
         report(OK, "Python", f"{ver} ({sys.executable})")
 
 
+def check_numpy():
+    try:
+        import numpy
+        report(OK, "numpy", numpy.__version__)
+    except ImportError:
+        report(WARN, "numpy", f"не установлен: цена кадра не посчитает потоки шейдера. {sys.executable} -m pip install numpy")
+
+
 def check_files():
     need = ["docs/index.html", "docs/data.js", "docs/approx.js", "paretogpu/ui/static/index.html", "paretogpu/ui/server.py"]
     missing = [p for p in need if not os.path.exists(os.path.join(ROOT, p))]
@@ -81,7 +89,7 @@ def check_unity():
 
 def main():
     print("Проверка окружения ParetoGPU\n")
-    for check in (check_python, check_files, check_malioc, check_renderdoc, check_unity):
+    for check in (check_python, check_numpy, check_files, check_malioc, check_renderdoc, check_unity):
         try:
             check()
         except Exception as e:  # one broken check must not hide the others

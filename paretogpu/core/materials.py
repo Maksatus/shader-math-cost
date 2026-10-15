@@ -17,11 +17,13 @@ UTILITY_LIGHT_MODES = {"ShadowCaster", "DepthOnly", "DepthNormals", "DepthNormal
                        "SceneSelectionPass", "Picking", "Universal2D"}
 
 
-def snapshot_info(snapshots):
+def snapshot_info(snapshots, own=None):
     """-> {"passes": {shader: {(subshader, pass_index, pass, light_mode)}}, "globals": {(shader, pass): Counter},
-    "by_light_mode": {light_mode: Counter}} of color draws; Counter keys are sorted global keyword tuples."""
+    "by_light_mode": {light_mode: Counter}, "own": the same of `own` or None} of color draws; Counter keys are sorted
+    global keyword tuples. own: the priced frame, whose global keywords win over other snapshots (other quality
+    levels, e.g. the editor's Forward+)."""
     passes, glob, by_lm = defaultdict(set), defaultdict(Counter), defaultdict(Counter)
-    for events in snapshots:
+    for events in snapshots + ([own] if own else []):
         for e in events:
             if e["kind"] != "draw" or e["stage"] not in COLOR_STAGES or not e.get("shader"):
                 continue
@@ -29,7 +31,7 @@ def snapshot_info(snapshots):
             passes[e["shader"]].add((e["subshader"] or 0, e["pass_index"] or 0, e["pass"] or "", e.get("light_mode")))
             glob[(e["shader"], e["pass"] or "")][g] += 1
             by_lm[e.get("light_mode")][g] += 1
-    return {"passes": passes, "globals": glob, "by_light_mode": by_lm}
+    return {"passes": passes, "globals": glob, "by_light_mode": by_lm, "own": own and snapshot_info([own])}
 
 
 def material_shaders(materials):
@@ -72,7 +74,9 @@ def plan(materials, info, editor_passes=None):
             skipped.append({"material": m["path"], "shader": sh, "reason": why})
             continue
         for sub, idx, name, lm in passes:
-            g = info["globals"].get((sh, name)) or info["by_light_mode"].get(lm) or Counter({(): 1})
+            o = info.get("own") or {"globals": {}, "by_light_mode": {}}
+            g = (o["globals"].get((sh, name)) or o["by_light_mode"].get(lm) or info["globals"].get((sh, name))
+                 or info["by_light_mode"].get(lm) or Counter({(): 1}))
             own = declared.get((sub, idx))
             mine = set(m["keywords"]) & set(own) if own is not None else set(m["keywords"])
             kw = tuple(sorted(mine | set(g.most_common(1)[0][0])))

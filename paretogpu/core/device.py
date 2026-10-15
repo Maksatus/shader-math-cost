@@ -8,12 +8,11 @@ editor: PSInvocations); vertices = distinct indices x instances (editor: VSInvoc
 import hashlib
 import re
 
-from paretogpu.core.events import assign_stages
+from paretogpu.core.events import CMD, assign_stages
 
 SKIP = re.compile(r"^(vkCmd|ID3D|RenderLoop\.|Shadows\.|Camera\.|GUI\.|UI\.|Setup |PlayerEndOfFrame|FrameTime\.|"
                   r"Inl_|Clear Rendering State|ScriptableRenderer)")
 _RP = re.compile(r"^\(RP \d+:\d+\) ")
-_CMD = re.compile(r"^vkCmd\w+\(\d*\)$")  # a command buffer executed inside another: not a marker
 SHARED = " (shared shader)"  # Unity's suffix for a module several shaders share
 PIXELS, VERTICES = "samples", "indices"  # pixel_method / vertex_method values
 SHADERS = "device/shaders"  # snapshot-relative folder of the phone's SPIR-V
@@ -23,7 +22,7 @@ KIND_OF = (("draw", "draw"), ("dispatch", "compute"))
 
 def event_path(path, rp):
     """Editor-style path: nested command buffers dropped, "(RP n:m)" on the first marker under ExecuteRenderGraph."""
-    segs = [s for s in (path or "").split("/") if s and not _CMD.match(s)]
+    segs = [s for s in (path or "").split("/") if s and not CMD.match(s)]
     if rp is None or not segs:
         return "/".join(segs)
     i = segs.index("ExecuteRenderGraph") + 1 if "ExecuteRenderGraph" in segs[:-1] else len(segs) - 1

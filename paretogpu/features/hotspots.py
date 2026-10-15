@@ -13,7 +13,7 @@ def run_command(args):
     if not os.path.exists(os.path.join(args.frame, workspace.COST_FILE)):
         fail(f"hotspots: no {workspace.COST_FILE} in {args.frame}: price the snapshot first (cost)", code="input")
     try:
-        res = hotspots.run(args.frame, args.top, args.core, args.jobs)
+        res = hotspots.run(args.frame, args.top, args.core, args.jobs, compile_missing=not args.no_compile)
     except ParetoError as e:
         fail(f"hotspots: {e}", e)
     for it in res["shaders"]:
@@ -51,6 +51,8 @@ HOTSPOTS = Command(
      Arg("--top", label="Сколько шейдеров", type=positive_int, default=10, help="how many of the costliest variants (default %(default)s)"),
      Arg("--core", label="Ядро", help="core to ablate on (default: the snapshot's main core)"),
      JOBS,
+     Arg("--no-compile", label="Не компилировать", action="store_true",
+         help="use only the GLES files already in the variants folder (no Unity)"),
      Arg("--out", label="Папка результата", help="output folder (default: the snapshot folder)")],
     run_command, phases=lambda v: ["ablation", "report"], title="Почему тяжёлые шейдеры",
     report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page), result=RESULT)

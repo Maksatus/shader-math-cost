@@ -14,6 +14,7 @@ COST_FILE = "frame_cost.json"
 COST_CSV = "frame_cost.csv"
 REPORT_PAGE = "frame_report.html"
 HOTSPOTS_PAGE = "hotspots.html"
+THUMB = "thumb.png"
 
 
 def time_id():
@@ -87,6 +88,9 @@ def snapshots_of(project, folders):
             seen.add(p)
             with open(p, encoding="utf-8") as f:
                 fr = json.load(f)
-            if os.path.normcase(os.path.abspath(fr.get("project") or "")) == os.path.normcase(os.path.abspath(project)):
+            # a device frame's keywords and passes are unknown
+            same = os.path.normcase(os.path.abspath(fr.get("project") or "")) == os.path.normcase(
+                os.path.abspath(project))
+            if same and fr.get("source") != "device":
                 out.append(fr["events"])
     return out

@@ -29,6 +29,7 @@ class Snapshot(TypedDict, total=False):
     graphics_api: str
     quality: str
     quality_level: int
+    android_quality: list  # quality levels the project's Android build may use
     build_target: str
     screen: list      # [width, height] of the Game view
     pipeline: dict    # the render pipeline asset: {"name", "class", "fields": {path: value}, "refs": [alike]}

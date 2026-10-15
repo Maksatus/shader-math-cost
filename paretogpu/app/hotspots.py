@@ -19,7 +19,7 @@ from paretogpu.views.reporter import CONSOLE
 VERTEX_SHARE = 0.25  # the vertex shader is ablated too when it is at least this part of the variant's cost
 
 
-def compile_gles(frame_dir, c, root, items, rep=CONSOLE):
+def compile_gles(frame_dir, c, root, items, rep=CONSOLE, compile_missing=True):
     """-> None, or why the missing GLES files could not be compiled."""
     need = {it["variant"] for it in items if any(not gles_file(root, vf) for vf in it["files"].values())}
     if not need:
@@ -28,6 +28,8 @@ def compile_gles(frame_dir, c, root, items, rep=CONSOLE):
     todo = [keys[v] for v in sorted(need) if v in keys and not any(kw.startswith(CODE) for kw in keys[v].keywords)]
     if not todo:
         return None
+    if not compile_missing:
+        return f"{len(todo)} variants have no GLES file (--no-compile)"
     rep.log(f"compiling the GLES files of {len(todo)} variants ...")
     try:
         variants.compile_keys(todo, (c.get("frame") or {}).get("project"), root, ["gles3"], rep)
@@ -57,7 +59,7 @@ def plan(c, top, core):
     return out
 
 
-def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
+def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE, compile_missing=True):
     with open(os.path.join(frame_dir, workspace.COST_FILE), encoding="utf-8") as f:
         c = json.load(f)
     core = core or c.get("main_core")
@@ -66,7 +68,7 @@ def run(frame_dir, top=10, core=None, jobs=None, rep=CONSOLE):
     root = c.get("variants_dir") or os.path.join(frame_dir, "variants")
     loops_ = c.get("loops") or {}
     items = plan(c, top, core)
-    why = compile_gles(frame_dir, c, root, items, rep)
+    why = compile_gles(frame_dir, c, root, items, rep, compile_missing)
     work, warn = [], []
     for it in items:
         it["ablation"] = {}

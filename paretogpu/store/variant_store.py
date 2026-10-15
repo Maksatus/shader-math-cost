@@ -57,7 +57,8 @@ def place(root, raw, keys, result, patch=None):
                 f.write(data)
             manifests.setdefault(sub, []).append({
                 "file": fn, "shader": k.shader, "pass": k.pass_name, "subshader": k.subshader,
-                "pass_index": k.pass_index, "keywords": list(k.keywords), "stage": STAGE[stage], "platform": plat, "source": "CompileVariant",
+                "pass_index": k.pass_index, "keywords": list(k.keywords), "stage": STAGE[stage], "platform": plat,
+                "source": "CompileVariant" if plat == "gles3" else "Compile and show code",
                 "fingerprint": v.get("fingerprint"), **({"patched": patched} if patched else {})})
     for sub, entries in manifests.items():
         path = os.path.join(root, sub, "manifest.json")
