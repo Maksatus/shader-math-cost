@@ -43,38 +43,39 @@ function resultHtml(j) {
   const t = s.total || 0, f = t ? s.fragment / t : 0, v = t ? s.vertex / t : 0, c = t ? s.compute / t : 0;
   const top = s.shaders.map(x => `<tr><td>${esc(x.key)}</td><td style="width:35%"><div class="sb" style="width:${(100 * x.share / (s.shaders[0].share || 1)).toFixed(1)}%"></div></td><td class="n">${pct(x.share)}</td></tr>`).join("");
   return `<div class="result">${prevHtml(s.prev)}
-    <div class="muted small" style="margin-top:12px">Цена кадра на ${esc(s.main_core)} (${esc(s.api)})</div>
+    <div class="muted small" style="margin-top:12px">Цена кадра на ${esc(s.main_core)}</div>
     <div class="total">${M(t, 1)} млн циклов</div>
     <div class="split"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i><i style="width:${100 * c}%;background:var(--part-cs)"></i></div>
     <div class="legend"><span><i style="background:var(--part-px)"></i>пиксели ${pct(f)}</span><span><i style="background:var(--part-vx)"></i>вершины ${pct(v)}</span><span><i style="background:var(--part-cs)"></i>compute ${pct(c)}</span></div>
     <div class="muted small" style="margin-top:12px">Самые дорогие шейдеры (доля кадра)</div>
     <table class="top5">${top}</table>
     ${(s.warnings || []).map(w => `<div class="warnline">⚠ ${esc(w)}</div>`).join("")}
-    ${s.unpriced_draws ? `<div class="warnline">⚠ ${s.unpriced_draws} draw без цены: шейдер не скомпилировался или замер упал. Их стоимость не входит в итог.</div>` : ""}
+    ${s.unpriced_draws ? `<div class="warnline">⚠ Draw без цены: ${s.unpriced_draws}. Шейдер не скомпилировался или замер упал. Их стоимость не входит в итог.</div>` : ""}
     ${s.unpriced_compute ? `<div class="muted small" style="margin-top:6px">Compute-шейдеры без цены (${s.unpriced_compute}): их компиляция из скрипта роняет Unity 6000.3.</div>` : ""}
     ${pixelsLine(s)}
     ${s.checked === false ? `<div class="warnline">⚠ Шейдеры не перекомпилировались (Unity был недоступен или выбран расчёт без компиляции): если шейдеры менялись после прошлого расчёта, цена может быть устаревшей.</div>` : ""}
     <div class="actions"><button class="btn primary" data-act="open">Открыть полный отчёт</button>
-      <button class="btn" data-act="hotspots">Почему тяжёлые</button>
       <button class="btn" data-act="folder">Папка</button></div></div>`;
 }
 
 function prevHtml(p) {
   if (!p || p.delta == null) return "";
-  const c = p.delta < 0 ? "good" : p.delta > 0 ? "bad" : "";
-  const sg = x => (x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x), 1);
-  const pc = p.pct == null ? "" : ` (${p.pct > 0 ? "+" : p.pct < 0 ? "−" : "±"}${Math.abs(100 * p.pct).toFixed(1)}%)`;
+  // cycles below half the last shown digit (0.0 млн) are float noise
+  const z = x => Math.abs(x || 0) < 5e4 ? 0 : x;
+  const d = z(p.delta), c = d < 0 ? "good" : d > 0 ? "bad" : "";
+  const sg = x => (x = z(x), (x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x), 1));
+  const pc = p.pct == null ? "" : ` (${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d ? 100 * p.pct : 0).toFixed(1)}%)`;
   return `<div class="prev"><div class="muted small">К прошлому расчёту этого снимка (${when(p.a_time)}), ${esc(p.core)}</div>
     <div class="d ${c}">${sg(p.delta)} млн${pc}</div>
-    <div class="small">цена шейдеров <b>${sg(p.price)}</b>${p.loops ? ` · повторы циклов <b>${sg(p.loops)}</b>` : ""} · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
+    <div class="small">цена шейдеров <b>${sg(p.price)}</b>${z(p.loops) ? ` · повторы циклов <b>${sg(p.loops)}</b>` : ""} · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
     ${(p.warnings || []).map(w => `<div class="small warnline">⚠ ${esc(w)}</div>`).join("")}
-    ${p.shaders && p.shaders.length ? `<div class="small" style="margin-top:4px">${p.shaders.map(x => `${esc(x.shader)} <b class="${x.delta < 0 ? "good" : "bad"}">${sg(x.delta)}</b>`).join(" · ")}</div>` : ""}
+    ${p.shaders && p.shaders.length ? `<div class="small" style="margin-top:4px">${p.shaders.map(x => `${esc(x.shader)} <b class="${z(x.delta) < 0 ? "good" : z(x.delta) > 0 ? "bad" : ""}">${sg(x.delta)}</b>`).join(" · ")}</div>` : ""}
     <div style="margin-top:8px"><button class="btn sm" data-act="compare">Подробное сравнение</button></div></div>`;
 }
 
 function pixelsLine(s) {
   const pm = s.pixel_methods || {};
-  const name = {quads: "квады геометрии (точно)", renderdoc: "RenderDoc (точно)", samples: "телефон (Samples Passed)", fullscreen: "полноэкранные проходы", diff: "Frame Debugger diff (оценка)", none: "нет"};
+  const name = {quads: "квады геометрии (точно)", renderdoc: "RenderDoc (точно)", samples: "телефон (Samples Passed, оценка)", none: "нет"};
   const txt = Object.entries(pm).map(([k, n]) => `${name[k] || k}: ${n}`).join(" · ");
   if (Object.keys(pm).some(k => k !== "quads"))
     return `<div class="warnline">⚠ Не у всех draw потоки шейдера посчитаны по геометрии: ${esc(txt)}.</div>`;
@@ -126,7 +127,6 @@ async function act(a, j) {
     openReport(x, kind);
   }
   if (a === "folder") api("/api/reveal", {path: dir});
-  if (a === "hotspots") start("hotspots", {frame: dir});
   if (a === "compare" && j.summary && j.summary.prev) openCompare(j.summary.prev.run_a, j.summary.prev.run_b);
 }
 

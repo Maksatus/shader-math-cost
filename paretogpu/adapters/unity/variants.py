@@ -1,7 +1,6 @@
-"""Exact shader variants compiled in the open editor (cs/ParetoGpuVariants.cs). GLES3: ShaderData.Pass.CompileVariant
-for Android. Vulkan: "Compile and show code" text per shader, assembled here (compiled_text.py); only the variants a
-build has. A run writes <id>_<platform>_<stage>.bin into `raw`, then variants.json {"variants": [{"id", "files",
-"errors", "fingerprint"}]}; the caller places the files."""
+"""Exact shader variants compiled in the open editor (cs/ParetoGpuVariants.cs): Vulkan "Compile and show code" text per
+shader, assembled here (compiled_text.py); only the variants a build has. A run writes <id>_vulkan_<stage>.bin into
+`raw`, then variants.json {"variants": [{"id", "files", "errors", "fingerprint"}]}; the caller places the files."""
 import json
 import os
 import re
@@ -32,7 +31,7 @@ def current_fingerprints(project, shaders, raw, timeout=600):
     return shader_query(project, "Fingerprints", shaders, raw, timeout)
 
 
-def compile_variants(project, keys, raw, platforms, timeout=1800, on_start=None, on_step=None):
+def compile_variants(project, keys, raw, timeout=1800, on_start=None, on_step=None):
     """on_start(total) once the editor answers; on_step(done, total): variants compiled so far."""
     bridge.require_editor(project, VariantsError, "it is needed to compile the variants of the frame")
     os.makedirs(raw, exist_ok=True)
@@ -48,7 +47,7 @@ def compile_variants(project, keys, raw, platforms, timeout=1800, on_start=None,
 
     config = {"shaders": [k.shader for k in keys], "subshaders": [k.subshader for k in keys],
               "pass_indices": [k.pass_index for k in keys], "passes": [k.pass_name for k in keys],
-              "keywords": [" ".join(k.keywords) for k in keys], "platforms": list(platforms)}
+              "keywords": [" ".join(k.keywords) for k in keys]}
     result = bridge.call(project, SCRIPT, "Run", raw, JOB, config, VariantsError, timeout, progress)
     if len(result["variants"]) != len(keys):
         raise VariantsError(f"Unity compiled {len(result['variants'])} of {len(keys)} variants")
@@ -62,16 +61,10 @@ def _assemble_texts(raw, keys, result):
     for v in result["variants"]:
         k, files = keys[v["id"]], []
         for x in v["files"]:
-            if "text" not in x:
-                files.append(x)
-                continue
             if x["text"] not in parsed:
                 with open(os.path.join(raw, x["text"]), encoding="utf-8", errors="replace") as f:
                     parsed[x["text"]] = compiled_text.blocks(f.read())
-            blocks = parsed[x["text"]]
-            # the pass's keywords: a global keyword it does not declare is not in its variant
-            declared = set().union(*(b[2] for b in blocks if b[:2] == (k.subshader, k.pass_index)))
-            code = blocks.get((k.subshader, k.pass_index, frozenset(k.keywords) & declared, x["stage"]))
+            code = parsed[x["text"]].get((k.subshader, k.pass_index, frozenset(k.keywords), x["stage"]))
             if code is None:
                 v["errors"].append(f"vulkan {x['stage']}: not among the variants a build has (Compile and show code)")
                 continue
@@ -82,7 +75,7 @@ def _assemble_texts(raw, keys, result):
             except (compiled_text.CompiledTextError, OSError) as e:
                 v["errors"].append(f"vulkan {x['stage']}: {e}")
                 continue
-            files.append({"platform": "vulkan", "stage": x["stage"], "file": fn})
+            files.append({"stage": x["stage"], "file": fn})
         v["files"] = files
 
 
@@ -110,9 +103,9 @@ def unfinished_run(raw):
         return (keys, result) if fits else None
     files = {}
     for fn in os.listdir(raw):
-        m = re.fullmatch(r"(\d+)_(gles3|vulkan)_(vert|frag|comp)\.bin", fn)
+        m = re.fullmatch(r"(\d+)_vulkan_(vert|frag|comp)\.bin", fn)
         if m:
-            files.setdefault(int(m.group(1)), []).append({"platform": m.group(2), "stage": m.group(3), "file": fn})
+            files.setdefault(int(m.group(1)), []).append({"stage": m.group(2), "file": fn})
     stop = next((i for i in range(len(keys)) if i not in files), None)
     result = {"variants": [{"id": i, "files": files.get(i, []), "fingerprint": None,
                             "errors": [] if i in files else [NOT_FINISHED] + ([STOPPED] if i == stop else [])}

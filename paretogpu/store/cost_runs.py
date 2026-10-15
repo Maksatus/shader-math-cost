@@ -8,7 +8,7 @@ from paretogpu.core import frame_cost
 from paretogpu.store import workspace
 
 COSTS = "costs"
-META = ("computed_at", "frame_dir", "project", "api", "malioc", "cores", "main_core", "totals", "loops_n", "checked",
+META = ("computed_at", "frame_dir", "project", "malioc", "cores", "main_core", "totals", "loops_n", "checked",
         "coverage")
 
 

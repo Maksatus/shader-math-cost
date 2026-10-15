@@ -28,7 +28,7 @@ def check_numpy():
         import numpy
         report(OK, "numpy", numpy.__version__)
     except ImportError:
-        report(WARN, "numpy", f"не установлен: цена кадра не посчитает потоки шейдера. {sys.executable} -m pip install numpy")
+        report(WARN, "numpy", f"не установлен: цена кадра не посчитает пиксели draw (квады). {sys.executable} -m pip install numpy")
 
 
 def check_files():
@@ -50,7 +50,7 @@ def check_malioc():
         report(OK, "malioc (Arm Performance Studio)", f"v{ver} ({mali.MALIOC})")
     else:
         report(WARN, "malioc (Arm Performance Studio)",
-               "не найден: замеры (cost, measure, export --measure, сайт) не будут работать. Скачать: "
+               "не найден: цена кадра, материалов и таблица сайта не будут работать. Скачать: "
                "https://developer.arm.com/Tools%20and%20Software/Arm%20Performance%20Studio или задать MALIOC")
 
 
@@ -59,8 +59,25 @@ def check_renderdoc():
     try:
         report(OK, "RenderDoc", renderdoc.qrenderdoc())
     except renderdoc.RenderDocError:
-        report(WARN, "RenderDoc", "не найден: снимок кадра не будет работать. Скачать: "
+        report(WARN, "RenderDoc", "не найден: снимок кадра в редакторе не будет работать. Скачать: "
                                   "https://renderdoc.org/builds или задать RENDERDOC_DIR")
+    try:
+        renderdoc.spirv_as()
+    except renderdoc.RenderDocError:
+        report(WARN, "spirv-as (RenderDoc)", "нет в plugins/spirv RenderDoc: Vulkan-варианты не соберутся")
+
+
+def check_device():
+    from paretogpu.adapters import renderdoc
+    try:
+        report(OK, "adb", renderdoc.adb())
+    except renderdoc.RenderDocError:
+        report(WARN, "adb", "не найден: кадр с телефона не будет работать. Android SDK platform-tools или задать ADB")
+    try:
+        report(OK, "RenderDoc for Arm", renderdoc.arm_qrenderdoc())
+    except renderdoc.RenderDocError:
+        report(WARN, "RenderDoc for Arm", "не найден: кадр с телефона не будет работать. Ставится с Arm Performance "
+                                          "Studio или задать RENDERDOC_ARM_DIR")
 
 
 def check_unity():
@@ -69,27 +86,12 @@ def check_unity():
     if cli:
         report(OK, "Unity CLI (unity)", cli)
     else:
-        report(WARN, "Unity CLI (unity)", "нет в PATH: frame и export с открытым редактором не будут работать")
-    if os.environ.get("UNITY_EDITOR"):
-        ok = os.path.exists(os.environ["UNITY_EDITOR"])
-        report(OK if ok else WARN, "Unity Editor (UNITY_EDITOR)",
-               os.environ["UNITY_EDITOR"] + ("" if ok else " — файла нет"))
-        return
-    found = []
-    for d in export.hub_editor_dirs():
-        if os.path.isdir(d):
-            found += [f"{v} ({d})" for v in sorted(os.listdir(d))
-                      if os.path.exists(os.path.join(d, v, "Editor", "Unity.exe"))]
-    if found:
-        report(OK, "Unity Editor (Hub)", ", ".join(found))
-    else:
-        report(WARN, "Unity Editor (Hub)",
-               "редакторы не найдены: export в batchmode не будет работать (или задать UNITY_EDITOR)")
+        report(WARN, "Unity CLI (unity)", "нет в PATH: снимок кадра и материалы с открытым редактором не будут работать")
 
 
 def main():
     print("Проверка окружения ParetoGPU\n")
-    for check in (check_python, check_numpy, check_files, check_malioc, check_renderdoc, check_unity):
+    for check in (check_python, check_numpy, check_files, check_malioc, check_renderdoc, check_device, check_unity):
         try:
             check()
         except Exception as e:  # one broken check must not hide the others

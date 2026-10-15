@@ -18,9 +18,13 @@ def _fullscreen(ev):
     return (ev.get("vertices") or 0) <= 6 and (ev.get("shader") or "").startswith("Hidden/")
 
 
+def global_keywords_known(events):
+    """A device frame's draws have global_keywords None (core/device)."""
+    return all(e.get("global_keywords") is not None for e in events if e["kind"] == "draw")
+
+
 def stage_of(ev):
-    # a device draw has no LightMode, only its identified pass: URP names those passes after their LightMode
-    path, lm = (ev.get("path") or "").lower(), (ev.get("light_mode") or ev.get("pass") or "").lower()
+    path, lm = (ev.get("path") or "").lower(), (ev.get("light_mode") or "").lower()
     rt, shader = ((ev.get("rt") or {}).get("name") or "").lower(), ev.get("shader") or ""
     if ev["kind"] == "compute":
         return "compute"
@@ -198,6 +202,8 @@ def match(events: list[Event], actions, counters=None):
                     "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
                     "samples": total(sel, "samples_passed"),
                     "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
+        if sel[0].get("blocks"):  # the call's uniform bytes: SPIR-V loop bounds (core/loops.spirv_bounds)
+            ev["params"] = {**(ev.get("params") or {}), **sel[0]["blocks"]}
         bad = _check(ev, sel, ps) if ev["kind"] == "draw" else None
         if bad:
             ev["rd"]["mismatch"], ev["rd"]["count_mismatch"] = bad[0], bad[1:]

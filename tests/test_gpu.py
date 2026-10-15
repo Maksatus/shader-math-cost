@@ -34,7 +34,7 @@ class GpuTest(unittest.TestCase):
             gpu.register(Fake())
             rule = MeasureRule(d, gpu=gpu.backend("fake"))
             r = rule.build_one(("a.frag", "Fake-1"))
-            self.assertEqual((r["file"], r["core"], r["api"], r["stage"]), ("a.frag", "Fake-1", "gles", "fragment"))
+            self.assertEqual((r["file"], r["core"], r["api"], r["stage"]), ("a.frag", "Fake-1", "vulkan", "fragment"))
             self.assertTrue(rule.memo_key(("a.frag", "Fake-1")).endswith("|fake-1"))
         finally:
             shutil.rmtree(d, ignore_errors=True)

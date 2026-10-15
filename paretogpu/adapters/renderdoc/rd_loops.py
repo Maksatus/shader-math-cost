@@ -1,7 +1,6 @@
-# Runs inside qrenderdoc --python (RenderDoc's UI python, not the normal interpreter). In: Vulkan capture PARETOGPU_RDC,
-# PARETOGPU_IN [{"key", "calls": [eid]}] (the calls of one draw event), PARETOGPU_ROOT (the repository: core/loops
-# numbers the loops as the pricing does). PARETOGPU_DEVICE (adb serial): RenderDoc for Arm replays it on that device (an
-# Android capture does not replay on a desktop GPU); else the desktop replays it. Out: PARETOGPU_OUT {key: {"loops": n
+# Runs inside qrenderdoc --python (RenderDoc's UI python, not the normal interpreter). In: Vulkan capture PARETOGPU_RDC
+# and PARETOGPU_DEVICE (rd_replay.py), PARETOGPU_IN [{"key", "calls": [eid]}] (the calls of one draw event),
+# PARETOGPU_ROOT (the repository: core/loops numbers the loops as the pricing does). Out: PARETOGPU_OUT {key: {"loops": n
 # outer loops, "nested": [bool], "pixels", "lost", "means": [trip count per pixel]} or {"error"}}; <out>.progress,
 # traceback -> <out>.error.
 # A draw's fragment shader is swapped for rd_loop_counter's (trip counts as its colour), two loops per swap; one swap
@@ -21,7 +20,7 @@ from collections import Counter
 import renderdoc as rd
 
 out_path = os.environ["PARETOGPU_OUT"]
-counter = ok = Replay = None  # rd_loop_counter, rd_replay: imported in main(), an import error lands in <out>.error
+counter = rd_replay = None  # imported in main(), an import error lands in <out>.error
 TIMING = Counter()  # seconds per step, in the answer as "_seconds"
 ALPHA_BLENDS = {"Zero", "One", "SrcAlpha", "InvSrcAlpha"}  # with alpha 1 these leave the written value exact
 
@@ -183,14 +182,14 @@ def count_group(rp, infos, done, progress, written):
 
 
 def main():
-    global counter, ok, Replay
+    global counter, rd_replay
     sys.path.insert(0, os.environ["PARETOGPU_ROOT"])
-    sys.path.insert(0, os.path.join(os.environ["PARETOGPU_ROOT"], "paretogpu", "adapters", "renderdoc"))
+    sys.path.insert(0, os.environ["PARETOGPU_LIB"])
     import rd_loop_counter as counter
-    from rd_replay import Replay, ok
+    import rd_replay
     with open(os.environ["PARETOGPU_IN"], encoding="utf-8") as f:
         asked = sorted(json.load(f), key=lambda a: min(a["calls"]))
-    rp = Replay()
+    rp = rd_replay.Replay(*rd_replay.environment())
     written = writes(rp.c)
     done, groups = {}, {}
     full = True
@@ -200,7 +199,7 @@ def main():
         full = False
         info = survey(rp.c, calls)
         if isinstance(info, str):
-            if rp.remote is not None and not ok(rp.remote.Ping()):
+            if not rp.alive():
                 raise RuntimeError(f"RenderDoc's server on the device is gone at event {calls[0]}")
             done[item["key"]] = {"error": info}
         elif not info["conts"]:

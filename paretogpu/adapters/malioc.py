@@ -1,7 +1,9 @@
 """malioc (Mali Offline Compiler) backend.
 Cache: <cache>/malioc.sqlite (WAL, shared by threads and processes), zlib JSON entries. The key holds the malioc path,
 which holds the Studio version, so a new version never reads old results. Old per-key <key>.json files migrate on
-first read; v2 entries (old bench/run.py) lack "raw" and are recompiled when raw is needed."""
+first read; v2 entries (old bench/run.py) lack "raw" and are recompiled when raw is needed. The key stays as it was
+(changing it recompiles the whole cache); entries carry the malioc version instead, checked on read with the core
+and API of the raw result."""
 import atexit
 import glob
 import hashlib
@@ -170,6 +172,33 @@ def _legacy(j):
     }
 
 
+_versions = {}
+
+
+def _version_of(malioc):
+    if malioc not in _versions:
+        try:
+            _versions[malioc] = version(malioc)
+        except MaliocError:
+            _versions[malioc] = None
+    return _versions[malioc]
+
+
+def entry_matches(res, core, api, malioc=MALIOC):
+    """False for an entry of another malioc version (an in-place update keeps the path) or another core / API."""
+    raw = res.get("raw")
+    want, got = _version_of(malioc), res.get("malioc")
+    if raw and not got:
+        got = ".".join(map(str, raw["producer"]["version"]))
+    if want and got and got != want:
+        return False
+    if raw:
+        sh = raw["shaders"][0]
+        if sh["hardware"]["core"] != core or (sh["shader"]["api"] == "OpenGL ES") != (api == "gles"):
+            return False
+    return True
+
+
 _key_locks = {}
 _key_locks_guard = threading.Lock()
 
@@ -260,14 +289,15 @@ def compile(src, core, api, stage="fragment", malioc=MALIOC, cache=CACHE, need_r
     # identical sources share the key: one thread compiles, the others wait
     with _key_lock(key):
         res = store.get(key)
-        if res and res.get("v") in LEGACY_VERSIONS and (res.get("raw") or not need_raw):
+        if (res and res.get("v") in LEGACY_VERSIONS and (res.get("raw") or not need_raw)
+                and entry_matches(res, core, api, malioc)):
             res["cached"] = True
             return res
         try:
             j = _strip(run_malioc(src, core, api, stage, malioc))
         except MaliocError as e:
             return {"ok": False, "error": str(e)}
-        res = {"v": CACHE_VERSION, "ok": True, **_legacy(j), "raw": j}
+        res = {"v": CACHE_VERSION, "ok": True, "malioc": _version_of(malioc), **_legacy(j), "raw": j}
         store.put(key, res)
         return res
 

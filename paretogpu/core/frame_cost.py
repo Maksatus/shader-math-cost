@@ -3,6 +3,7 @@ Units: malioc cycles x invocations; only cores of one generation compare in abso
 Vertex price = Position + Varying for every vertex: IDVS shades Varying only for visible ones, so it is an upper bound.
 px_ref / vtx_ref / cs_ref = price with every outer loop once (REF_N): trip-count independent, used by core/compare.
 """
+import math
 import os
 import re
 from collections import OrderedDict, defaultdict
@@ -91,7 +92,8 @@ class _Counts:
         for k, b in enumerate(self.bounds.get(fn) or [None] * size):
             v = loops.bound_value(b, self.ev.get("params"))
             if v is not None:
-                out.append({"n": max(0, int(v)), "from": "uniform", "bound": loops.bound_text(b), "value": v})
+                out.append({"n": max(0, math.ceil(v - 1e-6)), "from": "uniform", "bound": loops.bound_text(b),
+                            "value": v})
             elif measured:
                 out.append({"n": measured["n"][k], "from": "frame", "pixels": measured["pixels"]})
             else:
@@ -179,7 +181,7 @@ def _unforced(loop_data, measurements, cores):
     return sorted(fn for fn, d in loop_data.items() if any(na(fn, c) and c not in d for c in cores))
 
 
-def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", cores=None,
+def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
             main_core=MAIN_CORE) -> CostRun:
     """-> frame_cost.json. An event priced on only some cores is in "missing" with "cores" = the unpriced ones."""
     pix = px.resolve(events)
@@ -191,7 +193,7 @@ def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", 
     for ev in events:
         if ev["kind"] not in ("draw", "compute"):
             continue
-        recs, why = variants.match(ev, state, api)
+        recs, why = variants.match(ev, state)
         row = _event_row(ev, pix, why)
         counts = _Counts(ev, loop_data, bounds, iters.get(ev["index"]))
         if recs and "compute" in recs:
@@ -223,7 +225,7 @@ def compute(meta: dict, events: list[Event], state: VariantState, api="vulkan", 
     draws = [r for r in rows if r["kind"] == "draw"]
     return {
         "frame": {k: v for k, v in meta.items() if k not in ("events", "pipeline")},
-        "api": api, "cores": [{"name": c, "arch": found_cores[c]} for c in cores], "main_core": main_core,
+        "cores": [{"name": c, "arch": found_cores[c]} for c in cores], "main_core": main_core,
         "totals": totals,
         "loops": {"n": LOOP_ITERS, "events": sum(1 for r in rows if r["loop"]), "files": len(loop_data),
                   "bounded": sum(1 for r in rows if r["loop"] and any(x["from"] == "uniform"
@@ -279,7 +281,7 @@ def summary(c: CostRun) -> CostSummary:
     failed = [m for m in missing if m.get("kind") == "draw"]
     top = (((c.get("groups") or {}).get(mc) or {}).get("shader") or [])[:5]
     return {"snapshot": os.path.basename(fd.rstrip("\\/")) or None, "frame_dir": fd, "project": frame.get("project"),
-            "computed_at": c.get("computed_at"), "code_version": c.get("code_version"), "api": c.get("api"),
+            "computed_at": c.get("computed_at"), "code_version": c.get("code_version"),
             "malioc": c.get("malioc"), "main_core": mc,
             "cores": [x["name"] for x in c.get("cores") or []], "loops_n": (c.get("loops") or {}).get("n"),
             "checked": c.get("variants_checked"), "resolution": profile.frame_size(c.get("events")),

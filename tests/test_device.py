@@ -1,9 +1,11 @@
 """The phone frame as a snapshot (core/device.py)."""
+import os
 import unittest
 
 from paretogpu.core import device
 from paretogpu.core import memory
 from paretogpu.model.variant import CODE, VariantKey
+from paretogpu.store import workspace
 
 DRAW = 0x2
 
@@ -17,8 +19,8 @@ def act(event, name, path, kinds, **more):
 CAM = "FrameTime.GPU/SlotsRenderPipeline.RenderSingleCamera: camera/ExecuteRenderGraph"
 LIT = "Kefir/Lit (PBR)"
 SECONDARY = CAM + "/vkCmdExecuteCommands(1)"
-FRAME = {"device": "samsung SM-G996B", "serial": "X", "api": "Vulkan", "screen": [2400, 1080],
-         "capture": None,
+FRAME = {"device": "samsung SM-G996B", "serial": "X", "api": "Vulkan", "screen": [2400, 1080], "rotation": 90,
+         "capture": "D:/snap/frame.rdc",
          "actions": [
              act(10, "vkCmdBeginRenderPass(D=Clear)", CAM, ["begin_pass"]),
              act(11, "=> vkCmdExecuteCommands()[0]: vkBeginCommandBuffer(ResourceId::1)", SECONDARY, ["begin_pass"]),
@@ -97,6 +99,8 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(shadow["shader"], "Kefir/Lit (PBR) (shared shader)")  # depth only: whose it is, identify()
         self.assertEqual(shadow["code"], {"vert": "device/shaders/a1.vert.spv", "hash": shadow["code"]["hash"]})
         self.assertEqual(lit["rd"]["ps_invocations"], 1500)  # 6000 samples of a 4x MSAA target
+        self.assertEqual((shadow["rd"]["ps_invocations"], shadow["pixel_count"], shadow["rd"]["samples"]), (0, 0, 5000))
+        self.assertIsNone(lit["global_keywords"])  # not in the capture
         self.assertEqual(lit["rd"]["samples"], 4000)
         self.assertEqual((lit["vertices"], lit["indices"], lit["rd"]["vertex_method"]), (80, 120, "indices"))
         self.assertEqual((sky["vertices"], sky["rd"]["vertex_method"]), (3, "calls"))
@@ -108,7 +112,9 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(VariantKey.of(named), VariantKey("S", 0, 2, "Forward", ("_A",)))
 
     def test_meta(self):
-        self.assertEqual(self.snap["source"], "device")
+        self.assertEqual(self.snap["renderdoc"]["capture"], "frame.rdc")
+        self.assertEqual(self.snap["renderdoc"]["replay"], "X")
+        self.assertEqual((self.snap["screen"], self.snap["rotation"]), ([2400, 1080], 90))
         self.assertIsNone(self.snap["quality"])
         self.assertEqual(self.snap["device"]["imgui_draws"], 1)
         self.assertEqual(self.snap["device"]["discard_unshaded"], 0)
@@ -119,6 +125,13 @@ class Snapshot(unittest.TestCase):
         self.assertNotIn("begin_pass", by[20]["kinds"])
         self.assertEqual(by[21]["ps_invocations"], 1500)
         self.assertTrue(self.mem["textures"][0]["native"])
+
+    def test_capture_and_where_it_replays(self):
+        rdc = os.path.join("D:/snap", "frame.rdc")
+        self.assertEqual(workspace.capture_of("D:/snap", self.snap), (rdc, "X"))
+        self.assertEqual(workspace.capture_of("D:/snap", {"renderdoc": {"capture": "frame.rdc", "replay": None}}),
+                         (rdc, None))
+        self.assertEqual(workspace.capture_of("D:/snap", {}), (None, None))
 
     def test_native_textures_as_they_are(self):
         rgba = {"width": 4, "height": 4, "bytes": 64, "format": "R8G8B8A8_UNORM"}

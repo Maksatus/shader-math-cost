@@ -4,7 +4,7 @@ SUFFIX = ".result.json"
 
 
 class ResultMeta(TypedDict, total=False):
-    kind: str         # cost | compare | matcompare | matshader | hotspots ...
+    kind: str         # cost | compare | matcompare ...
     id: str           # unique among the results of its kind: <folder name> or <snapshot>/<kind>
     title: str
     created: float    # when it was computed (the data's computed_at)

@@ -5,10 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import TypedDict
 
-EXT = {("gles3", "vert"): ".vert", ("gles3", "frag"): ".frag", ("gles3", "comp"): ".comp",
-       ("vulkan", "vert"): ".vert.spv", ("vulkan", "frag"): ".frag.spv", ("vulkan", "comp"): ".comp.spv"}
-API = {"gles3": "gles", "vulkan": "vulkan"}  # export platform -> malioc API
-PLATFORM = {v: k for k, v in API.items()}  # malioc API -> export platform
+EXT = {"vert": ".vert.spv", "frag": ".frag.spv", "comp": ".comp.spv"}  # Vulkan SPIR-V
 STAGE = {"vert": "vertex", "frag": "fragment", "comp": "compute"}
 SHORT = {v: k for k, v in STAGE.items()}
 COMPUTE = -1  # subshader of a compute kernel key
@@ -80,9 +77,9 @@ class VariantKey:
                 else f"{self.subshader}_{self.pass_index:02d}_{slug(self.pass_name)}__{kw}")
         return (stem[:72] + "__" + h) if len(stem) > 80 else f"{stem}__{h}"
 
-    def folder(self, platform):
-        return (slug(self.shader) + ("_compute" if self.is_compute else "")
-                + ("" if platform == "gles3" else f"_{platform}"))
+    @property
+    def folder(self):
+        return slug(self.shader) + ("_compute" if self.is_compute else "")
 
     def as_event(self):
         """Materials have variants but no frame events."""
@@ -92,7 +89,7 @@ class VariantKey:
 
 class VariantState(TypedDict, total=False):
     keys: list            # [VariantKey]
-    files: dict           # {VariantKey: {(platform, short stage): file relative to the variants folder}}
+    files: dict           # {VariantKey: {short stage: file relative to the variants folder}}
     errors: dict          # {VariantKey: [error]}
     measurements: dict    # {file: {core: Measurement}} (model/measurement.py)
     checked: bool         # the files were checked against the shaders in the open editor

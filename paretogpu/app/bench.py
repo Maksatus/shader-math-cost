@@ -1,5 +1,8 @@
 """Per-call function cost on Mali via malioc: cycle slope between chain lengths N1->N2 minus the slope of the bare
-'+ w_i' chain (cancels fixed overhead, matters on Bifrost); cost = busiest pipe (FMA/CVT/SFU/TEX run in parallel)."""
+'+ w_i' chain (cancels fixed overhead, matters on Bifrost); cost = max(arithmetic, TEX), arithmetic = malioc's
+arith_total (core/pricing) of the per-pipe slopes. arith_total is not linear, so it is rebuilt from the slopes:
+max(FMA, CVT, SFU) on G57..G78; max(FMA + CVT + SFU/4, SFU) on G310..G710 (shared issue; both exact on every bench
+chain). G615 / G715 / 5th Gen fit neither and keep max(FMA, CVT, SFU), a little below their arith_total."""
 import concurrent.futures as cf
 import os
 
@@ -20,6 +23,7 @@ VARIANTS = [  # name, precision, vector size
 ]
 APIS = ["gles", "vulkan"]
 ARITH_PIPES = ("arith_fma", "arith_cvt", "arith_sfu", "arithmetic")
+SHARED_ISSUE = {"Mali-G310", "Mali-G510", "Mali-G610", "Mali-G710"}
 
 
 def list_gpus(malioc):
@@ -32,6 +36,12 @@ def compile_one(malioc, api, core, src):
 
 def arith(c):
     return {p: c[p] for p in ARITH_PIPES + ("texture",) if p in c}
+
+
+def _alu(s, core):
+    if core in SHARED_ISSUE:
+        return max(s["arith_fma"] + s["arith_cvt"] + s["arith_sfu"] / 4, s["arith_sfu"])
+    return max([v for k, v in s.items() if k != "texture"] or [0.0])
 
 
 def slope(r1, r2, n1, n2, key="cycles"):
@@ -132,7 +142,7 @@ def _unit_warnings(plan, slopes):
     """A corrupted malioc cache (results of another shader) shows up as a different FMA unit in GLES vs Vulkan."""
     warnings = []
     for core in dict.fromkeys(p["core"] for p in plan):
-        u = {api: max(v for k, v in slopes[(core, api, "float", "mad")].items() if k != "texture")
+        u = {api: _alu(slopes[(core, api, "float", "mad")], core)
              for api in APIS if (core, api, "float", "mad") in slopes}
         if len(u) == 2 and abs(u["gles"] - u["vulkan"]) > 0.2 * max(u.values()):
             warnings.append(f"{core}: FMA unit differs, GLES {u['gles']:.5f} vs Vulkan {u['vulkan']:.5f} cycles")
@@ -147,19 +157,20 @@ def _row(p, slopes, malioc_version, warnings):
         s = {k: s[k] - p["extra"] * add[k] for k in s}
         sh = {k: sh[k] - p["extra"] * add[k] for k in sh}
     unit = slopes.get((p["core"], p["api"], "float", "mad"), {})
-    unit_c = max(v for k, v in unit.items() if k != "texture") if unit else 0
+    unit_c = _alu(unit, p["core"]) if unit else 0
     # a function may move a little work off a pipe vs the baseline, but not several FMAs
     neg = min((v, k) for k, v in s.items() if k != "texture")
     if unit_c and neg[0] < -4 * unit_c:
         warnings.append(f"{p['core']} | {p['api']} | {p['variant']} | {p['fid']}: "
                         f"{neg[1]} = {neg[0] / unit_c:.1f} FMA per call")
     s = {k: max(0.0, v) for k, v in s.items()}
-    short = max([max(0.0, v) for k, v in sh.items() if k != "texture"] or [0.0])
+    short = _alu({k: max(0.0, v) for k, v in sh.items()}, p["core"])
     tex = s.pop("texture", 0.0)
-    alu = max(s.values()) if s else 0.0
+    alu = _alu(s, p["core"]) if s else 0.0
     # the texture pipe runs in parallel with arithmetic: the busiest pipe is the cost
     cyc = max(alu, tex)
-    bound = ("TEX" if tex >= alu else max(s, key=s.get)) if cyc > 1e-9 else "-"
+    top = max(s, key=s.get) if s else "arithmetic"
+    bound = ("TEX" if tex >= alu else top if s.get(top, -1) >= alu - 1e-9 else "arithmetic") if cyc > 1e-9 else "-"
     ref = slopes.get((p["core"], p["api"], "float", "tex2D"), {}).get("texture", 0)
     props2, props1 = p["r2"]["props"], p["rs"]["props"]
     return {

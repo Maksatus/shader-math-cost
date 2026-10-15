@@ -1,19 +1,20 @@
 """paretogpu/out (never in git): frame_<project>_<time>[_<suffix>]/ snapshots, variants_<project>/ (shared by frames
-and materials), _matcompare/<time>/, _matshader/<time>/, _ui/ (settings, history, logs)."""
+and materials), _matcompare/<time>/, _ui/ (settings, history, logs)."""
 import json
 import os
 import re
 import time
 
+from paretogpu.core.events import global_keywords_known
+
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(PKG, "out")
 UI = os.path.join(OUT, "_ui")
-RESULTS = {"matcompare": "_matcompare", "matshader": "_matshader"}
+RESULTS = {"matcompare": "_matcompare"}
 SNAPSHOT_FILE = "frame_events.json"
 COST_FILE = "frame_cost.json"
 COST_CSV = "frame_cost.csv"
 REPORT_PAGE = "frame_report.html"
-HOTSPOTS_PAGE = "hotspots.html"
 THUMB = "thumb.png"
 
 
@@ -69,6 +70,12 @@ def snapshot_dir(name):
     return path if is_snapshot(path) else None
 
 
+def capture_of(frame_dir, frame):
+    """-> (the snapshot's RenderDoc capture or None, adb serial of the device that replays it or None: the desktop)."""
+    rd = frame.get("renderdoc") or {}
+    return (os.path.join(frame_dir, rd["capture"]) if rd.get("capture") else None), rd.get("replay")
+
+
 def variants_dirs():
     if not os.path.isdir(OUT):
         return []
@@ -88,9 +95,8 @@ def snapshots_of(project, folders):
             seen.add(p)
             with open(p, encoding="utf-8") as f:
                 fr = json.load(f)
-            # a device frame's keywords and passes are unknown
             same = os.path.normcase(os.path.abspath(fr.get("project") or "")) == os.path.normcase(
                 os.path.abspath(project))
-            if same and fr.get("source") != "device":
+            if same and global_keywords_known(fr["events"]):
                 out.append(fr["events"])
     return out

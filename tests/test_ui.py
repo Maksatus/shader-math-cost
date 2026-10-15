@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from paretogpu.store import workspace
-from paretogpu.ui import presets, runner
+from paretogpu.ui import api, presets, runner
 
 SCH = presets.schema()
 
@@ -37,8 +37,9 @@ class PresetsTest(unittest.TestCase):
     def test_frame_cost_of_a_phone_is_a_device_snapshot_priced_like_the_editors(self):
         with mock.patch.object(presets, "android_package", return_value="com.game"):
             steps, frame_dir = presets.plan("frame_cost", {"project": r"device:SER1:D:\Game", "suffix": "x",
-                                                           "cores": "Mali-G78"}, SCH)
+                                                           "cores": "Mali-G78", "wait": 5}, SCH)
         self.assertEqual([c for c, _ in steps], ["device", "cost"])
+        self.assertEqual(steps[0][1]["wait"], 5)
         self.assertTrue(frame_dir.endswith("_x_device"))
         dev, cost = steps[0][1], steps[1][1]
         self.assertEqual((dev["frame"], dev["project"], dev["app"], dev["serial"]), (frame_dir, r"D:\Game", "com.game",
@@ -66,8 +67,6 @@ class PresetsTest(unittest.TestCase):
     def test_missing_values_are_refused(self):
         with self.assertRaises(ValueError):
             presets.plan("frame_cost", {}, SCH)
-        with self.assertRaisesRegex(ValueError, "matshader: .*material"):
-            presets.plan("matshader", {"project": r"D:\Game"}, SCH)
         with self.assertRaises(ValueError):
             presets.plan("nothing", {}, SCH)
 
@@ -95,6 +94,38 @@ class HintTest(unittest.TestCase):
         self.assertIn("Unity", h["text"])
         self.assertIn("RenderDoc", runner.hint_of(self.job(["renderdoc failed"], cmd="frame"))["text"])
         self.assertIn("лог", runner.hint_of(self.job(["something else"]))["text"])
+
+    def test_renderdoc_failing_on_the_phone_gets_the_phone_hint(self):
+        self.assertIn("телефона", runner.hint_of(self.job(["x"], ["renderdoc"], cmd="device"))["text"])
+        self.assertIn("Load RenderDoc", runner.hint_of(self.job(["x"], ["renderdoc"], cmd="frame"))["text"])
+
+
+class ApiTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.state = mock.patch.object(api, "STATE", self.dir)
+        self.state.start()
+
+    def tearDown(self):
+        self.state.stop()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_remembered_projects_are_unique_folders_without_phones(self):
+        api.remember_values("frame_cost", {"project": "D:/Game/"})
+        api.remember_values("frame_cost", {"project": r"d:\game"})
+        api.remember_values("frame_cost", {"project": r"device:SER1:D:\Other"})
+        with open(os.path.join(self.dir, "settings.json"), encoding="utf-8") as f:
+            projects = json.load(f)["projects"]
+        self.assertEqual([api.project_key(p) for p in projects], [api.project_key(r"D:\Other"),
+                                                                   api.project_key(r"D:\Game")])
+
+    def test_adb_answers_are_cached(self):
+        api._adb.clear()
+        with mock.patch("paretogpu.adapters.renderdoc.devices", return_value=[("S", "Phone")]) as dev:
+            self.assertEqual(api.adb_cached("devices"), [("S", "Phone")])
+            api.adb_cached("devices")
+        self.assertEqual(dev.call_count, 1)
+        api._adb.clear()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """One run at a time; each step is a subprocess with PARETOGPU_PROGRESS=1 whose `##progress {json}` lines
 (views/reporter.py) drive the phases, every other line is the log. history.json phase durations feed the ETA."""
+import ctypes
 import json
 import os
 import statistics
@@ -8,6 +9,7 @@ import threading
 import time
 import traceback
 
+from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.app import device as device_app
 from paretogpu.ui import api, presets
 from paretogpu.ui.api import STATE, load_json as _load, save_json as _save
@@ -18,11 +20,31 @@ LOG_LINES = 50000  # in memory per run; the .log file has all
 ROOT = presets.ROOT
 
 
+def tree_job(proc):
+    """A Windows job holding proc and every process it starts (taskkill /T loses children whose parent already
+    exited); terminating it kills them all, the adb server too (adb restarts it)."""
+    k = ctypes.windll.kernel32
+    k.CreateJobObjectW.restype = ctypes.c_void_p
+    job = k.CreateJobObjectW(None, None)
+    if not k.AssignProcessToJobObject(ctypes.c_void_p(job), ctypes.c_void_p(int(proc._handle))):
+        raise OSError(f"AssignProcessToJobObject failed: {ctypes.GetLastError()}")
+    return job
+
+
+def kill_job(job):
+    ctypes.windll.kernel32.TerminateJobObject(ctypes.c_void_p(job), 1)
+
+
+def close_job(job):
+    ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(job))
+
+
 class Runner:
     def __init__(self):
         self.lock = threading.Lock()
         self.job = None
         self.proc = None
+        self.proc_job = None
         self.stopping = False
         self.history = _load(os.path.join(STATE, "history.json"), {})  # "cmd/phase" -> last durations, s
         self.past = []
@@ -169,8 +191,11 @@ class Runner:
                     self._end_step(s, "failed")
                     job["error"] = str(e)
                 return
+            pjob = tree_job(proc)
             with self.lock:
-                self.proc = proc
+                self.proc, self.proc_job = proc, pjob
+                if self.stopping:
+                    kill_job(pjob)
             for line in proc.stdout:
                 line = line.rstrip("\r\n")
                 with self.lock:
@@ -183,7 +208,9 @@ class Runner:
                         self._log(job, line, f)
             rc = proc.wait()
             with self.lock:
-                self.proc = None
+                self.proc, self.proc_job = None, None
+            close_job(pjob)
+            with self.lock:
                 s["rc"] = rc
                 if self.stopping:
                     self._end_step(s, "stopped")
@@ -251,10 +278,14 @@ class Runner:
             if not self.job or self.job["status"] != "running":
                 return False
             self.stopping = True
-            proc = self.proc
-        if proc and proc.poll() is None:
-            # /T: also malioc, qrenderdoc, the Unity CLI client (the editor itself is not a child)
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            proc, pjob = self.proc, self.proc_job
+            phone = next((s["values"] for s in self.job["steps"] if s["cmd"] == "device" and s["status"] == "running"),
+                         None)
+        if proc and pjob:  # also malioc, qrenderdoc, the Unity CLI client (the editor itself is not a child)
+            kill_job(pjob)
+        if phone:
+            subprocess.run([rdoc.adb(), "-s", phone["serial"], "shell", "am", "force-stop", phone["app"]],
+                           capture_output=True, timeout=60)
         return True
 
     def capture(self):
@@ -296,6 +327,9 @@ HINTS = [
     ("rd_not_game_frame", "is not the game frame", "RenderDoc несколько раз подряд записал только окно редактора, а не "
      "кадр игры. Сделайте вкладку Game видимой (не за другой вкладкой, окно Unity не свёрнуто) и запустите проверку "
      "ещё раз."),
+    ("not_vulkan", "needs the editor on Vulkan", "Редактор Unity запущен не на Vulkan, а сборка на телефоне — Vulkan: "
+     "кадр с другим API не сравнить. Запустите Unity с -force-vulkan (Unity Hub → проект → аргументы командной "
+     "строки) и снимите кадр ещё раз."),
     ("not_playing", "is not in Play Mode", "Unity не в Play Mode: кадр в редакторе без запущенной игры не тот, что на "
      "устройстве. Включите Play Mode, выставьте нужный кадр в окне Game и снимите кадр ещё раз."),
     ("no_frame", "did not capture a frame", "Frame Debugger не получил кадр игры. Включите в Unity Play Mode, сделайте "
@@ -319,7 +353,8 @@ def waiting(job):
 
 
 def hint_of(job):
-    codes = [s.get("error_code") for s in job["steps"] if s.get("error_code")]
+    codes = ["device" if s["cmd"] == "device" and s["error_code"] == "renderdoc" else s["error_code"]
+             for s in job["steps"] if s.get("error_code")]
     text = ("\n".join(job["log"][-400:]) + "\n" + (job.get("error") or "")).lower()
     for code, needle, hint in HINTS:
         if code in codes or (not codes and needle.lower() in text):

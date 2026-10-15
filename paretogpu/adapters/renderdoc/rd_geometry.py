@@ -1,5 +1,5 @@
-# Runs inside qrenderdoc --python. In: capture PARETOGPU_RDC, PARETOGPU_IN [[eid, instances]] (draws), PARETOGPU_ROOT,
-# PARETOGPU_DEVICE (adb serial: replayed on that device, rd_replay.py). Out: PARETOGPU_OUT {eid: {"tris", "offset",
+# Runs inside qrenderdoc --python. In: PARETOGPU_RDC, PARETOGPU_DEVICE (rd_replay.py), PARETOGPU_IN [[eid, instances]]
+# (draws). Out: PARETOGPU_OUT {eid: {"tris", "offset",
 # "viewport": [x, y, w, h], "scissor": [x, y, w, h] or None, "depth_clip", "bias": [constant, clamp, slope] or None,
 # "depth_format", "size": [w, h], "samples", "cull", "front_ccw", "depth": id or 0, "ztest": on, "zfunc",
 # "zwrite"} or {"error"}} and <out>.bin: float32 clip-space positions (x, y, z, w), 3 per triangle after culling is
@@ -43,11 +43,11 @@ def triangles(controller, inst, topology):
 
 
 def main():
-    sys.path.insert(0, os.path.join(os.environ["PARETOGPU_ROOT"], "paretogpu", "adapters", "renderdoc"))
-    from rd_replay import Replay
+    sys.path.insert(0, os.environ["PARETOGPU_LIB"])
+    import rd_replay
     with open(os.environ["PARETOGPU_IN"], encoding="utf-8") as f:
         asked = sorted(json.load(f))
-    rp = Replay()
+    rp = rd_replay.Replay(*rd_replay.environment())
     meta, offset, full = {}, 0, True
     with open(out_path + ".bin", "wb") as blob:
         for n, (eid, instances) in enumerate(asked):

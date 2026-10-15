@@ -9,9 +9,8 @@ function matSide(m, tag) {
     <div class="small" style="margin-top:4px">${kws(m.keywords)}</div></div>`;
 }
 
-let selPart = "px", selApi = D && D.api;
-const PR = p => (p && ((p.prices_by_api || {})[selApi] || (selApi === D.api ? p.prices : null))) || {};
-const API_NAME = {vulkan: "Vulkan", gles: "GLES"};
+let selPart = "px";
+const PR = p => (p && p.prices) || {};
 const PIPES = [["arith", "A — арифметика"], ["fma", "FMA", 1], ["cvt", "CVT", 1], ["sfu", "SFU", 1],
   ["ls", "LS — память"], ["v", "V — varyings"], ["t", "T — текстуры"]];
 
@@ -38,7 +37,7 @@ function pipesTable(xa, xb, k, n) {
   const rows = PIPES.filter(([key]) => has(key)).map(([key, label, sub]) => `<tr${sub ? ` class="subp"` : ""}><td>${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
     ${v(la, key, ta)}${v(lb, key, tb)}${d(la && la[key], lb && lb[key])}
     ${v(ga && ga.shortest, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.shortest, key)}${v(ga && ga.total, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.total, key)}</tr>`).join("");
-  return `<h3>По конвейерам <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}, ${API_NAME[selApi] || esc(selApi)}</span></h3>
+  return `<h3>По конвейерам <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}</span></h3>
     <table class="cmp">${cols(7)}<tr><th rowspan="2">Конвейер</th><th class="n grp" colspan="3" title="Самый дорогой путь через шейдер: каждый if идёт по более дорогой ветке. По нему считается цена; ● — самый загруженный блок, его циклы и есть цена">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
       <th class="n grp gl" colspan="2" title="Все if идут по дешёвой ветке">Короткий путь</th><th class="n grp gl" colspan="2" title="Каждая инструкция один раз: обе ветки if, тело цикла один раз. Объём кода, а не время">Всего (весь код)</th></tr>
       <tr><th class="n">A</th><th class="n">B</th><th class="n">B − A</th><th class="n gl">A</th><th class="n">B</th><th class="n gl">A</th><th class="n">B</th></tr>${rows}</table>
@@ -76,11 +75,11 @@ function verdict(pa, pb, k) {
     }
     const tot = wins.A.length + wins.B.length + wins["="].length;
     const w = c ? c.who : null;
-    notes.push(!w && wins["="].length === tot ? `поровну на всех ${tot} ядрах` : w && wins[w].length === tot ? `на всех ${tot} ядрах`
+    notes.push(!w && wins["="].length === tot ? `поровну на всех ядрах (${tot})` : w && wins[w].length === tot ? `на всех ядрах (${tot})`
       : `ядра: ${["A", "B"].filter(x => wins[x].length).map(x => `${x} дешевле на ${wins[x].map(esc).join(", ")}`).join("; ")}${wins["="].length ? `; поровну на ${wins["="].map(esc).join(", ")}` : ""}`);
   }
   return `<div class="verdict ${c ? (c.who === "B" ? "vb" : "va") : ""}"><div class="vh">${head}</div>
-    <div class="small muted">${PARTS[k][0].toLowerCase()} на ${esc(core)}${(D.apis || []).length > 1 ? ", " + (API_NAME[selApi] || esc(selApi)) : ""}${dep ? `, n = ${n}` : ""}: ${c1(xa[k][n])} против ${c1(xb[k][n])} циклов · ${notes.join(" · ")}</div></div>`;
+    <div class="small muted">${PARTS[k][0].toLowerCase()} на ${esc(core)}${dep ? `, n = ${n}` : ""}: ${c1(xa[k][n])} против ${c1(xb[k][n])} циклов · ${notes.join(" · ")}</div></div>`;
 }
 
 function renderMaterials() {
@@ -89,22 +88,21 @@ function renderMaterials() {
   const A = esc(D.a.material), B = esc(D.b.material);
   const head = `<div class="card"><h1>Сравнение материалов</h1>
     <div class="ab">${matSide(D.a, "A")}<div class="arrow">→</div>${matSide(D.b, "B")}</div>
-    <div class="mode small muted">Расчёт ${when(D.computed_at, true)} · ${esc(D.api)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
+    <div class="mode small muted">Расчёт ${when(D.computed_at, true)} · malioc ${esc(D.malioc || "?")} · ${esc(D.project)}</div>
     ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(msg(w))}</li>`).join("")}</ul></div>` : ""}
     <p class="small" style="margin:10px 0 0">${refLink("compare-materials", "Как читать сравнение")} · ${costHelp}</p></div>`;
   if (!D.cores.length) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;
   const parts = `<div class="seg" id="parts">${Object.entries(PARTS).map(([k, [t]]) => `<button data-k="${k}" class="${k === selPart ? "on" : ""}">${t}</button>`).join("")}</div>`;
-  const apis = (D.apis || [D.api]).length > 1 ? `<div class="seg" id="apis">${D.apis.map(x => `<button data-a="${esc(x)}" class="${x === selApi ? "on" : ""}">${API_NAME[x] || esc(x)}</button>`).join("")}</div>` : "";
   const nsel = looped ? `<span class="small muted">n циклов</span><div class="seg" id="ns">${D.ns.map(n => `<button data-n="${n}" class="${n === selN ? "on" : ""}">${n}</button>`).join("")}</div>` : "";
-  const tools = `<div class="card" style="padding:10px 16px"><div class="tools" style="margin:0">${parts}${apis}<span class="small muted" style="margin-left:8px">Ядро</span>${cores}<span style="flex:1"></span>${nsel}</div></div>`;
+  const tools = `<div class="card" style="padding:10px 16px"><div class="tools" style="margin:0">${parts}<span class="small muted" style="margin-left:8px">Ядро</span>${cores}<span style="flex:1"></span>${nsel}</div></div>`;
   const n = String(selN), k = selPart;
   const cell = (v, other) => `<td class="n ${v != null && other != null && v < other ? "good" : ""}">${v != null && other != null && v < other ? `<b>${c1(v)}</b>` : c1(v)}</td>`;
   const th = `<th class="n" title="${A}">A</th><th class="n" title="${B}">B</th><th class="n">B − A</th>`;
   const cards = pairs.map(([pa, pb]) => {
     const xa = pa && PR(pa)[core], xb = pb && PR(pb)[core];
     const name = pa && pb && pa.pass !== pb.pass ? `${esc(pa.pass)} ↔ ${esc(pb.pass)}` : esc((pa || pb).pass);
-    const byN = byNs(xa, k) || byNs(xb, k) ? `<h3>${PARTS[k][0]} при разном n <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}, ${API_NAME[selApi] || esc(selApi)}</span></h3>
+    const byN = byNs(xa, k) || byNs(xb, k) ? `<h3>${PARTS[k][0]} при разном n <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}</span></h3>
       <table class="cmp">${cols(3)}<tr><th>n циклов</th>${th}</tr>
       ${D.ns.map(m => { const u = xa && xa[k][String(m)], w = xb && xb[k][String(m)];
         return `<tr${m === selN ? ` class="sel"` : ""}><td><b>${m}</b></td>${cell(u, w)}${cell(w, u)}${dPct(u, w)}</tr>`; }).join("")}</table>` : "";
@@ -134,7 +132,6 @@ function renderMaterials() {
   $("#app").innerHTML = head + tools + cards;
   document.querySelectorAll("#cores button").forEach(b => b.onclick = () => { core = b.dataset.c; render(); });
   document.querySelectorAll("#ns button").forEach(b => b.onclick = () => { selN = +b.dataset.n; render(); });
-  document.querySelectorAll("#apis button").forEach(b => b.onclick = () => { selApi = b.dataset.a; render(); });
   document.querySelectorAll("#parts button").forEach(b => b.onclick = () => { selPart = b.dataset.k; render(); });
 }
 VIEWS.materials = renderMaterials;

@@ -1,6 +1,8 @@
 """Vulkan variants from Unity's "Compile and show code" text (ShaderUtil.OpenCompiledShader, the build's compiler):
 its glslang disassembly is assembled back into SPIR-V with spirv-as; identical to the build's code but the generator
-word of the header. CompileVariant(forExternalTool) for Vulkan fails in Unity 6.4 on Forward+, SSAO and URP post."""
+word of the header. CompileVariant for Vulkan fails in Unity 6.4 on shaders with globals outside cbuffers (Forward+,
+SSAO, URP post, CoreBlit): "Compiler reported top-level params outside of cbuffers", with keywords the pass declares
+and either forExternalTool, while the variants it does compile equal these byte for byte."""
 import os
 import re
 import struct

@@ -1,5 +1,5 @@
 """Compiled variants folder of a project:
-  <shader>/ GLSL .vert/.frag (GLES3); <shader>_vulkan/ SPIR-V .vert.spv/.frag.spv; each with manifest.json
+  <shader>/ SPIR-V .vert.spv/.frag.spv with manifest.json
   variants.json: every variant ever seen (files, errors, fingerprint); _compiled/: raw output of the last Unity run
 """
 import json
@@ -15,9 +15,8 @@ def raw_dir(root):
     return os.path.join(root, RAW)
 
 
-def load_manifests(root, fingerprints=None, platforms=None):
-    """-> {key: {(platform, stage): relative file}}. Fills `fingerprints` {key: fp, None if files disagree} from
-    `platforms` files only (other platforms' files keep an older fingerprint)."""
+def load_manifests(root, fingerprints=None):
+    """-> {key: {stage: relative file}}. Fills `fingerprints` {key: fp, None if files disagree}."""
     have = {}
     if not os.path.isdir(root):
         return have
@@ -30,36 +29,32 @@ def load_manifests(root, fingerprints=None, platforms=None):
                 if "subshader" not in m or not os.path.exists(os.path.join(root, d, m["file"])):
                     continue
                 k = VariantKey(m["shader"], m["subshader"], m["pass_index"], m["pass"], tuple(m["keywords"]))
-                have.setdefault(k, {})[(m["platform"], SHORT[m["stage"]])] = f"{d}/{m['file']}"
-                if fingerprints is not None and (platforms is None or m["platform"] in platforms):
+                have.setdefault(k, {})[SHORT[m["stage"]]] = f"{d}/{m['file']}"
+                if fingerprints is not None:
                     fp = m.get("fingerprint")
                     fingerprints[k] = fp if fingerprints.get(k, fp) == fp else None
     return have
 
 
-def place(root, raw, keys, result, patch=None):
-    """-> {key: [errors]}. patch(platform, data) -> (data, note or None) is applied to every file before writing."""
+def place(root, raw, keys, result):
+    """-> {key: [errors]}."""
     manifests, errors = {}, {}
     for v in result["variants"]:
         k = keys[v["id"]]
         errors[k] = list(v["errors"])
         for x in v["files"]:
-            plat, stage = x["platform"], x["stage"]
+            stage = x["stage"]
             with open(os.path.join(raw, x["file"]), "rb") as f:
                 data = f.read()
-            patched = None
-            if patch:
-                data, patched = patch(plat, data)
-            sub = k.folder(plat)
-            fn = k.base_name + EXT[(plat, stage)]
+            sub = k.folder
+            fn = k.base_name + EXT[stage]
             os.makedirs(os.path.join(root, sub), exist_ok=True)
             with open(os.path.join(root, sub, fn), "wb") as f:
                 f.write(data)
             manifests.setdefault(sub, []).append({
                 "file": fn, "shader": k.shader, "pass": k.pass_name, "subshader": k.subshader,
-                "pass_index": k.pass_index, "keywords": list(k.keywords), "stage": STAGE[stage], "platform": plat,
-                "source": "CompileVariant" if plat == "gles3" else "Compile and show code",
-                "fingerprint": v.get("fingerprint"), **({"patched": patched} if patched else {})})
+                "pass_index": k.pass_index, "keywords": list(k.keywords), "stage": STAGE[stage],
+                "fingerprint": v.get("fingerprint")})
     for sub, entries in manifests.items():
         path = os.path.join(root, sub, "manifest.json")
         old = []
@@ -91,14 +86,3 @@ def load_index(root):
 
 def save_index(root, index):
     _write_json(os.path.join(root, INDEX), {"variants": list(index.values())})
-
-
-def gles_file(root, file):
-    """<shader>_vulkan/<name>.frag.spv -> <root>/<shader>/<name>.frag, or None when not compiled."""
-    folder, name = os.path.split(file.replace("\\", "/"))
-    if folder.endswith("_vulkan"):
-        folder = folder[:-len("_vulkan")]
-    if name.endswith(".spv"):
-        name = name[:-len(".spv")]
-    path = os.path.join(root, folder, name)
-    return path if os.path.isfile(path) else None

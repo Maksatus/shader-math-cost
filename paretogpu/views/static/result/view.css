@@ -76,20 +76,4 @@ table.chars { table-layout: fixed; }
 .bnd i { font-style: normal; font-weight: 400; color: var(--muted); }
 .costhelp { color: var(--accent, #34d399); font-size: 12px; text-decoration: none; }
 .costhelp:hover { text-decoration: underline; }
-.abl { margin-top: 16px; }
-.parts td { cursor: pointer; }
-.parts tr.on td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.parts td.code, .codev td.code { font: 12.5px var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; max-width: 0; }
-.parts tr.kid td { color: var(--muted); }
-.codev { max-height: 560px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; }
-.codev table { margin: 0; }
-.codev td { padding: 1px 8px; border-bottom: 0; vertical-align: middle; }
-.codev td.no { color: var(--muted); font: 11.5px var(--mono); text-align: right; width: 52px; user-select: none; }
-.codev td.heat { width: 150px; }
-.codev td.val { width: 64px; font: 11.5px var(--mono); text-align: right; color: var(--muted); }
-.codev tr.part td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
-.codev tr.mv td { background: color-mix(in srgb, var(--info) 16%, transparent); }
-.codev tr.sel td { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-.hb { height: 8px; border-radius: 4px; background: var(--heavy); opacity: .85; }
-.hb.lo { background: var(--medium); }
 .empty { padding: 40px; text-align: center; color: var(--muted); }

@@ -1,11 +1,16 @@
 # Runs inside qrenderdoc --python (RenderDoc's UI python, not the normal interpreter).
-# In: capture PARETOGPU_RDC. Out: PARETOGPU_OUT {"counters", "actions": leaf actions with marker path and counters
-# (*_invocations = times that shader stage ran)}; a traceback goes to <out>.error.
+# In: capture PARETOGPU_RDC, PARETOGPU_LIB. Out: PARETOGPU_OUT {"counters", "actions": leaf actions with marker path,
+# counters (*_invocations = times that shader stage ran) and a call's uniform "blocks" {"@set.binding": base64}};
+# a traceback goes to <out>.error.
 import json
 import os
+import sys
 import traceback
 
 import renderdoc as rd
+
+sys.path.insert(0, os.environ["PARETOGPU_LIB"])
+from rd_replay import block_bytes  # noqa: E402
 
 out_path = os.environ["PARETOGPU_OUT"]
 
@@ -37,7 +42,17 @@ def main():
         v = res.value.d if desc.resultType == rd.CompType.Float else res.value.u64
         counters.setdefault(res.eventId, {})[wanted[res.counter]] = v
 
-    actions = []
+    actions, cache = [], {}
+
+    def blocks(a, kinds):
+        controller.SetFrameEvent(a.eventId, True)
+        pipe = controller.GetPipelineState()
+        out = {}
+        for stage in ((rd.ShaderStage.Compute,) if "dispatch" in kinds else (rd.ShaderStage.Vertex, rd.ShaderStage.Pixel)):
+            refl = pipe.GetShaderReflection(stage)
+            if refl is not None:
+                out.update(block_bytes(controller, pipe, stage, refl, cache))
+        return out
 
     def walk(items, path):
         for a in items:
@@ -52,7 +67,8 @@ def main():
             else:
                 actions.append({"event": a.eventId, "name": name, "path": "/".join(path), "kinds": kinds,
                                 "indices": a.numIndices, "instances": a.numInstances,
-                                **counters.get(a.eventId, {})})
+                                **counters.get(a.eventId, {}),
+                                **({"blocks": blocks(a, kinds)} if {"draw", "dispatch"} & set(kinds) else {})})
 
     walk(controller.GetRootActions(), [])
     with open(out_path, "w", encoding="utf-8") as f:

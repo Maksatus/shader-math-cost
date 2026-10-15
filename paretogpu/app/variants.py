@@ -2,7 +2,6 @@
 reads). A device frame's SPIR-V is measured as it is, never compiled."""
 import hashlib
 import os
-import re
 import shutil
 
 from paretogpu.adapters.unity import variants as unity_variants
@@ -18,7 +17,6 @@ from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
 
 NOT_COMPILED_YET = "not compiled yet (--no-compile)"
-UNNAMED = re.compile(r"^(Graphics Pipeline|Shader Module) \d+$")
 PASSES = "passes/2"
 
 
@@ -41,11 +39,12 @@ def shader_passes(project, shaders, root, memo=None):
     return out
 
 
-def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
+def identify(events: list[Event], frame_dir, root, project, rep=CONSOLE) -> int:
     """Matches device draws to project variants by byte-equal SPIR-V (Unity compiles the same code in the editor); ties
-    -> fewest keywords. A named draw takes only its shader's variants; an unnamed one (RenderDoc's "Graphics Pipeline
-    N" / "Shader Module N") the code's shader if only one has it. Depth-only draws match by vertex code alone, shared by several shaders (Unity names the
-    module after the first), so the shader drawing the same mesh elsewhere wins; else unknown. -> draws matched."""
+    -> fewest keywords. A named draw takes only its shader's variants; an unnamed one (shader None) the code's shader if
+    only one has it. Depth-only draws match by vertex code alone, shared by several shaders (Unity names the module
+    after the first), so the shader drawing the same mesh elsewhere wins; else unknown. The pass's LightMode comes from
+    the project's pass table (the editor). -> draws matched."""
     draws = [ev for ev in events if (ev.get("code") or {}).get("vert") and ev["kind"] == "draw"]
     if not draws:
         return 0
@@ -55,7 +54,7 @@ def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
             return hashlib.sha1(f.read()).hexdigest()
     pairs, verts = {}, {}
     for k, files in store.load_manifests(root).items():
-        v, f = files.get(("vulkan", "vert")), files.get(("vulkan", "frag"))
+        v, f = files.get("vert"), files.get("frag")
         if v and f:
             dv = digest(os.path.join(root, v))
             pairs.setdefault((dv, digest(os.path.join(root, f))), []).append((k, {"vert": v, "frag": f}))
@@ -72,7 +71,7 @@ def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
         if code.get("frag"):
             found = pairs.get((digest(os.path.join(frame_dir, code["vert"])),
                                digest(os.path.join(frame_dir, code["frag"])))) or []
-            found = ([x for x in found if x[0].shader == ev["shader"]] if not UNNAMED.match(ev["shader"] or "")
+            found = ([x for x in found if x[0].shader == ev["shader"]] if ev["shader"] is not None
                      else found if len({x[0].shader for x in found}) == 1 else [])
             if found:
                 take(ev, found)
@@ -91,13 +90,21 @@ def identify(events: list[Event], frame_dir, root, rep=CONSOLE) -> int:
         if mine:
             take(ev, mine)
             found_depth += 1
+    matched = [ev for ev in draws if ev["code"].get("variant")]
+    passes = shader_passes(project, {ev["shader"] for ev in matched}, root) if matched else {}
+    for ev in matched:
+        lm = {(p["subshader"], p["pass_index"]): p["light_mode"] for p in passes.get(ev["shader"]) or []}
+        if (ev["subshader"], ev["pass_index"]) not in lm:
+            raise VariantsError(f"{ev['shader']} pass {ev['subshader']}.{ev['pass_index']} is not in the project's "
+                                "pass table: its LightMode (the draw's stage) is unknown")
+        ev["light_mode"] = lm[(ev["subshader"], ev["pass_index"])]
     rep.log(f"  variants of the device frame: {len(color)} of {len(draws) - len(depth)} draws with a fragment shader "
             f"and {found_depth} of {len(depth)} depth-only draws have the code of a variant of the project")
     return len(color) + found_depth
 
 
 def place_captured(events: list[Event], frame_dir, root) -> dict:
-    """-> {VariantKey: {("vulkan", stage): file in root}}: identify()'s variant files, else the device SPIR-V copied
+    """-> {VariantKey: {stage: file in root}}: identify()'s variant files, else the device SPIR-V copied
     once into <root>/<shader>_device/ (named by content). Never compiled: the code is the variant."""
     out = {}
     for ev in events:
@@ -108,7 +115,7 @@ def place_captured(events: list[Event], frame_dir, root) -> dict:
         if k in out:
             continue
         if code.get("files"):
-            out[k] = {("vulkan", st): rel for st, rel in code["files"].items()}
+            out[k] = dict(code["files"])
             continue
         files = {}
         for s in ("vert", "frag", "comp"):
@@ -120,26 +127,23 @@ def place_captured(events: list[Event], frame_dir, root) -> dict:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copyfile(os.path.join(frame_dir, code[s]), dst + ".tmp")
                 os.replace(dst + ".tmp", dst)
-            files[("vulkan", s)] = rel
+            files[s] = rel
         out[k] = files
     return out
 
 
-def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
-        rep=CONSOLE, recompile=False, retry_failed=False, captured=None) -> VariantState:
+def run(events: list[Event], project, root, cores, jobs=None, compile_missing=True, rep=CONSOLE, recompile=False, retry_failed=False, captured=None) -> VariantState:
     """captured (place_captured()): measured as they are, not compiled."""
     root = os.path.abspath(root)
     project = project and os.path.abspath(project)
     captured = captured or {}
     keys = list(dict.fromkeys(VariantKey.of(e) for e in events if e["kind"] in ("draw", "compute")))
     engine = Engine(rep, jobs)
-    compiling = CompileRule(project, root, platforms, compile_missing, recompile, retry_failed, rep)
+    compiling = CompileRule(project, root, compile_missing, recompile, retry_failed, rep)
     todo = [k for k in keys if k not in captured]
     compiled = engine.get(compiling, todo) if todo else {}
     compiled.update({k: {"files": dict(f), "errors": [] if f else ["no shader in the capture"]}
                      for k, f in captured.items() if k in keys})
-    for v in compiled.values():
-        v["files"] = {ps: fn for ps, fn in v["files"].items() if ps[0] in platforms}
     files = sorted({fn for v in compiled.values() for fn in v["files"].values()})
     measurements = {}
     if files:
@@ -156,12 +160,6 @@ def run(events: list[Event], project, root, cores, platforms=("gles3", "vulkan")
             "captured": set(captured)}
 
 
-def compile_keys(keys, project, root, platforms, rep=CONSOLE, compile_missing=True):
-    """-> {key: {"files", "errors"}}; still-valid variants are kept."""
-    return Engine(rep).get(CompileRule(project and os.path.abspath(project), os.path.abspath(root), platforms,
-                                       compile_missing=compile_missing, rep=rep), keys)
-
-
 def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     """-> {file: {core: LoopProfile}} only on cores where the longest path is N/A ({} if not forceable), so a file's
     price on one core does not depend on which other cores the run measures."""
@@ -172,7 +170,8 @@ def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     if not dyn:
         rep.skip("loops")
         return {}
-    rep.log(f"pricing dynamic loops of {len(dyn)} files: every outer loop at 0 and 2 iterations, the others at 1 ...")
+    rep.log(f"pricing dynamic loops of {len(dyn)} files: every outer loop at 0, {loops.SLOPE_M}, "
+            f"{2 * loops.SLOPE_M} and {4 * loops.SLOPE_M} iterations, the others at 1 ...")
     res = Engine(rep, jobs).get(LoopRule(root), sorted(na))
     out = {fn: {} for fn in dyn}
     for (fn, core), p in res.items():
@@ -185,37 +184,18 @@ def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
     return out
 
 
-def bounds_of(state: VariantState, project, root, compile_missing=True, rep=CONSOLE) -> dict:
-    """-> {file: [bound per outer loop or None]}, read from the GLES file of the same variant (HLSLcc keeps uniform
-    names, outer loops in the same order); device code has no GLES file: read from its SPIR-V. Files whose GLES file is
-    missing or has another outer loop count are left out (default n)."""
+def bounds_of(state: VariantState, root, rep=CONSOLE) -> dict:
+    """-> {file: [bound per outer loop or None]}, read from its SPIR-V. Files with another outer loop count than their
+    profile are left out (default n)."""
     looped = {fn: next(iter(p.values())) for fn, p in (state.get("loops") or {}).items() if p}
     if not looped:
         rep.skip("bounds")
         return {}
     rep.phase("bounds")
-    stage_of = {fn: (k, s) for k, files in state["files"].items() for (_, s), fn in files.items()}
-    captured = state.get("captured") or set()
-    keys = list(dict.fromkeys(stage_of[fn][0] for fn in looped if fn in stage_of and stage_of[fn][0] not in captured))
-    gles = {}
-    if keys:
-        try:
-            gles = compile_keys(keys, project, root, ["gles3"], rep, compile_missing and bool(project))
-        except VariantsError as e:
-            rep.log(f"  GLES files not compiled ({e}): the compiled ones are used without checking")
-            gles = compile_keys(keys, project, root, ["gles3"], rep, False)
     out = {}
     for fn, profile in looped.items():
-        k, s = stage_of.get(fn, (None, None))
-        if k in captured:
-            with open(os.path.join(root, fn), "rb") as f:
-                b = loops.spirv_bounds(f.read())
-        else:
-            rel = ((gles.get(k) or {}).get("files") or {}).get(("gles3", s))
-            if not rel:
-                continue
-            with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
-                b = loops.glsl_bounds(f.read())
+        with open(os.path.join(root, fn), "rb") as f:
+            b = loops.spirv_bounds(f.read())
         if b is not None and len(b) == len(profile["loops"]):
             out[fn] = b
     rep.log(f"  loop bounds of {len(out)} of {len(looped)} files: "

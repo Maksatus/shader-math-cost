@@ -12,7 +12,3 @@ def stage_of(path):
 
 def is_spirv(path):
     return path.endswith(SPIRV_EXT)
-
-
-def api_of(path, api):
-    return "vulkan" if is_spirv(path) else api

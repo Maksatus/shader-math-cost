@@ -1,16 +1,16 @@
 """Trip counts of dynamic loops whose bound is not a shader parameter (cluster-mask scans, ray steps): every call of the
 draw replayed with a fragment shader that writes its loops' trip counts as its colour (rd_loops.py), over all its
-pixels; a device frame is replayed on its device. n = mean over the pixels of the draw's calls."""
+pixels; the capture replays where the snapshot says (its device). n = mean over the pixels of the draw's calls."""
 import os
 
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.core import loops
-from paretogpu.model.variant import PLATFORM, VariantKey
+from paretogpu.model.variant import VariantKey
 from paretogpu.store import memo as memo_store
+from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
 MEMO = "rd_loops/6"
-CAPTURE = "frame.rdc"
 
 
 class LoopCountError(rdoc.RenderDocError):
@@ -26,23 +26,21 @@ def _unknown(ev, fn, state):
     return any(loops.bound_value(b, ev.get("params")) is None for b in bounds)
 
 
-def iterations_of(frame_dir, frame, state, api="vulkan", rep=CONSOLE, memo=None):
+def iterations_of(frame_dir, frame, state, rep=CONSOLE, memo=None):
     """-> {event index: {"n": [mean per outer loop], "pixels", "calls"}}. LoopCountError when a draw's loops cannot be
     counted: its price would rest on a guessed trip count."""
-    device = frame.get("source") == "device"
-    capture = (frame.get("renderdoc") or {}).get("capture") or "" if device else os.path.join(frame_dir, CAPTURE)
-    platform = PLATFORM[api]
+    capture, serial = workspace.capture_of(frame_dir, frame)
     want = []
     for ev in frame["events"]:
         if ev["kind"] != "draw" or not (ev.get("rd") or {}).get("events"):
             continue
-        fn = (state["files"].get(VariantKey.of(ev)) or {}).get((platform, "frag"))
+        fn = (state["files"].get(VariantKey.of(ev)) or {}).get("frag")
         if fn and _unknown(ev, fn, state):
             want.append((ev, fn))
     if not want:
         rep.skip("rd_loops")
         return {}
-    if not os.path.exists(capture):
+    if not capture or not os.path.exists(capture):
         raise LoopCountError(f"{len(want)} draws have loops of unknown trip count and the capture {capture} is missing")
     rep.phase("rd_loops")
     memo = memo or memo_store.default()
@@ -52,10 +50,9 @@ def iterations_of(frame_dir, frame, state, api="vulkan", rep=CONSOLE, memo=None)
     missing = [k for k, v in got.items() if v is None]
     if missing:
         rep.log(f"counting the loop iterations of {len(missing)} draws in RenderDoc"
-                f"{' on the device' if device else ''} ...")
+                f"{f' on {serial}' if serial else ''} ...")
         res = rdoc.loop_iterations(capture, [{"key": k, "calls": [int(e) for e in k.split(",")]} for k in missing],
-                                   os.path.join(frame_dir, "rd_loops.json"),
-                                   serial=(frame.get("device") or {}).get("serial") if device else None)
+                                   os.path.join(frame_dir, "rd_loops.json"), serial)
         for k in missing:
             got[k] = res.get(k) or {"error": "not counted"}
         if res.get("_seconds"):

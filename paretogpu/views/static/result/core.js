@@ -1,4 +1,6 @@
-const sM = x => (x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x));
+// frame deltas in cycles below half the last shown digit (0.00 млн) are float noise, not a change
+const z = d => Math.abs(d) < 5e3 ? 0 : d;
+const sM = x => (x = z(x), x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x));
 const pct = (d, a) => !a ? (d ? "нов." : "0%") : (d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(100 * d / a).toFixed(Math.abs(d / a) < 0.1 ? 1 : 0) + "%";
 const cls = d => d < 0 ? "good" : d > 0 ? "bad" : "";
 const pr = x => x == null ? "—" : (+x).toFixed(2);
@@ -34,23 +36,12 @@ function bar(d, max, w = 120) {
 function side(i, tag) {
   return `<div class="side ${tag === "B" ? "b" : ""}"><span class="tag">${tag}</span><b>${esc(i.snapshot || "?")}</b>
     <div class="small muted">расчёт ${when(i.computed_at, true)} · ${esc(i.project || "")}</div>
-    <div class="small muted">${esc(i.api || "")} · malioc ${esc(i.malioc || "?")}${i.resolution ? " · " + i.resolution.join("×") : ""}${i.quality ? " · " + esc(i.quality) : ""}</div></div>`;
+    <div class="small muted">malioc ${esc(i.malioc || "?")}${i.resolution ? " · " + i.resolution.join("×") : ""}${i.quality ? " · " + esc(i.quality) : ""}</div></div>`;
 }
 
 // older results hold plain strings instead of {code, ...params}
 const fill = (t, p) => t.replace(/\{(\w+)\}/g, (_, k) => p[k] ?? "?");
 const msg = w => typeof w === "string" ? w : (w.side ? w.side + ": " : "") + fill(MSG.warnings[w.code] || w.code || "", w);
-const plural = (n, one, few, many) => { const k = n % 100;
-  return `${n} ${k >= 11 && k <= 14 ? many : n % 10 === 1 ? one : n % 10 >= 2 && n % 10 <= 4 ? few : many}`; };
-function explainText(ex) {
-  if (!ex) return "";
-  if (typeof ex === "string") return ex;
-  const ops = ex.ops || {};
-  const words = MSG.ops.filter(([key]) => ops[key]).map(([key, one, few, many]) => one !== few ? plural(ops[key], one, few, many) : `${ops[key]} ${one}`);
-  const t = words.slice(0, 4).join(", ") || MSG.plain;
-  return ex.loop ? fill(MSG.in_loop, {n: ex.n ?? "n"}) + t : t;
-}
-const moveLabel = l => MSG.vertexmove[l] || l;
 
 const VIEWS = {};
 function render() {

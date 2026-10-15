@@ -36,8 +36,8 @@ def resolve(project, path, guids=None):
     return m
 
 
-def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=None, compile_missing=True,
-            recompile=False, snapshot_folders=(), rep=CONSOLE):
+def prepare(project, paths, root, cores, jobs=None, compile_missing=True, recompile=False, snapshot_folders=(),
+            rep=CONSOLE):
     """-> {"project", "mats", "keys" (per material, sorted by pass), "state", "snaps"}."""
     project = os.path.abspath(project)
     rep.phase("materials")
@@ -69,13 +69,13 @@ def prepare(project, paths, root, cores, platforms=("gles3", "vulkan"), jobs=Non
         all_keys.update(keys)
         sides.append(sorted(keys, key=lambda k: (k.subshader, k.pass_index)))
     rep.log(f"materials: {len(all_keys)} variants, {len(snaps)} snapshots of the project for global keywords")
-    state = variants.run([k.as_event() for k in all_keys], project, root, cores, platforms, jobs,
+    state = variants.run([k.as_event() for k in all_keys], project, root, cores, jobs,
                          compile_missing=compile_missing, recompile=recompile, rep=rep)
     state["loops"] = variants.loops_of(state, root, cores, jobs, rep)
     return {"project": project, "mats": mats, "keys": sides, "state": state, "snaps": snaps}
 
 
-def common(prep, sides, cores, api, apis, ns=NS):
+def common(prep, sides, cores, ns=NS):
     state, snaps = prep["state"], prep["snaps"]
     found = [c for c in cores if any(c in p["prices"] for s in sides for p in s["passes"])]
     recs = [r for f in state["measurements"].values() for r in f.values() if r.get("ok", True)]
@@ -88,7 +88,7 @@ def common(prep, sides, cores, api, apis, ns=NS):
         warn.append({"code": "variants_unchecked"})
     if not snaps:
         warn.append({"code": "no_snapshots"})
-    return {"project": prep["project"], "api": api, "apis": apis, "cores": found,
+    return {"project": prep["project"], "cores": found,
             "main_core": main_core(found), "ns": list(ns),
             "default_n": LOOP_ITERS, "malioc": ", ".join(sorted({r["malioc"] for r in recs})),
             "checked": state["checked"], "snapshots": len(snaps), "warnings": warn, "computed_at": time.time()}

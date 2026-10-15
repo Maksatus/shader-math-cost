@@ -8,7 +8,7 @@ from paretogpu.core import pricing as heavy
 from paretogpu.core import loops
 from paretogpu.core.pricing import LOOP_ITERS, LOOP_NS, price, price_draw
 from paretogpu.core.variants import match
-from paretogpu.model.variant import API, VariantKey
+from paretogpu.model.variant import VariantKey
 
 COLOR_STAGES = ("opaque", "transparent")
 NS = LOOP_NS
@@ -92,7 +92,7 @@ def _code(state, files, core):
     return tuple(out) if all(out) else None
 
 
-def rows(keys, skipped, state, cost, api="vulkan"):
+def rows(keys, skipped, state, cost):
     cores = [c["name"] for c in cost["cores"]]
     main = cost["main_core"]
     loop_data = state.get("loops") or {}
@@ -110,7 +110,7 @@ def rows(keys, skipped, state, cost, api="vulkan"):
     out, unpriced = {}, []
     for k, mats in keys.items():
         ev = k.as_event()
-        recs, why = match(ev, state, api)
+        recs, why = match(ev, state)
         if not recs or "fragment" not in recs or "vertex" not in recs:
             unpriced.append({"shader": k.shader, "pass": k.pass_name, "keywords": list(k.keywords), "materials": mats,
                              "reason": why or "not compiled"})
@@ -168,8 +168,8 @@ def _pipes(rec, file, core, ns, loop_data):
             "longest_na": c["longest"] is None, "shortest": _round(c["shortest"]), "total": _round(c["total"])}
 
 
-def _price_pass(k, state, cores, api, loop_data, ns):
-    recs,why = match(k.as_event(), state, api)
+def _price_pass(k, state, cores, loop_data, ns):
+    recs, why = match(k.as_event(), state)
     if not recs or "fragment" not in recs or "vertex" not in recs:
         return None, why or "не скомпилирован"
     files = {s: next(iter(r.values()))["file"] for s, r in recs.items()}
@@ -193,25 +193,14 @@ def _price_pass(k, state, cores, api, loop_data, ns):
     return {"files": files, "prices": out}, None
 
 
-def describe(m, keys, state, cores, apis, ns=NS):
+def describe(m, keys, state, cores, ns=NS):
     passes = []
     for k in keys:
-        by_api, errors = {}, {}
-        for x in apis:
-            priced, errors[x] = _price_pass(k, state, cores, x, state["loops"], ns)
-            if priced:
-                by_api[x] = priced
-        main = by_api.get(apis[0]) or {"files": {}, "prices": {}}
+        priced, error = _price_pass(k, state, cores, state["loops"], ns)
         passes.append({"pass": k.pass_name, "subshader": k.subshader, "pass_index": k.pass_index,
                        "keywords": list(k.keywords), "global_keywords": sorted(set(k.keywords) - set(m["keywords"])),
-                       "variant": str(k), "key": k.to_list(),
-                       "error": errors[apis[0]], **main,
-                       "prices_by_api": {x: v["prices"] for x, v in by_api.items()},
-                       "files_by_api": {x: v["files"] for x, v in by_api.items()},
-                       "errors_by_api": {x: e for x, e in errors.items() if e}})
+                       "variant": str(k), "key": k.to_list(), "error": error,
+                       **(priced or {"files": {}, "prices": {}})})
     return {"material": m["name"], "path": m["path"], "shader": m["shader"], "keywords": m["keywords"],
             "disabled_passes": m["disabled_passes"], "passes": passes}
 
-
-def apis_of(api, platforms):
-    return [api] + [x for x in (API[p] for p in platforms) if x != api]

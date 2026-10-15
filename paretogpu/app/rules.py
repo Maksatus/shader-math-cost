@@ -9,17 +9,10 @@ from paretogpu.app.engine import MISSING, Rule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.model.measurement import LoopProfile, Measurement
-from paretogpu.model.shaderfile import api_of, stage_of
-from paretogpu.model.variant import API, COMPUTE_NOT_COMPILED, NOT_FINISHED, OUTDATED, STOPPED, STOPPED_TWICE
+from paretogpu.model.shaderfile import stage_of
+from paretogpu.model.variant import COMPUTE_NOT_COMPILED, NOT_FINISHED, OUTDATED, STOPPED, STOPPED_TWICE
 from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
-
-
-def _es31(platform, data):
-    # Unity writes '#version 300 es' with layout(binding = x): 3.00 forbids it, malioc rejects; Malis run ES 3.1+
-    if platform != "gles3" or not data.startswith(b"#version 300 es") or b"layout(binding" not in data:
-        return data, None
-    return b"#version 310 es" + data[len(b"#version 300 es"):], "300 es -> 310 es"
 
 
 def recover(root):
@@ -29,22 +22,17 @@ def recover(root):
     if not found:
         return None
     keys, result = found
-    errors = store.place(root, raw, keys, result, _es31)
+    errors = store.place(root, raw, keys, result)
     unity_variants.mark_placed(raw)
     return errors
 
 
-def _platform_of(error):
-    """Errors look like "vulkan frag: ..."; -> platform or None."""
-    return next((p for p in API if error.startswith(p + " ")), None)
-
-
-def compile_variants(project, keys, root, platforms, timeout=1800, rep=CONSOLE):
+def compile_variants(project, keys, root, timeout=1800, rep=CONSOLE):
     """-> {key: [errors]}."""
     raw = store.raw_dir(root)
-    result = unity_variants.compile_variants(project, keys, raw, platforms, timeout,
+    result = unity_variants.compile_variants(project, keys, raw, timeout,
                                              on_start=lambda n: rep.phase("compile", n), on_step=rep.step)
-    errors = store.place(root, raw, keys, result, _es31)
+    errors = store.place(root, raw, keys, result)
     unity_variants.mark_placed(raw)
     return errors
 
@@ -54,15 +42,14 @@ def current_fingerprints(project, shaders, root):
 
 
 class CompileRule(Rule):
-    """VariantKey -> {"files": {(platform, stage): file}, "errors"}. Valid while all files exist and the shader's editor
+    """VariantKey -> {"files": {stage: file}, "errors"}. Valid while all files exist and the shader's editor
     fingerprint (Unity version, platform defines, color space, dependency hash) matches; no editor -> used unchecked.
     Files of another fingerprint are never used: a failed recompile leaves no files, not the old code."""
     phase = "compile"
     keyed = False
 
-    def __init__(self, project, root, platforms, compile_missing=True, recompile=False, retry_failed=False,
-                 rep=CONSOLE):
-        self.project, self.root, self.platforms = project, root, list(platforms)
+    def __init__(self, project, root, compile_missing=True, recompile=False, retry_failed=False, rep=CONSOLE):
+        self.project, self.root = project, root
         self.compile_missing, self.recompile, self.retry_failed = compile_missing, recompile, retry_failed
         self.rep = rep
         self.current = None
@@ -81,15 +68,13 @@ class CompileRule(Rule):
 
     def _load(self):
         self.stored = {}
-        self.have = store.load_manifests(self.root, self.stored, self.platforms)
+        self.have = store.load_manifests(self.root, self.stored)
 
     def complete(self, k):
-        return all((p, s) in self.have.get(k, {}) for p in self.platforms for s in k.stages)
+        return all(s in self.have.get(k, {}) for s in k.stages)
 
     def errors_of(self, k):
-        """Stored errors on this rule's platforms plus platform-less ones."""
-        return [e for e in (self.index.get(k) or {}).get("errors", [])
-                if e != NOT_FINISHED and _platform_of(e) in (None, *self.platforms)]
+        return [e for e in (self.index.get(k) or {}).get("errors", []) if e != NOT_FINISHED]
 
     def prepare(self, keys):
         self.keys = keys
@@ -143,7 +128,7 @@ class CompileRule(Rule):
             self.rep.log(f"{len(self.stale)} compiled variants are out of date (shader, includes, Unity or platform "
                          f"defines changed{', --recompile' if self.recompile else ''}): compiling them again")
         self.rep.log(f"compiling {len(keys)} of {len(self.keys)} variants in Unity ...")
-        errors = compile_variants(self.project, keys, self.root, self.platforms, rep=self.rep)
+        errors = compile_variants(self.project, keys, self.root, rep=self.rep)
         self._load()
         self.built.update(keys)
         return {k: self._value(k, list(errors.get(k, []))) for k in keys}
@@ -160,10 +145,8 @@ class CompileRule(Rule):
             old = self.index.get(k) or {}
             stops = (old.get("stopped") or 0) + 1 if STOPPED in v["errors"] else 0
             self.index[k] = {"key": k.to_list(),
-                             "files": {f"{p}/{s}": fn for (p, s), fn in sorted(self.have.get(k, {}).items())},
-                             "errors": [e for e in old.get("errors", [])
-                                        if _platform_of(e) not in (None, *self.platforms)]
-                                       + [e for e in v["errors"] if e not in (NOT_FINISHED, OUTDATED, STOPPED)]
+                             "files": dict(sorted(self.have.get(k, {}).items())),
+                             "errors": [e for e in v["errors"] if e not in (NOT_FINISHED, OUTDATED, STOPPED)]
                                        + ([STOPPED_TWICE] if stops >= 2 else []),
                              "fingerprint": fp, **({"stopped": stops} if stops else {})}
             v["files"] = self.usable(k)
@@ -188,20 +171,19 @@ class _Hashes:
 
 
 class MeasureRule(Rule):
-    """(file relative to root, core) -> Measurement; SPIR-V is always Vulkan, stage from the extension; memo hits get
-    "cached"."""
+    """(file relative to root, core) -> Measurement (Vulkan), stage from the extension; memo hits get "cached"."""
     phase = "measure"
     memo = "measure/1"
 
-    def __init__(self, root, api="gles", info=None, gpu=None):
-        self.root, self.api, self.info = root, api, info or {}
+    def __init__(self, root, info=None, gpu=None):
+        self.root, self.info = root, info or {}
         self.hash = _Hashes(root)
         self.gpu = gpu or backend()
 
     def memo_key(self, key):
         rel, core = key
         try:
-            return f"{self.hash(rel)}|{core}|{api_of(rel, self.api)}|{stage_of(rel)}|{self.gpu.tool}"
+            return f"{self.hash(rel)}|{core}|vulkan|{stage_of(rel)}|{self.gpu.tool}"
         except OSError:
             return None
 
@@ -218,11 +200,11 @@ class MeasureRule(Rule):
         rel, core = key
         path = os.path.join(self.root, rel)
         try:
-            r = self.gpu.measure(read_source(path), core, api_of(path, self.api), stage_of(path))
+            r = self.gpu.measure(read_source(path), core, "vulkan", stage_of(path))
         except (OSError, self.gpu.Error) as e:  # fails this file, not the run
             r = {"ok": False, "error": str(e)}
         if not r["ok"]:
-            return {"file": rel, "ok": False, "core": core, "api": api_of(path, self.api), "error": r["error"]}
+            return {"file": rel, "ok": False, "core": core, "api": "vulkan", "error": r["error"]}
         info = self.info.get(rel, {})
         return {"file": rel, "root": os.path.abspath(self.root),
                 **{k: info[k] for k in ("shader", "pass", "keywords") if k in info}, **r}
@@ -231,31 +213,57 @@ class MeasureRule(Rule):
         return {**self._hit(key[0], value), "cached": True}
 
 
-def parametric(forced, api, stage, core, gpu=None) -> LoopProfile | None:
-    """-> loops.profile() + "work_regs", "spilling" of loops.forced(src) on one core; None if not forceable, malioc
-    failed or still N/A."""
+def parametric(src, api, stage, core, gpu=None, forced=None) -> LoopProfile | None:
+    """-> loops.profile() + "work_regs", "spilling" of src's forced loops on one core (forced: loops.forced(src) made
+    already); None if not forceable, malioc failed or still N/A. A loop whose M-ladder does not grow evenly is measured
+    again at half the iterations, down to 1."""
+    forced = forced or loops.forced(src)
     if forced is None:
         return None
     plan, srcs = forced
     gpu = gpu or backend()
-    cs, regs, spill = [], 0, False
-    for f in srcs:
+    regs, spill = 0, False
+
+    def longest(f):
         r = gpu.measure(f, core, api, stage)
-        if not r["ok"]:
-            return None
-        c = heavy.combined(r, gpu.pipes)["longest"]
-        if c is None:
-            return None
+        return (heavy.combined(r, gpu.pipes)["longest"] if r["ok"] else None), r
+    cs = []
+    for (name, _, _, _), f in zip(plan, srcs):
+        c, r = longest(f)
+        if name in ("base", "zero"):  # the shader as it is: not unrolled to M iterations
+            if c is None:
+                return None
+            regs = max(regs, max((v["work_regs"] or 0) for v in r["variants"].values()))
+            spill = spill or gpu.spills(r)
         cs.append(c)
-        regs = max(regs, max((v["work_regs"] or 0) for v in r["variants"].values()))
-        spill = spill or gpu.spills(r)
-    return {**loops.profile(plan, cs), "work_regs": regs, "spilling": spill}
+    prof = loops.profile(plan, cs)
+    outer = loops.outer_loops(src)
+    for k, lp in enumerate(prof["loops"]):
+        g = loops.steps(lp)
+        if loops.agrees(g) or (g and g[1] > g[0]):
+            continue
+        # later steps smaller or N/A: a constant cap below 4M (take a lower ladder that agrees and is steeper), or
+        # malioc kept M's reads in registers (the lower ladders are flatter still: keep 2M..4M)
+        m, low = lp["at"], None
+        while m > 1 and low is None:
+            m //= 2
+            cand = {**lp, "at": m}
+            for name, _, ns, nests in loops.ladder(outer, k, m):
+                f = loops.force(src, ns, nests)
+                cand[name] = longest(f)[0] if f is not None else None
+            if loops.agrees(loops.steps(cand)):
+                low = cand
+        if low is not None and (g is None or g[1] <= 1e-6 or loops.steps(low)[0] > g[1]):
+            prof["loops"][k] = low
+        elif g is None or g[1] <= 1e-6:
+            return None
+    return {**prof, "work_regs": regs, "spilling": spill}
 
 
 class LoopRule(Rule):
     """(file, core) -> LoopProfile; None when its loops cannot be forced (then priced by total cycles)."""
     phase = "loops"
-    memo = "loops/3"
+    memo = "loops/4"
 
     def __init__(self, root, gpu=None):
         self.root = root
@@ -278,9 +286,10 @@ class LoopRule(Rule):
         with lock:
             if fn not in self.forced:
                 src = read_source(os.path.join(self.root, fn))
-                self.forced[fn] = loops.forced(src)
+                self.forced[fn] = src, loops.forced(src)
             return self.forced[fn]
 
     def build_one(self, key) -> LoopProfile | None:
         fn, core = key
-        return parametric(self._forced(fn), api_of(fn, "gles"), stage_of(fn), core, self.gpu)
+        src, forced = self._forced(fn)
+        return parametric(src, "vulkan", stage_of(fn), core, self.gpu, forced) if forced else None

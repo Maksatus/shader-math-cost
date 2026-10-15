@@ -97,14 +97,13 @@ class Compare(unittest.TestCase):
 
     def test_flags_and_warnings(self):
         a = run([event(0, "Lit", 1000, 10.0, flags=["spilling"])])
-        b = run([event(0, "Lit", 1000, 9.0, flags=["low_fp16"])], malioc="2", api="gles")
+        b = run([event(0, "Lit", 1000, 9.0, flags=["low_fp16"])], malioc="2")
         c = compare.compare(a, b)
         s = c["by_core"][CORE]["shaders"][0]
         self.assertEqual(s["flags_added"], ["low_fp16"])
         self.assertEqual(s["flags_removed"], ["spilling"])
         codes = [w["code"] for w in c["warnings"]]
         self.assertIn("malioc_differs", codes)
-        self.assertIn("api_differs", codes)
 
     def test_pipeline_of_one_side_unknown(self):
         ev = [event(0, "Lit", 1000, 10.0)]

@@ -1,11 +1,8 @@
 # Runs inside RenderDoc for Arm GPUs' qrenderdoc --python (not the normal interpreter). In: PARETOGPU_IN {"serial",
 # "app": "package/activity", "trigger": file whose appearance means "capture now", "wait": seconds instead (None: the
-# trigger), "capture": local .rdc, "shaders": folder for <hash>.<vert|frag|comp>.spv, "adb", "phase": "capture" |
-# "replay"}. Two processes: restarting the device's server in the one that captured crashes qrenderdoc now and then.
-# Out: PARETOGPU_OUT, capture: {"capture"}; replay: {"device", "serial", "api", "capture", "screen", "actions",
-# "draws", "textures", "usage", "discard_error"}; <out>.progress, traceback -> <out>.error.
-# Replays on the device: an Android capture does not replay on a desktop GPU (ASTC, AHardwareBuffer).
-import base64
+# trigger), "capture": local .rdc, "shaders": folder for <hash>.<vert|frag|comp>.spv, "adb"}, PARETOGPU_LIB.
+# Out: PARETOGPU_OUT {"device", "serial", "api", "capture", "screen", "rotation", "actions", "draws", "textures",
+# "usage", "discard_error"}; <out>.progress, traceback -> <out>.error.
 import hashlib
 import json
 import os
@@ -18,8 +15,10 @@ from types import SimpleNamespace
 
 import renderdoc as rd
 
-sys.path.insert(0, os.environ.get("PARETOGPU_LIB") or os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.environ["PARETOGPU_LIB"])
+import rd_replay  # noqa: E402
 import rd_spirv  # noqa: E402
+from rd_replay import block_bytes, ok  # noqa: E402
 
 out_path = os.environ["PARETOGPU_OUT"]
 
@@ -31,11 +30,7 @@ KINDS = (("draw", rd.ActionFlags.Drawcall), ("dispatch", rd.ActionFlags.Dispatch
          ("begin_pass", rd.ActionFlags.BeginPass), ("end_pass", rd.ActionFlags.EndPass))
 STAGES = ((rd.ShaderStage.Vertex, "vert"), (rd.ShaderStage.Pixel, "frag"))
 WAITING = "the app is running: waiting for the capture"
-REOPEN = 200  # calls between reopenings: the device's replay server leaks up to ~4 MB a call, lmkd kills it
-
-
-def ok(r):
-    return getattr(r, "code", r) == rd.ResultCode.Succeeded
+ROTATION = {1: 0, 2: 90, 4: 180, 8: 270}  # VkSurfaceTransformFlagBitsKHR
 
 
 def step(text):
@@ -43,19 +38,7 @@ def step(text):
         f.write(text)
 
 
-def connect(ctrl, url):
-    r = ctrl.StartRemoteServer(url)
-    if not ok(r):
-        raise RuntimeError(f"cannot start the RenderDoc server on the device: {r}")
-    for _ in range(30):
-        r, remote = rd.CreateRemoteServerConnection(url)
-        if ok(r):
-            return remote
-        time.sleep(1)
-    raise RuntimeError(f"no connection to the RenderDoc server on the device: {r}")
-
-
-def capture(ctrl, url, remote, job, serial):
+def capture(url, remote, job):
     """Copies the capture to job["capture"]."""
     step("starting the app")
     res = remote.ExecuteAndInject(job["app"], "", "", [], rd.GetDefaultCaptureOptions())
@@ -99,15 +82,16 @@ def capture(ctrl, url, remote, job, serial):
     while not copied and time.time() - t0 < 600:
         copied = target.ReceiveMessage(None).type == rd.TargetControlMessageType.CaptureCopied
         time.sleep(0.1)
+    step("closing the app")
     target.Shutdown()
-    subprocess.run([job["adb"], "-s", serial, "shell", "am", "force-stop", job["app"].split("/")[0]],
+    subprocess.run([job["adb"], "-s", job["serial"], "shell", "am", "force-stop", job["app"].split("/")[0]],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if not copied or not os.path.exists(job["capture"]):
         raise RuntimeError("the capture was not copied from the device in 600 s")
 
 
 def leaf_actions(controller):
-    """-> [(action as plain data, path)]: they outlive the controller (read_frame reopens the capture)."""
+    """-> [(action as plain data, path)]: they outlive the controller (the replay reopens the capture)."""
     sf = controller.GetStructuredFile()
     out = []
 
@@ -139,25 +123,6 @@ def write_shader(refl, short, folder, cache):
     return cache[rid]
 
 
-def block_bytes(controller, pipe, stage, refl, cache):
-    """-> {"@set.binding": base64} of the uniform blocks a stage reads (loop bounds for core/loops.spirv_bounds)."""
-    out = {}
-    for i, cb in enumerate(refl.constantBlocks):
-        if not cb.bufferBacked:
-            continue
-        used = pipe.GetConstantBlock(stage, i, 0)
-        desc = getattr(used, "descriptor", used)
-        res = getattr(desc, "resource", None) or getattr(desc, "resourceId", rd.ResourceId.Null())
-        if res == rd.ResourceId.Null():
-            continue
-        size = cb.byteSize or min(desc.byteSize, 65536)
-        key = (int(res), desc.byteOffset, size)
-        if key not in cache:
-            cache[key] = base64.b64encode(bytes(controller.GetBufferData(res, desc.byteOffset, size))).decode()
-        out[f"@{cb.fixedBindSetOrSpace}.{cb.fixedBindNumber}"] = cache[key]
-    return out
-
-
 def unique_vertices(controller, pipe, a):
     ib = pipe.GetIBuffer()
     if ib.resourceId == rd.ResourceId.Null() or ib.byteStride not in (2, 4) or not a.numIndices:
@@ -171,22 +136,21 @@ def unique_vertices(controller, pipe, a):
     return len(seen)
 
 
-def lost(remote, event, done, total):
+def lost(rp, event, done, total):
     """After the device's server dies the API keeps answering with empty objects, no exception."""
-    why = ("RenderDoc's server on the device is gone (the driver crashed replaying it)" if not remote.Ping()
+    why = ("RenderDoc's server on the device is gone (the driver crashed replaying it)" if not rp.alive()
            else "the replay returned no pipeline")
     raise RuntimeError(f"the replay on the device failed at event {event} (call {done}/{total}): {why}; the frame "
                        "is not written")
 
 
-def read_frame(controller, remote, job, names, textures, reopen):
-    """-> (actions, draws, discarding {frag shader id: (ResourceId, entry, SPIR-V, [events])}, controller).
-    reopen(controller) -> a fresh controller of the same capture."""
+def read_frame(rp, job, names, textures):
+    """-> (actions, draws, discarding {frag shader id: (ResourceId, entry, SPIR-V, [events])})."""
     samples = {}
-    if rd.GPUCounter.SamplesPassed in controller.EnumerateCounters():
-        for r in controller.FetchCounters([rd.GPUCounter.SamplesPassed]):
+    if rd.GPUCounter.SamplesPassed in rp.c.EnumerateCounters():
+        for r in rp.c.FetchCounters([rd.GPUCounter.SamplesPassed]):
             samples[r.eventId] = r.value.u64
-    leaves = leaf_actions(controller)
+    leaves = leaf_actions(rp.c)
     actions, draws, cache, blocks, discarding = [], {}, {}, {}, {}
     work = [a for a, _ in leaves if a.flags & (rd.ActionFlags.Drawcall | rd.ActionFlags.Dispatch)]
     done = 0
@@ -198,18 +162,16 @@ def read_frame(controller, remote, job, names, textures, reopen):
         if not ({"draw", "dispatch"} & set(kinds)):
             continue
         done += 1
-        if done % REOPEN == 0:
-            step(f"reading the frame: call {done}/{len(work)}, reopening the capture")
-            controller = reopen(controller)
         if done % 20 == 1:
             step(f"reading the frame: call {done}/{len(work)}")
-        controller.SetFrameEvent(a.eventId, False)
+        rp.go(a.eventId)
+        controller = rp.c
         pipe = controller.GetPipelineState()
         d = {"event": a.eventId}
         if "dispatch" in kinds:
             refl = pipe.GetShaderReflection(rd.ShaderStage.Compute)
             if refl is None:
-                lost(remote, a.eventId, done, len(work))
+                lost(rp, a.eventId, done, len(work))
             d["shaders"] = {"comp": {**write_shader(refl, "comp", job["shaders"], cache),
                                      "name": names.get(int(refl.resourceId))}}
             d["blocks"] = block_bytes(controller, pipe, rd.ShaderStage.Compute, refl, blocks)
@@ -232,7 +194,7 @@ def read_frame(controller, remote, job, names, textures, reopen):
                         discarding[int(rid)][3].append(a.eventId)
                         d["discards"] = True
         if "vert" not in sh:
-            lost(remote, a.eventId, done, len(work))
+            lost(rp, a.eventId, done, len(work))
         outs = [t.resource for t in pipe.GetOutputTargets() if t.resource != rd.ResourceId.Null()]
         depth = pipe.GetDepthTarget().resource
         target = outs[0] if outs else depth
@@ -259,7 +221,7 @@ def read_frame(controller, remote, job, names, textures, reopen):
             "unique_vertices": unique_vertices(controller, pipe, a) if a.flags & rd.ActionFlags.Indexed else None,
             "indexed": bool(a.flags & rd.ActionFlags.Indexed), "samples_passed": samples.get(a.eventId)})
         draws[a.eventId] = d
-    return actions, draws, discarding, controller
+    return actions, draws, discarding
 
 
 def shaded_samples(controller, discarding):
@@ -291,21 +253,21 @@ def shaded_samples(controller, discarding):
     return {e: values[e] for _, _, events in replaced for e in events if e in values}, None
 
 
-def read_textures(controller, names):
-    """As rd_memory.py; "native": the formats are the device's own."""
-    textures, usage = [], {}
-    for t in controller.GetTextures():
-        rid = int(t.resourceId)
-        cat = t.creationFlags
-        textures.append({
-            "id": rid, "name": names.get(rid, ""), "width": t.width, "height": t.height, "depth": t.depth,
-            "mips": t.mips, "arrays": t.arraysize, "samples": t.msSamp, "format": t.format.Name(),
-            "bytes": t.byteSize, "cube": bool(t.cubemap), "native": True,
-            "color_target": bool(cat & rd.TextureCategory.ColorTarget),
-            "depth_target": bool(cat & rd.TextureCategory.DepthTarget),
-            "swapchain": bool(cat & rd.TextureCategory.SwapBuffer)})
-        usage[rid] = [[u.eventId, str(u.usage).split(".")[-1]] for u in controller.GetUsage(t.resourceId)]
-    return textures, usage
+def rotation(controller):
+    """-> degrees of the swapchain's pre-transform: the frame is drawn rotated by them on a phone held otherwise."""
+    sf = controller.GetStructuredFile()
+    for ch in sf.chunks:
+        if ch.name != "vkCreateSwapchainKHR":
+            continue
+        info = next((ch.GetChild(i) for i in range(ch.NumChildren()) if ch.GetChild(i).name == "CreateInfo"), None)
+        pre = info and next((info.GetChild(i) for i in range(info.NumChildren())
+                             if info.GetChild(i).name == "preTransform"), None)
+        if pre is None:
+            raise RuntimeError("vkCreateSwapchainKHR of the capture has no preTransform")
+        if pre.AsInt() not in ROTATION:
+            raise RuntimeError(f"unexpected swapchain preTransform {pre.AsString()} ({pre.AsInt()})")
+        return ROTATION[pre.AsInt()]
+    raise RuntimeError("the capture has no vkCreateSwapchainKHR: its screen orientation is unknown")
 
 
 def write(answer):
@@ -317,57 +279,37 @@ def write(answer):
 def main():
     with open(os.environ["PARETOGPU_IN"], encoding="utf-8") as f:
         job = json.load(f)
-    ctrl = rd.GetDeviceProtocolController("adb")
-    devs = ctrl.GetDevices()
-    serial = job.get("serial") or (devs[0] if devs else None)
-    if not serial or serial not in devs:
-        raise RuntimeError(f"no Android device {job.get('serial') or ''} (adb sees: {', '.join(devs) or 'none'})")
-    url = ctrl.GetProtocolName() + "://" + serial
-    remote = connect(ctrl, url)
-    if job["phase"] == "capture":
-        capture(ctrl, url, remote, job, serial)
-        write({"capture": job["capture"]})
-        remote.ShutdownConnection()
-        return
-    step("sending the capture to the device")
-    device_path = remote.CopyCaptureToRemote(job["capture"], None)
-    step("replaying on the device")
-    def open_capture(old=None):
-        if old is not None:
-            remote.CloseCapture(old)
-        r, c = remote.OpenCapture(rd.RemoteServer.NoPreference, device_path, rd.ReplayOptions(), None)
-        if not ok(r):
-            raise RuntimeError(f"cannot replay the capture on the device: {r}")
-        return c
-    controller = open_capture()
-    api = str(controller.GetAPIProperties().pipelineType).split(".")[-1]
+    remote, url = rd_replay.connect(job["serial"])
+    capture(url, remote, job)
+    step("connecting to the replay server")
+    remote.ShutdownConnection()  # the connection that started the app no longer replays
+    remote, url = rd_replay.connect(job["serial"], start=False)
+    rp = rd_replay.Replay(job["capture"], job["serial"], remote, step)
+    api = str(rp.c.GetAPIProperties().pipelineType).split(".")[-1]
     if api != "Vulkan":
         raise RuntimeError(f"the capture is {api}: a device frame needs a Vulkan build (its SPIR-V and pipeline state)")
     os.makedirs(job["shaders"], exist_ok=True)
-    names = {int(x.resourceId): x.name for x in controller.GetResources()}
-    textures = {int(t.resourceId): t for t in controller.GetTextures()}
-    actions, draws, discarding, controller = read_frame(controller, remote, job, names, textures, open_capture)
+    names = {int(x.resourceId): None if x.autogeneratedName else x.name for x in rp.c.GetResources()}
+    textures = {int(t.resourceId): t for t in rp.c.GetTextures()}
+    turn = rotation(rp.c)
+    actions, draws, discarding = read_frame(rp, job, names, textures)
     step("reading the textures")
-    tex, usage = read_textures(controller, names)
+    tex, usage = rd_replay.textures(rp.c, True)
     screen = next(([t["width"], t["height"]] for t in tex if t["swapchain"]), None)
-    answer = {"device": ctrl.GetFriendlyName(url), "serial": serial, "api": api,
-              "capture": job.get("capture"), "screen": screen, "actions": actions,
-              "draws": draws, "textures": tex, "usage": usage, "discard_error": None}
+    model = rd.GetDeviceProtocolController("adb").GetFriendlyName(url)
+    answer = {"device": model, "serial": job["serial"], "api": api, "capture": job["capture"],
+              "screen": screen[::-1] if screen and turn in (90, 270) else screen, "rotation": turn,
+              "actions": actions, "draws": draws, "textures": tex, "usage": usage, "discard_error": None}
     write(answer)  # the frame is kept if a replay below crashes
     step(f"counting the fragments of the draws whose shaders discard ({len(discarding)} shaders)")
     try:
-        shaded, answer["discard_error"] = shaded_samples(controller, discarding)
+        shaded, answer["discard_error"] = shaded_samples(rp.c, discarding)
         for e, v in shaded.items():
             draws[e]["samples_shaded"] = v
     except Exception as e:
-        answer["discard_error"] = "crashed" if not remote.Ping() else f"{type(e).__name__}: {e}"[:300]
+        answer["discard_error"] = "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]
     write(answer)
-    if answer["discard_error"] != "crashed":
-        remote.CloseCapture(controller)
-    try:
-        remote.ShutdownServerAndConnection()
-    except Exception:
-        pass  # the server is gone after a crash
+    rp.close()
 
 
 try:

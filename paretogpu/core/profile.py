@@ -20,8 +20,6 @@ def frame_size(rows):
 def _frame_scale(size, screen):
     if not size or not screen or not all(screen):
         return None
-    if (size[0] > size[1]) != (screen[0] > screen[1]):  # a phone's swapchain stays portrait (pre-rotation)
-        screen = screen[::-1]
     sx, sy = size[0] / screen[0], size[1] / screen[1]
     return round((sx + sy) / 2, 3) if abs(sx - sy) <= 0.02 * max(sx, sy) else None
 
@@ -32,7 +30,7 @@ def describe(meta, size=None):
         "build_target": meta.get("build_target"), "screen": meta.get("screen"),
         "frame_size": size, "pipeline": (meta.get("pipeline") or {}).get("name"),
         "frame_scale": _frame_scale(size, meta.get("screen")),
-        "device": meta.get("device") if meta.get("source") == "device" else None,
+        "device": meta.get("device"),
     }
 
 

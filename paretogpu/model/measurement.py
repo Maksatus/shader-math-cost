@@ -61,8 +61,10 @@ class Score(TypedDict):
 class LoopProfile(TypedDict):
     """Forced dynamic loops measured on the longest path (core/loops.profile)."""
     model: str        # core/loops.MODEL
+    m: int            # core/loops.SLOPE_M
     base: dict        # Cycles with every outer loop at 1 iteration
-    loops: list       # [{"zero", "two", "word"}] Cycles with outer loop k at 0 / 2 / 1 with its nested loops twice
-    zero: dict        # Cycles with every outer loop at 0 (two or more loops only)
+    loops: list       # [{"exit", "zero", "m", "m2", "m4", "word"}] Cycles with outer loop k at 0 (header-tested only) /
+                      # M / 2M / 4M / 2M with its nested loops twice; exit "header" | "body" (while(true))
+    zero: dict        # Cycles with every header-tested loop at 0, the others at 1 (two or more of them only)
     work_regs: int
     spilling: bool

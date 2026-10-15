@@ -20,7 +20,7 @@ REF = {"px_price": "px_ref", "vtx_price": "vtx_ref", "cs_price": "cs_ref"}
 EVENTS_SHOWN = 12
 
 
-INFO =("snapshot", "frame_dir", "project", "computed_at", "code_version", "api", "malioc", "main_core", "cores",
+INFO =("snapshot", "frame_dir", "project", "computed_at", "code_version", "malioc", "main_core", "cores",
         "resolution", "checked", "unpriced_draws", "quality", "pipeline", "scale", "render",
         "pixel_methods", "vertex_methods")
 
@@ -206,8 +206,6 @@ def compare(a: CostRun, b: CostRun) -> dict:
         warn.append({"code": "no_common_cores"})
     elif set(ia["cores"]) != set(ib["cores"]):
         warn.append({"code": "cores_differ", "cores": ", ".join(cores)})
-    if ia["api"] != ib["api"]:
-        ab("api_differs", "api")
     if ia["code_version"] != ib["code_version"]:
         ab("code_differs", "code_version", lambda v: v or "?")
     if ia["malioc"] != ib["malioc"]:

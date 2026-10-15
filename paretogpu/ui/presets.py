@@ -15,8 +15,6 @@ PRESETS = [
     {"id": "cost", "title": "Пересчёт снимка", "steps": [{"cmd": "cost"}]},
     {"id": "site", "title": "Обновление данных сайта", "steps": [{"cmd": "bench"}]},
     {"id": "matcompare", "title": "Сравнение материалов", "steps": [{"cmd": "matcompare"}]},
-    {"id": "matshader", "title": "Разбор материала", "steps": [{"cmd": "matshader"}]},
-    {"id": "hotspots", "title": "Почему тяжёлые шейдеры", "steps": [{"cmd": "hotspots"}]},
 ]
 
 
@@ -71,7 +69,8 @@ def plan(preset_id, values, sch):
         pkg = android_package(project)
         if not pkg:
             raise ValueError("нет Android-пакета проекта (ProjectSettings: applicationIdentifier)")
-        first = [("device", {"frame": frame_dir, "project": project, "app": pkg, "serial": serial})]
+        first = [("device", {"frame": frame_dir, "project": project, "app": pkg, "serial": serial,
+                             "wait": values.get("wait")})]
         values = {**values, "project": project}
     elif preset_id == "frame_cost":
         if not values.get("project"):

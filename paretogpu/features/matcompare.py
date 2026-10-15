@@ -15,9 +15,8 @@ def run_command(args):
     root = args.variants or workspace.variants_dir(project)
     out = args.out or workspace.new_result_dir("matcompare")
     try:
-        res = matcompare.run(project, args.a, args.b, root, cores, ["vulkan"] if args.vulkan_only else ["gles3", "vulkan"],
-                             args.api, args.jobs, compile_missing=not args.no_compile, recompile=args.recompile,
-                             snapshot_folders=[workspace.OUT])
+        res = matcompare.run(project, args.a, args.b, root, cores, args.jobs, compile_missing=not args.no_compile,
+                             recompile=args.recompile, snapshot_folders=[workspace.OUT])
     except ParetoError as e:
         fail(f"matcompare: {e}", e)
     for w in res["warnings"]:
@@ -51,8 +50,6 @@ MATCOMPARE = Command(
      Arg("--variants", label="Папка скомпилированных вариантов", help="folder of the compiled variants (default: paretogpu/out/variants_<project>, the one the "
                             "frames of the project share)"),
      cores_args(),
-     Arg("--api", label="API цен", default="vulkan", choices=["vulkan", "gles"], help="prices of this API (default vulkan)"),
-     Arg("--vulkan-only", action="store_true", help="compile only Vulkan variants (no GLES3)", label="Только Vulkan"),
      Arg("--no-compile", label="Не компилировать", action="store_true", help="use only the variants already in the folder"),
      Arg("--recompile", label="Скомпилировать заново", action="store_true", help="compile the materials' variants again"),
      JOBS,

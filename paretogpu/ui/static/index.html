@@ -17,7 +17,6 @@
     <button data-tab="run">Проверка кадра<span id="tabPill"></span></button>
     <button data-tab="reports">Отчёты</button>
     <button data-tab="compare">Сравнение</button>
-    <button data-tab="mat">Материал</button>
     <button data-tab="site">Цена функций</button>
     <button data-tab="ref">Справочник</button>
   </nav>
@@ -29,7 +28,7 @@
     <div class="card" id="formCard">
       <div class="banner" id="recalcBanner" style="display:none"></div>
       <h2 id="formTitle">Новая проверка</h2>
-      <p class="small muted" id="howto">Включите в Unity Play Mode, выставьте нужный кадр в окне Game, выберите проект и нажмите «Проверить кадр». <a href="#" data-ref="usage" style="color:var(--accent)">Подробнее ↗</a></p>
+      <p class="small muted" id="howto"><span id="howtoText"></span> <a href="#" data-ref="usage" style="color:var(--accent)">Подробнее ↗</a></p>
       <div class="field" id="projField">
         <span class="lbl">Проект</span>
         <select id="project"></select>
@@ -78,7 +77,6 @@
       <button class="btn" id="repBack">← К списку</button>
       <b id="repName"></b>
       <span style="flex:1"></span>
-      <div class="seg" id="repWhich"><button data-w="cost" class="on">Отчёт кадра</button><button data-w="hotspots">Почему тяжёлые</button></div>
       <button class="btn" id="repRecalc">Пересчитать</button>
       <button class="btn" id="repFolder">Открыть папку</button>
       <a class="btn" id="repOpen" target="_blank">В браузере</a>
@@ -113,25 +111,11 @@
   <iframe id="siteFrame"></iframe>
 </section>
 
-<section id="tab-mat">
-  <div class="bar2 cmpbar">
-    <select id="msProject" style="width:auto;max-width:220px"></select>
-    <input type="text" id="msMat" list="dl-ms" placeholder="Материал: имя, путь или шейдер, или перетащите .mat" style="width:420px">
-    <button class="btn sm primary" id="msRun">Разобрать</button>
-    <span style="flex:1"></span>
-    <select id="msHist" style="width:auto;max-width:360px"></select>
-    <a class="btn sm" id="msOpen" target="_blank">В браузере</a>
-  </div>
-  <div class="page" id="msEmpty" style="display:none"></div>
-  <iframe id="msFrame"></iframe>
-</section>
-
 <section id="tab-ref"><iframe id="refFrame"></iframe></section>
 
 <datalist id="dl-cores"></datalist>
 <datalist id="dl-matA"></datalist>
 <datalist id="dl-matB"></datalist>
-<datalist id="dl-ms"></datalist>
 
 <script src="/shared/shared/helpers.js"></script>
 <script src="/static/js/core.js"></script>
@@ -139,7 +123,6 @@
 <script src="/static/js/run_panel.js"></script>
 <script src="/static/js/reports.js"></script>
 <script src="/static/js/tab_compare.js"></script>
-<script src="/static/js/tab_material.js"></script>
 <script src="/static/js/report_view.js"></script>
 <script src="/static/js/site.js"></script>
 <script src="/shared/shared/tips.js"></script>

@@ -1,6 +1,7 @@
-// RenderDoc capture of the Game view: job "renderdoc", config {"pause": true} -> {"capture": "<new .rdc>", "bytes",
-// "was_paused"}. Needs RenderDoc loaded into the editor (Game tab menu -> Load RenderDoc). Pause() is outside the job
-// protocol. The Frame Debugger is driven via FrameDebuggerUtility as its window does (no window) and restored after.
+// RenderDoc capture of the Game view (the editor on Vulkan): job "renderdoc", config {"pause": true} ->
+// {"capture": "<new .rdc>", "bytes", "was_paused", "editor_pid"}. Needs RenderDoc loaded into the editor (Game tab
+// menu -> Load RenderDoc). Pause() is outside the job protocol. The Frame Debugger is driven via FrameDebuggerUtility
+// as its window does (no window) and restored after.
 
 using System;
 using System.IO;
@@ -75,6 +76,9 @@ public static class ParetoGpuRenderDoc
     {
         var cfg = JsonUtility.FromJson<Config>(ParetoGpuJob.Open(configPath));
         outDir = ParetoGpuJob.Folder;
+        if (SystemInfo.graphicsDeviceType != UnityEngine.Rendering.GraphicsDeviceType.Vulkan)
+            return ParetoGpuJob.Fail("not_vulkan", $"the editor runs on {SystemInfo.graphicsDeviceType}: a frame needs " +
+                                     "the editor on Vulkan (start Unity with -force-vulkan), the API of the build");
         if (!EditorApplication.isPlaying)
             return ParetoGpuJob.Fail("not_playing", "the editor is not in Play Mode: an Edit Mode frame is not the game's");
         rd = typeof(EditorWindow).Assembly.GetType("UnityEditorInternal.RenderDoc");
@@ -192,7 +196,8 @@ public static class ParetoGpuRenderDoc
             ParetoGpuJob.RestoreBackground();
             File.WriteAllText(Path.Combine(outDir, "renderdoc.frames"), $"frame debugger events {frame}");
             ParetoGpuJob.Done("{\"capture\": " + ParetoGpuJob.Str(cap.FullName) + ", \"bytes\": " + cap.Length +
-                              ", \"was_paused\": " + (wasPaused ? "true" : "false") + "}");
+                              ", \"was_paused\": " + (wasPaused ? "true" : "false") +
+                              ", \"editor_pid\": " + System.Diagnostics.Process.GetCurrentProcess().Id + "}");
         }
         catch (Exception e)
         {

@@ -1,4 +1,4 @@
-"""core/loops.py: dynamic loops forced to n iterations (GLSL and SPIR-V), loop bounds, loop pricing."""
+"""core/loops.py: dynamic loops of SPIR-V forced to n iterations, loop bounds, loop pricing."""
 import base64
 import glob
 import os
@@ -6,16 +6,19 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from paretogpu.adapters import malioc as mali
 from paretogpu.app import rules
 from paretogpu.core import loops
+from paretogpu.core import pricing
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GLSL = os.path.join(HERE, "data", "glsl", "loop_dynamic.frag")
 SPV = os.path.join(HERE, "data", "spirv", "loop_dynamic.frag.spv")
 STATIC_SPV = os.path.join(HERE, "data", "spirv", "tex_x24.frag.spv")
 LIGHTS_SPV = os.path.join(HERE, "data", "spirv", "loop_lights.frag.spv")  # its source: loop_lights.frag
+CLUSTER_SPV = os.path.join(HERE, "data", "spirv", "loop_cluster.frag.spv")  # its source: loop_cluster.frag
+CAPPED_SPV = os.path.join(HERE, "data", "spirv", "loop_capped.frag.spv")  # its source: loop_capped.frag
 
 
 def spirv_val():
@@ -24,112 +27,117 @@ def spirv_val():
     return hits[0] if hits else None
 
 
+def line(one, s, exit="header", zero=None, w=0.0):
+    """Measurements of one loop whose real price is `one` once and `s` per more iteration (a number: "ls" only), its
+    nested loop `w` per run; the others at 1."""
+    m = loops.SLOPE_M
+    one, s, w = ({"ls": v} if not isinstance(v, dict) else v for v in (one, s, w if w else {}))
+    keys = set(one) | set(s)
+
+    def at(n, nested=1):
+        return {k: one.get(k, 0) + (n - 1) * (s.get(k, 0) + w.get(k, 0)) + n * (nested - 1) * w.get(k, 0)
+                for k in keys}
+    return {"exit": exit, "nested": bool(w), "at": m, "zero": {"ls": zero} if isinstance(zero, float) else zero,
+            "m": at(m), "m2": at(2 * m), "m4": at(4 * m), "word": at(2 * m, 2) if w else None}
+
+
+def prof(base, lps):
+    return {"model": loops.MODEL, "base": base if isinstance(base, dict) else {"ls": base},
+            "zero": None, "loops": lps}
+
+
 def read(path, binary=False):
     with open(path, "rb" if binary else "r") as f:
         return f.read()
 
 
-class GlslTest(unittest.TestCase):
-    def test_dynamic_for_is_forced(self):
-        src = read(GLSL)
-        out = loops.force_glsl(src, 3)
-        self.assertNotIn("i < uCount", out)
-        self.assertRegex(out, r"for\(int i = 0;_so_loop\d+<3; i\+\+\)\{ _so_loop\d+\+\+;")
-
-    def test_while_true_and_nesting(self):
-        src = "void main(){ while(true){ if(a) break; while(true){ if(b) break; } } }"
-        out = loops.force_glsl(src, 4)
-        self.assertEqual(out.count("<4;"), 1)  # outer
-        self.assertEqual(out.count("<1;"), 1)  # nested: once per outer iteration
-        word = loops.force_glsl(src, 1, nested=2)
-        self.assertEqual((word.count("<1;"), word.count("<2;")), (1, 1))
-
+class ModelTest(unittest.TestCase):
     def test_nested_loop_is_out_of_the_slope(self):
-        # terrain probe loop on G78: base 10, at 0 -> 4, at 2 -> 15, its nested scan twice -> 12
-        p = {"base": {"ls": 10.0}, "loops": [{"zero": {"ls": 4.0}, "two": {"ls": 15.0}, "word": {"ls": 12.0}}]}
-        self.assertEqual(loops.cycles_at(p, 3)["ls"], 10.0 + 2 * 3.0)
-        self.assertEqual(loops.cycles_at(p, 0)["ls"], 4.0)
-        p["loops"][0]["word"] = None  # no nested loop: the whole step is the slope
-        self.assertEqual(loops.cycles_at(p, 3)["ls"], 10.0 + 2 * 5.0)
+        # Forward+ light loop: once 12, 3 per light, its nested word scan 2 per run (charged once)
+        p = prof(10.0, [line(12.0, 3.0, "body", w=2.0)])
+        self.assertAlmostEqual(loops.cycles_at(p, 3)["ls"], 12.0 + 2 * 3.0)
+        p = prof(10.0, [line(12.0, 5.0, "body")])  # no nested loop: the whole step is the slope
+        self.assertAlmostEqual(loops.cycles_at(p, 3)["ls"], 12.0 + 2 * 5.0)
 
-    def test_fractional_n_is_linear(self):
-        p = {"base": {"ls": 10.0}, "loops": [{"zero": {"ls": 4.0}, "two": {"ls": 15.0}, "word": None}]}
-        self.assertEqual(loops.cycles_at(p, 0.5)["ls"], 10.0 - 0.5 * 6.0)  # between 0 and 1 repeats
-        self.assertEqual(loops.cycles_at(p, 1.5)["ls"], 10.0 + 0.5 * 5.0)
+    def test_slope_from_m_to_2m(self):
+        # base 10: malioc unrolled the loop once and kept its uniform reads in registers; the real loop once is 14
+        p = prof(10.0, [line(14.0, 3.0, zero=4.0)])
+        self.assertAlmostEqual(loops.cycles_at(p, 1)["ls"], 14.0)
+        self.assertAlmostEqual(loops.cycles_at(p, 3)["ls"], 20.0)
+        self.assertAlmostEqual(loops.cycles_at(p, 0)["ls"], 4.0)
+        self.assertAlmostEqual(loops.cycles_at(p, 0.5)["ls"], 9.0)  # between the measured zero and once
+        self.assertAlmostEqual(loops.cycles_at(p, 1.5)["ls"], 15.5)
+
+    def test_while_true_keeps_its_scan_below_one(self):
+        # exit test in the body: at 0 lights the real shader still scans, the line goes on below 1
+        p = prof(10.0, [line(12.0, 3.0, "body", w=2.0)])
+        self.assertAlmostEqual(loops.cycles_at(p, 0)["ls"], 9.0)
+        self.assertAlmostEqual(loops.cycles_at(p, 0.5)["ls"], 10.5)
+
+    def test_ladder_steps(self):
+        lp = line(3.0, 1.0)
+        self.assertTrue(loops.agrees(loops.steps(lp)))
+        lp["m4"] = dict(lp["m2"])  # stopped growing: a constant cap below 4M
+        self.assertFalse(loops.agrees(loops.steps(lp)))
+        lp = line(3.0, 1.0)
+        lp["m2"] = None  # malioc N/A
+        self.assertIsNone(loops.steps(lp))
+
+    def test_negative_slope_is_zero(self):
+        p = prof(10.0, [line(12.0, 0.0, zero=4.0)])
+        lp = p["loops"][0]
+        lp["m2"], lp["m4"] = {"ls": 7.0}, {"ls": 2.0}
+        self.assertAlmostEqual(loops.cycles_at(p, 5)["ls"], loops.cycles_at(p, 1)["ls"])
+
+    def test_reads_kept_in_registers_at_m(self):
+        # one load per iteration, but at M iterations malioc still kept all of them in registers: the line is 2M..4M
+        m = loops.SLOPE_M
+        p = prof(2.0, [line(3.0, 1.0, zero=1.0)])
+        p["loops"][0]["m"] = {"ls": 2.0}
+        self.assertAlmostEqual(loops.cycles_at(p, 1)["ls"], 3.0)
+        self.assertAlmostEqual(loops.cycles_at(p, m)["ls"], 2.0 + m)
+        p = prof(2.0, [line(3.0, 1.0, zero=1.0)])
+        p["loops"][0]["m4"]["ls"] -= 0.02 * 2 * m  # malioc a bit below the line at 4M: the line is M..2M
+        self.assertAlmostEqual(loops.cycles_at(p, 1)["ls"], 3.0)
 
     def test_every_loop_has_its_n(self):
-        p = {"base": {"ls": 10.0, "fma": 5.0},
-             "loops": [{"zero": {"ls": 6.0, "fma": 4.0}, "two": {"ls": 13.0, "fma": 6.0}, "word": None},
-                       {"zero": {"ls": 9.0, "fma": 3.0}, "two": {"ls": 11.0, "fma": 7.0}, "word": None}]}
-        self.assertEqual(loops.cycles_at(p, [0, 3]), {"ls": 10.0 - 4.0 + 2 * 1.0, "fma": 5.0 - 1.0 + 2 * 2.0})
+        p = prof({"ls": 10.0, "fma": 5.0}, [line({"ls": 10.0, "fma": 5.0}, {"ls": 3.0, "fma": 1.0},
+                                                 zero={"ls": 6.0, "fma": 4.0}),
+                                            line({"ls": 10.0, "fma": 5.0}, {"ls": 1.0, "fma": 2.0},
+                                                 zero={"ls": 9.0, "fma": 3.0})])
+        got = loops.cycles_at(p, [0, 3])
+        self.assertAlmostEqual(got["ls"], 10.0 - 4.0 + 2 * 1.0)
+        self.assertAlmostEqual(got["fma"], 5.0 - 1.0 + 2 * 2.0)
         self.assertEqual(loops.cycles_at(p, 2), loops.cycles_at(p, [2, 2]))  # one n for all is the same formula
         self.assertEqual(loops.cycles_at(p, 1), p["base"])
 
     def test_plan_and_forcing_per_loop(self):
-        src = "void main(){ while(true){ if(a) break; while(true){ if(b) break; } } for(int i=0;i<uN;i++){ x+=1.0; } }"
-        self.assertEqual(loops.outer_loops(src), [{"nested": True}, {"nested": False}])
-        self.assertEqual([(m, k) for m, k, _, _ in loops.plan(src)],
-                         [("base", None), ("zero", 0), ("two", 0), ("word", 0), ("zero", 1), ("two", 1),
-                          ("zero", None)])
-        out = loops.force_glsl(src, [3, 0])
-        self.assertEqual((out.count("<3;"), out.count("<1;"), out.count("<0;")), (1, 1, 1))  # nested: once
-        word = loops.force_glsl(src, 1, [2, 1])
-        self.assertEqual((word.count("<2;"), word.count("<1;")), (1, 2))
-        p = {"base": {"x": 1.0}, "loops": [{"zero": {"x": 0.5}, "two": {"x": 2.0}, "word": {"x": 1.0}},
-                                            {"zero": {"x": 0.8}, "two": {"x": 1.1}, "word": None}]}
-        prof = loops.profile(loops.plan(src), [{"x": v} for v in (1.0, 0.5, 2.0, 1.0, 0.8, 1.1, 0.2)])
-        self.assertEqual((prof["loops"], prof["zero"]), (p["loops"], {"x": 0.2}))
+        # while(true) with a nested loop, then a header-tested loop
+        outer = [{"nested": True, "exit": "body"}, {"nested": False, "exit": "header"}]
+        m = loops.SLOPE_M
+        with mock.patch.object(loops, "outer_loops", return_value=outer):
+            plan = loops.plan(b"")
+        self.assertEqual([(name, k, ns, nests) for name, k, ns, nests in plan],
+                         [("base", None, [1, 1], [1, 1]), ("m", 0, [m, 1], [1, 1]), ("m2", 0, [2 * m, 1], [1, 1]),
+                          ("m4", 0, [4 * m, 1], [1, 1]), ("word", 0, [2 * m, 1], [2, 1]), ("zero", 1, [1, 0], [1, 1]),
+                          ("m", 1, [1, m], [1, 1]), ("m2", 1, [1, 2 * m], [1, 1]), ("m4", 1, [1, 4 * m], [1, 1])])
+        pr = loops.profile(plan, [{"x": float(v)} for v in range(9)])
+        self.assertEqual(pr["loops"], [{"exit": "body", "nested": True, "at": m, "zero": None, "m": {"x": 1.0},
+                                        "m2": {"x": 2.0}, "m4": {"x": 3.0}, "word": {"x": 4.0}},
+                                       {"exit": "header", "nested": False, "at": m, "zero": {"x": 5.0},
+                                        "m": {"x": 6.0}, "m2": {"x": 7.0}, "m4": {"x": 8.0}, "word": None}])
+        self.assertEqual((pr["zero"], pr["model"]), (None, loops.MODEL))
 
-    def test_every_loop_at_zero_is_measured(self):
-        p = {"base": {"ls": 29.0}, "zero": {"ls": 4.0},
-             "loops": [{"zero": {"ls": 20.0}, "two": {"ls": 35.0}, "word": None},
-                       {"zero": {"ls": 25.0}, "two": {"ls": 33.0}, "word": None}]}
-        self.assertEqual(loops.cycles_at(p, 0)["ls"], 4.0)
-        self.assertEqual(loops.cycles_at(p, [0, 1])["ls"], 20.0)
-        self.assertEqual(loops.cycles_at(p, [1, 2])["ls"], 29.0 + 4.0)
-        self.assertEqual(loops.cycles_at(p, [0.5, 0])["ls"], 29.0 - 0.5 * 9.0 - 4.0 + 0.5 * (4.0 - 29.0 + 9.0 + 4.0))
-
-    def test_bounds_traced_to_uniforms(self):
-        src = """uniform 	vec4 CR_Params0;
-uniform 	uint _WaveCount;
-UNITY_BINDING(0) uniform Block {
-	vec4                _Arr[16];
-	float                _Scale;
-};
-uvec4 u_xlatu1;
-void main(){
-    u_xlatu1.xw = uvec2(CR_Params0.zw);
-    if(c){ u_xlatu1.y = 7u; }
-    while(true){ if(a) break; while(true){ if(b) break; } }
-    u_xlatu1.x = min(u_xlatu1.w, 128u);
-    for(uint u_xlatu_loop_1 = 0u ; u_xlatu_loop_1<u_xlatu1.x ; u_xlatu_loop_1++){ x += 1.0; }
-    for(uint i = 0u ; i<=_WaveCount ; i++){ x += 1.0; }
-    for(uint j = 0u ; j<u_xlatu1.y ; j++){ x += 1.0; }
-}"""
-        b = loops.glsl_bounds(src)
-        self.assertEqual([loops.bound_text(x) for x in b], [None, "min(CR_Params0.w, 128)", "_WaveCount + 1", None])
-        params = {"CR_Params0": [1.0, 2.0, 0.0, 300.0], "_WaveCount": 4}
-        self.assertEqual([loops.bound_value(x, params) for x in b], [None, 128.0, 5.0, None])
-        self.assertIsNone(loops.bound_value(b[1], {}))  # the event has no such parameter: default n
-
-    def test_bounds_that_are_not_the_trip_count(self):
-        head = "uniform \tvec4 P;\nuint b;\nint k;\nvoid main(){\n"
-        cases = [("for(uint i = 1u ; i<uint(P.w) ; i++){ x += 1.0; }", "uint(P.w) - 1", 4.0),
-                 ("for(uint i = 0u ; i<uint(P.w) ; i+=2u){ x += 1.0; }", None, None),
-                 ("b = uint(P.w);\nfor(uint i = 0u ; i<b ; i++){ b = b + 1u; }", None, None),
-                 ("for(uint i = 0u ; i<uint(P.w) ; i++){ i += 1u; }", None, None),
-                 ("b = uint(P.w);\nb += 3u;\nfor(uint i = 0u ; i<b ; i++){ x += 1.0; }", None, None),
-                 ("k = int(P.x) + int(P.y);\nfor(int i = 0 ; i<k ; i++){ x += 1.0; }", "int(P.x) + int(P.y)", 2.0),
-                 ("b = uint(P.w) + 4294967295u;\nfor(uint i = 0u ; i<b ; i++){ x += 1.0; }", "int(P.w) + -1", 4.0)]
-        for code, text, value in cases:
-            b = loops.glsl_bounds(head + code + "\n}")
-            self.assertEqual(loops.bound_text(b[0]) is not None, text is not None, code)
-            if value is not None:
-                self.assertEqual(loops.bound_value(b[0], {"P": [1.5, 1.5, 0.0, 5.0]}), value, code)
-
-    def test_static_loop_is_kept(self):
-        self.assertIsNone(loops.force_glsl("void main(){ for(int i = 0 ; i<4 ; i++){ x += 1.0; } }", 2))
-
+    def test_every_header_loop_at_zero_is_measured(self):
+        # two header-tested loops (each alone at 0 -> 20, 25; both -> 4) and a while(true) loop left at 1
+        p = prof(29.0, [line(29.0, 6.0, zero=20.0), line(29.0, 4.0, zero=25.0), line(29.0, 2.0, "body")])
+        p["zero"] = {"ls": 4.0}
+        self.assertAlmostEqual(loops.cycles_at(p, [0, 0, 1])["ls"], 4.0)
+        self.assertAlmostEqual(loops.cycles_at(p, [0, 0, 3])["ls"], 4.0 + 2 * 2.0)
+        self.assertAlmostEqual(loops.cycles_at(p, [0, 1, 1])["ls"], 20.0)
+        self.assertAlmostEqual(loops.cycles_at(p, [1, 2, 0])["ls"], 29.0 + 4.0 - 2.0)
+        self.assertAlmostEqual(loops.cycles_at(p, [0.5, 0, 1])["ls"],
+                               29.0 - 0.5 * 9.0 - 4.0 + 0.5 * (4.0 - 29.0 + 9.0 + 4.0))
 
 class LoopCounterTest(unittest.TestCase):
     """rd_loop_counter: the fragment shader rd_loops.py swaps in to read trip counts as colour."""
@@ -189,19 +197,77 @@ class SpirvTest(unittest.TestCase):
     def test_no_dynamic_loop(self):
         self.assertIsNone(loops.force_spirv(read(STATIC_SPV, True), 2))
 
+    def test_forced_cluster_module(self):
+        src = read(CLUSTER_SPV, True)
+        for _, _, ns, nests in loops.plan(src):
+            self.assertValid(loops.force_spirv(src, ns, nests))
+
+    def assertValid(self, out):
+        self.assertIsNotNone(out)
+        val = spirv_val()
+        if val:
+            fd, path = tempfile.mkstemp(suffix=".spv")
+            os.write(fd, out)
+            os.close(fd)
+            try:
+                r = subprocess.run([val, path], capture_output=True, text=True)
+            finally:
+                os.remove(path)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     @unittest.skipUnless(os.path.exists(mali.MALIOC), "malioc not installed")
     def test_price_is_linear_in_n(self):
         src = read(SPV, True)
-        p = rules.parametric(loops.forced(src), "vulkan", "fragment", "Mali-G78")
+        p = rules.parametric(src, "vulkan", "fragment", "Mali-G78")
         self.assertIsNotNone(p)
         self.assertEqual(len(p["loops"]), 1)
         lp = p["loops"][0]
-        c0, c1, c2 = lp["zero"]["sfu"], p["base"]["sfu"], lp["two"]["sfu"]
+        self.assertEqual(lp["exit"], "header")
         self.assertIsNone(lp["word"])  # no nested loops
+        c0, c1, c4 = (loops.cycles_at(p, n)["sfu"] for n in (0, 1, 4))
+        self.assertEqual(c0, lp["zero"]["sfu"])
         self.assertLess(c0, c1)
-        self.assertAlmostEqual(c2 - c1, c1 - c0, delta=0.25 * (c1 - c0))
-        self.assertAlmostEqual(loops.cycles_at(p, 4)["sfu"], c1 + 3 * (c2 - c1))
-        self.assertEqual(loops.cycles_at(p, 0)["sfu"], c0)
+        self.assertAlmostEqual(c4 - c1, 3 * (c1 - c0), delta=0.25 * 3 * (c1 - c0))
+
+    @unittest.skipUnless(os.path.exists(mali.MALIOC), "malioc not installed")
+    def test_slope_without_unrolling(self):
+        # wave loop (2): at a few constant iterations malioc keeps _Waves[j] in registers (no LS per iteration), a
+        # dynamic loop loads it every iteration
+        src = read(CLUSTER_SPV, True)
+
+        def direct(ns, core):
+            return pricing.combined(mali.measure(loops.force_spirv(src, ns), core, "vulkan", "fragment"))["longest"]
+        for core in ("Mali-G78", "Mali-G52", "Mali-G720"):
+            p = rules.parametric(src, "vulkan", "fragment", core)
+            self.assertEqual([lp["exit"] for lp in p["loops"]], ["header", "body", "header"])
+            self.assertEqual(direct([1, 1, 3], core)["ls"], direct([1, 1, 1], core)["ls"], core)  # unrolled
+            got = loops.cycles_at(p, [1, 1, 3])["ls"] - loops.cycles_at(p, [1, 1, 1])["ls"]
+            self.assertAlmostEqual(got, 2.0, delta=0.1, msg=core)
+            for n in (96, 200):
+                self.assertAlmostEqual(loops.cycles_at(p, [1, 1, n])["ls"], direct([1, 1, n], core)["ls"], delta=1.5,
+                                       msg=f"{core} n={n}")
+
+    @unittest.skipUnless(os.path.exists(mali.MALIOC), "malioc not installed")
+    def test_loop_with_a_constant_cap(self):
+        # leaves at 24 steps too: forced past 24 the price stops growing, the ladder goes down until it grows again
+        src = read(CAPPED_SPV, True)
+        for core in ("Mali-G78", "Mali-G52", "Mali-G720"):
+            p = rules.parametric(src, "vulkan", "fragment", core)
+            self.assertLess(p["loops"][0]["at"] * 4, 24 + 1, core)
+            for n in (2, 12, 24):
+                direct = pricing.combined(mali.measure(loops.force_spirv(src, n), core, "vulkan", "fragment"))
+                self.assertAlmostEqual(loops.cycles_at(p, n)["t"], direct["longest"]["t"], delta=0.05, msg=core)
+
+    @unittest.skipUnless(os.path.exists(mali.MALIOC), "malioc not installed")
+    def test_while_true_keeps_its_scan_at_zero(self):
+        # forced to 0 iterations the light loop loses its tile read; the real one reads the tile and then exits
+        src = read(CLUSTER_SPV, True)
+        p = rules.parametric(src, "vulkan", "fragment", "Mali-G78")
+        forced0 = pricing.combined(mali.measure(loops.force_spirv(src, [1, 0, 1]), "Mali-G78", "vulkan",
+                                                "fragment"))["longest"]
+        one, s = loops._line(p["loops"][1], "ls")
+        self.assertAlmostEqual(loops.cycles_at(p, [1, 0, 1])["ls"], loops.cycles_at(p, 1)["ls"] - s)
+        self.assertGreater(loops.cycles_at(p, [1, 0, 1])["ls"], forced0.get("ls") or 0)
 
 
 class SpirvBoundsTest(unittest.TestCase):
@@ -217,6 +283,13 @@ class SpirvBoundsTest(unittest.TestCase):
         self.assertIsNone(loops.bound_value(b[0], {"@1.0": blocks["@1.0"]}))  # a block the call did not read
         self.assertIsNone(loops.bound_value(["b", 1, 0, 64, "f"], blocks))  # past the bytes of the block
         self.assertEqual(loops.bound_text(b[0]), "int(min(block 1.0 +16 (f), block 1.2 +180 (f)))")
+
+    def test_vector_written_by_shuffle(self):
+        # u_xlatu1.xw = uvec2(CR_Params0.zw): the bound min(u_xlatu1.w, 128) is read through OpVectorShuffle
+        b = loops.spirv_bounds(read(CLUSTER_SPV, True))
+        self.assertEqual(b, [["min", ["int", ["b", 1, 0, 12, "f"]], ["c", 128.0]], None, ["b", 1, 0, 16, "u"]])
+        block = {"@1.0": base64.b64encode(struct.pack("<4f4I", 0, 0, 7, 3.0, 5, 0, 0, 0)).decode()}
+        self.assertEqual([loops.bound_value(x, block) for x in b], [3.0, None, 5.0])
 
     def test_glslang_counter(self):
         self.assertEqual(loops.spirv_bounds(read(SPV, True)), [["b", 0, 0, 0, "i"]])

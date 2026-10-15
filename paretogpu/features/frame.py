@@ -26,7 +26,7 @@ def run_command(args):
 def print_snapshot(snap, out):
     events = snap["events"]
     draws = [e for e in events if e["kind"] == "draw"]
-    dev = snap.get("device") if snap.get("source") == "device" else None
+    dev = snap.get("device")
     if dev:
         print(f"{dev['model']} ({dev.get('gpu') or 'GPU unknown'}, {snap['graphics_api']}, profile "
               f"{dev.get('profile') or 'of the device'}): {len(events)} calls in {snap.get('seconds') or 0:.0f} s")
@@ -49,17 +49,18 @@ def print_snapshot(snap, out):
           + "  (" + ", ".join(f"{m} {n}" for m, n in methods.most_common()) + ")")
     if snap.get("renderdoc"):
         r = snap["renderdoc"]
-        print(f"capture replayed on the device: pixels from Samples Passed, vertices from the indices -> {r['capture']}"
-              if dev else f"renderdoc: {r['matched']} events matched, {r['missing']} without calls -> {r['capture']}")
+        print(f"renderdoc: {r['matched']} events matched, {r['missing']} without calls -> {r['capture']}"
+              + (f", replayed on {r['replay']}" if r.get("replay") else ""))
         if r.get("mismatched"):
             print(f"  WARNING: {r['mismatched']} draws whose RenderDoc calls do not match the Frame Debugger event "
                   "(index or vertex count, or a full-screen pass with more pixels than its target; "
                   "ev['rd']['count_mismatch']): the call order went astray, their counters may be another draw's")
-        lost = {"ps_invocations", "vs_invocations", "cs_invocations"} - set(r.get("counters") or [])
-        if lost and not dev:  # device frames: pixels from Samples Passed, vertices from indices
+        used = {"ps_invocations", "vs_invocations"} | ({"cs_invocations"} if any(e["kind"] == "compute" for e in events)
+                                                       else set())
+        lost = used - set(r.get("counters") or [])
+        if lost:
             print(f"  WARNING: the capture has no {', '.join(sorted(lost))}: vertices fall back to the Frame Debugger "
-                  "count and threads to groups x group size, pixels have none (draws without pixels get no fragment "
-                  "cost)")
+                  "count, compute threads to groups x group size, pixels to none (no fragment cost)")
     print(f"-> {os.path.join(out, workspace.SNAPSHOT_FILE)}")
 
 

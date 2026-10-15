@@ -104,20 +104,14 @@ def steps(inputs):
                     "--out", W("out", "cost_a")]),
         ("cost_b", ["cost", W("snaps", b), "--variants", v, "--no-compile", "--cores", "preset:mobile",
                     "--materials", "--project", project, "--out", W("out", "cost_b")]),
-        ("cost_gles", ["cost", W("snaps", a), "--variants", v, "--no-compile", "--cores", "Mali-G78", "--api", "gles",
-                       "--out", W("out", "cost_gles")]),
-        ("compare", ["compare", W("out", "cost_a"), W("out", "cost_b"), "--out", W("out", "compare")]),
-        ("hotspots", ["hotspots", W("out", "cost_a"), "--top", "4", "--out", W("out", "hotspots")]),
     ]
     if inputs.get("phone"):
-        out.insert(3, ("cost_phone", ["cost", W("snaps", inputs["phone"]), "--variants", v, "--no-compile", "--cores",
-                                      "preset:mobile", "--out", W("out", "cost_phone")]))
+        out.append(("cost_phone", ["cost", W("snaps", inputs["phone"]), "--variants", v, "--no-compile", "--cores",
+                                   "preset:mobile", "--out", W("out", "cost_phone")]))
     if len(mats) >= 2:
-        out.insert(4, ("matcompare", ["matcompare", "--project", project, mats[0], mats[1], "--variants", v,
-                                      "--no-compile", "--out", W("out", "matcompare")]))
-    if mats:
-        out.insert(5, ("matshader", ["matshader", "--project", project, mats[0], "--variants", v, "--no-compile",
-                                     "--out", W("out", "matshader")]))
+        out.append(("matcompare", ["matcompare", "--project", project, mats[0], mats[1], "--variants", v,
+                                   "--no-compile", "--out", W("out", "matcompare")]))
+    out.append(("compare", ["compare", W("out", "cost_a"), W("out", "cost_b"), "--out", W("out", "compare")]))
     return out
 
 
@@ -171,7 +165,7 @@ def run(name, inputs, bench=True):
 
 def ui(res, inputs):
     gets = {"schema": "/api/schema", "options": "/api/options", "reports": "/api/reports", "costs": "/api/costs",
-            "matcompares": "/api/results?kind=matcompare", "matshaders": "/api/results?kind=matshader",
+            "matcompares": "/api/results?kind=matcompare",
             "doctor": "/api/doctor",
             "materials": "/api/materials?project=" + urllib.request.quote(inputs["project"]), "ping": "/api/ping"}
     d = os.path.join(res, "ui")

@@ -4,7 +4,6 @@ import re
 import time
 import urllib.parse
 
-from paretogpu.app import code_version
 from paretogpu.core import compare, frame_cost
 from paretogpu.store import cost_runs as runs_store
 from paretogpu.store import results as store_results
@@ -43,7 +42,7 @@ def out_url(path):
     return "/out/" + urllib.parse.quote(os.path.relpath(path, out).replace("\\", "/"))
 
 
-PANEL = ("main_core", "api", "total", "fragment", "vertex", "compute", "coverage", "shaders", "unpriced_draws",
+PANEL = ("main_core", "total", "fragment", "vertex", "compute", "coverage", "shaders", "unpriced_draws",
          "unpriced_compute", "failed_reasons", "checked", "pixel_methods", "renderdoc")
 
 
@@ -110,8 +109,7 @@ def snapshots():
                     row["cost_time"] = os.path.getmtime(page)
                     t = m.get("summary") or {}
                     row.update(main_core=t.get("main_core"), total=t.get("total"), fragment=t.get("fragment"),
-                               vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"),
-                               api_cost=t.get("api"), stale=t.get("code_version") != code_version.current())
+                               vertex=t.get("vertex"), compute=t.get("compute"), priced=t.get("priced"))
         rows.append(row)
     return sorted(rows, key=lambda r: -r["time"])
 
@@ -124,7 +122,7 @@ def cost_runs():
     for snap in snapshots():
         for m in runs_store.runs(snap["path"]):
             rows.append({"id": f"{snap['name']}/{m['id']}", "snapshot": snap["name"], "project": snap["project"],
-                         "snapshot_time": snap["time"], "computed_at": m.get("computed_at"), "api": m.get("api"),
+                         "snapshot_time": snap["time"], "computed_at": m.get("computed_at"),
                          "main_core": m.get("main_core"), "total": (m.get("totals") or {}).get(m.get("main_core")),
                          "cores": m.get("cores"), "malioc": m.get("malioc"), "checked": m.get("checked")})
     return sorted(rows, key=lambda r: -(r["computed_at"] or 0))
@@ -187,25 +185,36 @@ def hub_projects():
     return sorted(rows, key=lambda v: -(v.get("lastModified") or 0))
 
 
-_phones = {"time": 0, "rows": []}
+def project_key(path):
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+_adb = {}  # (what, serial) -> (time, value); the window polls the status every 8 s
+
+
+def adb_cached(what, serial=None, ttl=15):
+    from paretogpu.adapters import renderdoc as rdoc
+    hit = _adb.get((what, serial))
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    fn = {"devices": rdoc.devices, "packages": rdoc.installed_packages, "unlocked": rdoc.device_unlocked}[what]
+    v = fn() if serial is None else fn(serial)
+    _adb[(what, serial)] = (time.time(), v)
+    return v
 
 
 def phones(unity):
     """Phones with a project's build installed, as pseudo-projects with path "device:<serial>:<project>"."""
-    from paretogpu.adapters import renderdoc as rdoc
     from paretogpu.adapters.unity import cli as export
-    if time.time() - _phones["time"] < 15:
-        return _phones["rows"]
     rows = []
-    for serial, model in rdoc.devices():
-        installed = rdoc.installed_packages(serial)
+    for serial, model in adb_cached("devices"):
+        installed = adb_cached("packages", serial, ttl=120)
         for p in unity:
             pkg = export.android_package(p["path"])
             if pkg and pkg in installed and not pkg.startswith(("com.UnityTechnologies.", "com.DefaultCompany.")):
                 rows.append({"path": f"device:{serial}:{p['path']}", "title": f"Телефон {model} · {p['title']}",
                              "serial": serial, "model": model, "package": pkg, "project": p["path"],
                              "version": None, "open": True, "device": True, "snapshots": 0})
-    _phones.update(time=time.time(), rows=rows)
     return rows
 
 
@@ -220,22 +229,23 @@ def options():
     from paretogpu.adapters.unity import cli as export
     snaps = snapshots()
     settings = load_json(os.path.join(STATE, "settings.json"), {})
-    hub = {os.path.normcase(os.path.abspath(v["path"])): v for v in hub_projects()}
-    paths = list(dict.fromkeys(list(settings.get("projects", [])) + [v["path"] for v in hub.values()]
-                               + [s["project"] for s in snaps if s["project"]]))
+    hub = {project_key(v["path"]): v for v in hub_projects()}
+    paths = {}
+    for path in list(settings.get("projects", [])) + [v["path"] for v in hub.values()] + [s["project"] for s in snaps]:
+        if path and not parse_phone(path):
+            paths.setdefault(project_key(path), path)
     unity = []
-    for path in paths:
+    for path in paths.values():
         if not os.path.exists(os.path.join(path, "ProjectSettings", "ProjectVersion.txt")):
             continue
-        h = hub.get(os.path.normcase(os.path.abspath(path))) or {}
+        h = hub.get(project_key(path)) or {}
         try:
             ver = h.get("version") or export.editor_version(path)
         except Exception:
             ver = None
         unity.append({"path": path, "title": h.get("title") or os.path.basename(os.path.abspath(path)),
                       "version": ver, "open": export.project_open(path),
-                      "snapshots": sum(1 for x in snaps if x["project"]
-                                       and os.path.normcase(x["project"]) == os.path.normcase(path))})
+                      "snapshots": sum(1 for x in snaps if x["project"] and project_key(x["project"]) == project_key(path))})
     projects = [p["path"] for p in unity]
     variants = workspace.variants_dirs()
     from paretogpu.model import cores
@@ -251,8 +261,14 @@ def remember_values(preset, values):
     path = os.path.join(STATE, "settings.json")
     s = load_json(path, {})
     s.setdefault("last", {})[preset] = values
-    if values.get("project"):
-        s["projects"] = list(dict.fromkeys([values["project"]] + s.get("projects", [])))[:10]
+    project = values.get("project")
+    if project:
+        project = (parse_phone(project) or (None, project))[1]
+        keep = {}
+        for p in [project] + s.get("projects", []):
+            if p and not parse_phone(p):
+                keep.setdefault(project_key(p), p)
+        s["projects"] = list(keep.values())[:10]
     save_json(path, s)
 
 
@@ -262,7 +278,7 @@ def doctor_checks():
     from paretogpu import doctor
     doctor.results.clear()
     with contextlib.redirect_stdout(io.StringIO()):
-        for check in (doctor.check_malioc, doctor.check_renderdoc, doctor.check_unity):
+        for check in (doctor.check_malioc, doctor.check_renderdoc, doctor.check_device, doctor.check_unity):
             try:
                 check()
             except Exception as e:
@@ -279,13 +295,12 @@ def editor_status(project):
     from paretogpu.adapters.unity import cli as export
     phone = parse_phone(project)
     if phone:
-        from paretogpu.adapters import renderdoc as rdoc
         serial, proj = phone
         st = {"project": True, "device": True, "cli": True, "open": True}
-        connected = serial in [s for s, _ in rdoc.devices()]
+        connected = serial in [s for s, _ in adb_cached("devices")]
         pkg = export.android_package(proj)
-        st["installed"] = bool(connected and pkg and pkg in rdoc.installed_packages(serial))
-        st["unlocked"] = bool(connected and rdoc.device_unlocked(serial))
+        st["installed"] = bool(connected and pkg and pkg in adb_cached("packages", serial, ttl=120))
+        st["unlocked"] = bool(connected and adb_cached("unlocked", serial))
         st["connected"] = connected
         st["ready"] = connected and st["installed"] and st["unlocked"]
         return st

@@ -1,9 +1,10 @@
 """Android frame (RenderDoc for Arm, adapters/renderdoc/rd_device.py) as a snapshot.
 
 Snapshot: one event per draw / dispatch with the phone's SPIR-V (ev["code"], identified as a project variant later by
-app/variants.identify). pixels = Samples Passed / target samples (samples_shaded with discard removed when present;
-editor: PSInvocations); vertices = distinct indices x instances (editor: VSInvocations); params = uniform block bytes
-{"@set.binding": base64} for core/loops.spirv_bounds. Paths get "(RP n:m)" like the editor's native passes.
+app/variants.identify); global keywords None: the build's are not in the capture. pixels = Samples Passed / target
+samples (samples_shaded with discard removed when present; 0 without a fragment shader; editor: PSInvocations);
+vertices = distinct indices x instances (editor: VSInvocations); params = uniform block bytes {"@set.binding": base64}
+for core/loops.spirv_bounds. Paths get "(RP n:m)" like the editor's native passes.
 """
 import hashlib
 import re
@@ -16,6 +17,7 @@ _RP = re.compile(r"^\(RP \d+:\d+\) ")
 SHARED = " (shared shader)"  # Unity's suffix for a module several shaders share
 PIXELS, VERTICES = "samples", "indices"  # pixel_method / vertex_method values
 SHADERS = "device/shaders"  # snapshot-relative folder of the phone's SPIR-V
+CAPTURE = "frame.rdc"
 IMGUI = "GUI.Repaint"
 KIND_OF = (("draw", "draw"), ("dispatch", "compute"))
 
@@ -32,12 +34,12 @@ def event_path(path, rp):
 
 def _shader_name(sh, pipeline):
     """A shared module is named after its first shader; a vertex module keeps SHARED because a depth-only draw may be
-    another shader's (app/variants.identify resolves it)."""
+    another shader's (app/variants.identify resolves it). None: RenderDoc named the objects itself."""
     for s in ("frag", "comp", "vert"):
-        name = (sh.get(s) or {}).get("name") or ""
-        if name and not name.startswith(("Shader Module", "Graphics Pipeline", "Compute Pipeline")):
+        name = (sh.get(s) or {}).get("name")
+        if name:
             return name[:-len(SHARED)] if name.endswith(SHARED) and s != "vert" else name
-    return pipeline or None
+    return pipeline
 
 
 def _event(index, a, d, path):
@@ -52,7 +54,7 @@ def _event(index, a, d, path):
           "meshes": d.get("meshes") or [], "pixels": None, "shader": name if kind == "draw" else None,
           "original_shader": name if kind == "draw" else None, "pass": None, "light_mode": None,
           "subshader": 0 if kind == "draw" else None, "pass_index": 0 if kind == "draw" else None,
-          "keywords": [], "global_keywords": [], "vertices": 0, "indices": 0, "instances": 0, "draw_calls": 1,
+          "keywords": [], "global_keywords": None, "vertices": 0, "indices": 0, "instances": 0, "draw_calls": 1,
           "rt": {k: (d.get("rt") or {}).get(k) for k in ("name", "width", "height", "count", "backbuffer")},
           "blend": d.get("blend"), "write_mask": d.get("write_mask"), "ztest": d.get("ztest"),
           "zwrite": d.get("zwrite"), "cull": d.get("cull"), "batch_break": None, "params": d.get("blocks") or {},
@@ -70,7 +72,8 @@ def _event(index, a, d, path):
         verts = d.get("unique_vertices") if d.get("unique_vertices") is not None else a.get("indices") or 0
         sp = d.get("samples_passed")
         shaded = d.get("samples_shaded") if d.get("samples_shaded") is not None else sp
-        px = None if shaded is None else round(shaded / max(1, (d.get("rt") or {}).get("samples") or 1))
+        px = (0 if "frag" not in sh else None if shaded is None
+              else round(shaded / max(1, (d.get("rt") or {}).get("samples") or 1)))
         ev.update(vertices=verts * inst, indices=(a.get("indices") or 0) * inst if d.get("indexed") else 0,
                   instances=a.get("instances") or 0, pixel_count=px if px is not None else 0,
                   pixel_method=PIXELS if px is not None else "none")
@@ -125,16 +128,18 @@ def snapshot(answer, meta):
     assign_stages(events)
     draw_events = [e for e in events if e["kind"] == "draw"]
     snap = {
-        "source": "device", "project": meta.get("project"), "unity": None,
-        "graphics_api": answer.get("api") or "Vulkan", "quality": None, "quality_level": None,
-        "build_target": "Android", "screen": answer.get("screen"), "pipeline": None, "play_mode": True,
+        "project": meta.get("project"), "unity": None,
+        "graphics_api": answer["api"], "quality": None, "quality_level": None,
+        "build_target": "Android", "screen": answer["screen"], "rotation": answer["rotation"], "pipeline": None,
+        "play_mode": True,
         "seconds": meta.get("seconds"), "total_events": len(events),
         "device": {"model": answer.get("device"), "serial": answer.get("serial"), "gpu": meta.get("gpu"),
-                   "app": meta.get("app"), "captured_at": meta.get("captured_at"), "capture": answer.get("capture"),
+                   "app": meta.get("app"), "captured_at": meta.get("captured_at"),
                    "discard_error": answer.get("discard_error"), "imgui_draws": imgui,
                    "discard_unshaded": sum(1 for e in events if e["rd"].get("discards")
                                            and e["rd"].get("samples_shaded") is None)},
-        "renderdoc": {"capture": answer.get("capture"), "matched": len(events), "missing": 0, "mismatched": 0,
+        "renderdoc": {"capture": CAPTURE, "replay": answer["serial"], "matched": len(events), "missing": 0,
+                      "mismatched": 0,
                       "counters": ["ps_invocations", "vs_invocations", "samples_passed"] if draw_events else [],
                       "attempts": 1},
         "events": events,

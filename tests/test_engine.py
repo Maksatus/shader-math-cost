@@ -117,7 +117,7 @@ class MeasureOnlyRequestedTest(unittest.TestCase):
         self.key = VariantKey("Test/Lit", 0, 0, "Forward", ("_A",))
         other = VariantKey("Test/Other", 0, 0, "Forward", ())
         for k in (self.key, other):
-            d = os.path.join(self.root, k.folder("vulkan"))
+            d = os.path.join(self.root, k.folder)
             os.makedirs(d, exist_ok=True)
             entries = []
             for s, stage in (("vert", "vertex"), ("frag", "fragment")):
@@ -126,7 +126,7 @@ class MeasureOnlyRequestedTest(unittest.TestCase):
                     f.write(b"spv")
                 entries.append({"file": fn, "shader": k.shader, "pass": k.pass_name, "subshader": k.subshader,
                                 "pass_index": k.pass_index, "keywords": list(k.keywords), "stage": stage,
-                                "platform": "vulkan", "fingerprint": "fp"})
+                                "fingerprint": "fp"})
             with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
                 json.dump(entries, f)
 
@@ -142,7 +142,7 @@ class MeasureOnlyRequestedTest(unittest.TestCase):
         ev = {"index": 0, "kind": "draw", "shader": "Test/Lit", "subshader": 0, "pass_index": 0, "pass": "Forward",
               "keywords": ["_A"]}
         with mock.patch.object(backend(), "measure", side_effect=stub):
-            st = variants.run([ev], None, self.root, ["Mali-G78", "Mali-G52"], ["vulkan"], compile_missing=False,
+            st = variants.run([ev], None, self.root, ["Mali-G78", "Mali-G52"], compile_missing=False,
                               rep=Recorder())
         self.assertEqual(sorted(measured), [("fragment", "Mali-G52"), ("fragment", "Mali-G78"),
                                             ("vertex", "Mali-G52"), ("vertex", "Mali-G78")])

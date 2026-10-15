@@ -39,8 +39,6 @@ function renderCost() {
   const mc = v => v == null ? "—" : (v / 1e6).toFixed(v >= 1e8 ? 0 : v >= 1e7 ? 1 : 2);
   const pc = v => v == null ? "—" : (100 * v).toFixed(v >= 0.1 ? 1 : 2) + "%";
   const short = c => c.replace("Mali-", "").replace("Immortalis-", "");
-  const plural = (n, one, few, many) =>
-    `${n} ${n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many}`;
   const objName = s => String(s || "").replace(/^\(RP \d+:\d+\) /, "");
 
   const thumb = document.getElementById("frThumb");
@@ -48,12 +46,12 @@ function renderCost() {
   const f = D.frame, cov = D.coverage;
   document.title = document.getElementById("title").textContent =
     `Стоимость кадра: ${f.project ? f.project.split(/[\\/]/).pop() : ""} ${((D.profile || {}).frame_size || []).join("×")}`.trim();
-  const dev = f.source === "device" ? f.device || {} : null;
+  const dev = f.device || null;
   document.getElementById("meta").textContent =
     (dev ? `Телефон ${dev.model || "?"} · ${dev.gpu || "GPU ?"} · ${f.graphics_api}`
       + `${dev.captured_at ? " · " + when(dev.captured_at) : ""}${dev.app ? " · " + dev.app : ""} · `
       : `Unity ${f.unity} · ${f.graphics_api} в редакторе, quality ${f.quality}, ${f.play_mode ? "Play Mode" : "Edit Mode"} · `) +
-    `цены: malioc ${D.malioc || ""}, ${D.api}` + (D.variants_checked === false ? " (варианты не сверены с шейдерами)" : "") + ` · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
+    `цены: malioc ${D.malioc || ""}` + (D.variants_checked === false ? " (варианты не сверены с шейдерами)" : "") + ` · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
     Object.entries(D.pixel_methods).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${D.frame_dir || ""}`;
 
   const PROF = D.profile || {warnings: []};
@@ -197,7 +195,7 @@ function renderCost() {
   }
   const HEAD_TIPS = {
     share: "Доля в шейдерных циклах кадра", events: "Сколько событий (draw / dispatch) в группе",
-    pixels: "Сколько раз выполнился фрагментный шейдер (метка рядом — откуда число)",
+    pixels: "Потоки фрагментного шейдера (метка рядом — откуда число)",
     price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
     px_price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
     total: "Пиксели × цена пикселя + вершины × цена вершины, млн циклов",
@@ -215,7 +213,6 @@ function renderCost() {
   }
   const BAD_FLAGS = new Set(["spilling", "regs_gt32"]);
   const flagTag = x => `<span class="flag ${x}">${x}</span>`;
-  const methodTag = m => m ? `<span class="m ${esc(m)}">${esc(m)}</span>` : "";
   function flagCount(flags) {
     if (!flags.length) return "";
     const bad = flags.some(x => BAD_FLAGS.has(x));
@@ -365,7 +362,7 @@ function renderCost() {
     const fixed = 9 + 9 + 8 + 9;
     const coreW = others.length ? Math.min(7, 24 / others.length) : 0;
     const nameW = 100 - fixed - 7 - coreW * others.length;
-    let h = `<h2>Шейдеры проекта <small>${shown.length} из ${n} · ${P.materials} материалов → ${P.variants} вариантов · ${short(main)} · `
+    let h = `<h2>Шейдеры проекта <small>${shown.length} из ${n} · ${plural(P.materials, "материал", "материала", "материалов")} → ${plural(P.variants, "вариант", "варианта", "вариантов")} · ${short(main)} · `
       + `один ряд — один скомпилированный шейдер · клик по строке — подробности</small></h2>`;
     h += `<div class="wrap ev"><table><colgroup><col style="width:${nameW}%"><col style="width:7%"><col style="width:9%"><col style="width:9%">`
        + others.map(() => `<col style="width:${coreW}%">`).join("") + `<col style="width:8%"><col style="width:9%"></colgroup><thead><tr>`

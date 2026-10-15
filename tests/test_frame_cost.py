@@ -1,7 +1,10 @@
 """Frame cost (core/frame_cost.py) and the pixel source rule on a synthetic frame."""
+import base64
+import struct
 import unittest
 
 from paretogpu.core import frame_cost as cost
+from paretogpu.core import loops
 from paretogpu.core import pixels
 from paretogpu.model import variant as variants
 
@@ -30,7 +33,7 @@ def state(events, prices):
         k = variants.VariantKey.of(ev)
         fp, vp = prices[ev["shader"]]
         st["keys"].append(k)
-        st["files"][k] = {("vulkan", "frag"): f"{ev['shader']}.frag.spv", ("vulkan", "vert"): f"{ev['shader']}.vert.spv"}
+        st["files"][k] = {"frag": f"{ev['shader']}.frag.spv", "vert": f"{ev['shader']}.vert.spv"}
         st["errors"][k] = []
         st["measurements"][f"{ev['shader']}.frag.spv"] = {"Mali-G78": record(f"{ev['shader']}.frag.spv", "fragment", fp)}
         st["measurements"][f"{ev['shader']}.vert.spv"] = {"Mali-G78": record(f"{ev['shader']}.vert.spv", "vertex", vp)}
@@ -55,18 +58,23 @@ class CostTest(unittest.TestCase):
 
     def test_loop_bounded_by_a_uniform_runs_as_the_event_says(self):
         ev = event(0, "opaque", "L", 100, vertices=3)
-        ev["params"] = {"_Count": [3.0, 9.0, 0.0, 0.0]}
+        ev["params"] = {"@0.1": base64.b64encode(struct.pack("<4f", 3.0, 9.0, 0.0, 0.0)).decode()}
         st = state([ev], {"L": (10, 1)})
-        prof = {"base": {"fma": 10.0, "arith": 10.0},
-                "loops": [{"zero": {"fma": 6.0, "arith": 6.0}, "two": {"fma": 13.0, "arith": 13.0}, "word": None},
-                          {"zero": {"fma": 8.0, "arith": 8.0}, "two": {"fma": 12.0, "arith": 12.0}, "word": None}]}
+        m = loops.SLOPE_M
+
+        def line(zero, s):  # header-tested loop, once = base, s per iteration
+            a = 10.0 + (m - 1) * s
+            return {"exit": "header", "nested": False, "at": m, "zero": {"fma": zero, "arith": zero},
+                    **{k: {"fma": a + i * m * s, "arith": a + i * m * s} for k, i in (("m", 0), ("m2", 1), ("m4", 3))},
+                    "word": None}
+        prof = {"base": {"fma": 10.0, "arith": 10.0}, "zero": None, "loops": [line(6.0, 3.0), line(8.0, 2.0)]}
         st["loops"] = {"L.frag.spv": {"Mali-G78": prof}}
-        st["loop_bounds"] = {"L.frag.spv": [None, ["min", ["u", "_Count", 0], ["c", 8.0]]]}
+        st["loop_bounds"] = {"L.frag.spv": [None, ["min", ["b", 0, 1, 0, "f"], ["c", 8.0]]]}
         c = cost.compute({}, [ev], st)
         r = c["events"][0]
-        self.assertEqual(r["cost"]["Mali-G78"]["px_price"], 10.0 + 1 * 3.0 + 2 * 2.0)  # n = [2 (default), 3 (_Count.x)]
+        self.assertEqual(r["cost"]["Mali-G78"]["px_price"], 10.0 + 1 * 3.0 + 2 * 2.0)  # n = [2 (default), 3 (block 0.1 +0)]
         self.assertEqual([(x["n"], x["from"]) for x in r["loop"]["loops"]], [(2, "default"), (3, "uniform")])
-        self.assertEqual(r["loop"]["loops"][1]["bound"], "min(_Count.x, 8)")
+        self.assertEqual(r["loop"]["loops"][1]["bound"], "min(block 0.1 +0 (f), 8)")
         self.assertEqual(c["loops"]["bounded"], 1)
         # capture gives loop 0: 1.5 iterations on average
         st["loop_iters"] = {0: {"n": [1.5, 0.0], "pixels": 16, "calls": 1}}
@@ -75,6 +83,10 @@ class CostTest(unittest.TestCase):
         self.assertEqual([(x["n"], x["from"]) for x in r["loop"]["loops"]], [(1.5, "frame"), (3, "uniform")])
         self.assertEqual(r["cost"]["Mali-G78"]["px_price"], 10.0 + 0.5 * 3.0 + 2 * 2.0)
         self.assertEqual(c["loops"]["unknown"], 0)
+        # `i < 2.5` runs 3 times
+        ev["params"] = {"@0.1": base64.b64encode(struct.pack("<4f", 2.5, 9.0, 0.0, 0.0)).decode()}
+        r = cost.compute({}, [ev], st)["events"][0]
+        self.assertEqual([x["n"] for x in r["loop"]["loops"]], [1.5, 3])
 
     def test_renderdoc_vertices_and_compute(self):
         draw = event(0, "opaque", "A", 100, vertices=50, rd={"ps_invocations": 100, "vs_invocations": 70})
@@ -84,7 +96,7 @@ class CostTest(unittest.TestCase):
                 "compute": {"shader": "CS", "kernel": "K", "groups": [10, 2, 1], "group_size": [8, 8, 1]}}
         st = state([draw], {"A": (10, 2)})
         k = variants.VariantKey.of(disp)
-        st["files"][k] = {("vulkan", "comp"): "CS.comp.spv"}
+        st["files"][k] = {"comp": "CS.comp.spv"}
         st["measurements"]["CS.comp.spv"] = {"Mali-G78": record("CS.comp.spv", "compute", 3)}
         c = cost.compute({}, [draw, disp], st)
         a, b = sorted(c["events"], key=lambda r: r["index"])
@@ -113,16 +125,23 @@ class PixelsTest(unittest.TestCase):
         self.assertEqual((p[0]["pixels"], p[0]["method"]), (777, "renderdoc"))
         self.assertEqual((p[1]["pixels"], p[1]["method"]), (0, "none"))
 
+    def test_quads_unless_no_fragment_shader_ran(self):
+        evs = [event(0, "opaque", "S", 777, rd={"ps_invocations": 777, "threads": 900}),
+               event(1, "shadow", "S", 0, rd={"ps_invocations": 0})]  # frame_quads leaves it without threads
+        p = pixels.resolve(evs)
+        self.assertEqual((p[0]["pixels"], p[0]["method"]), (900, "quads"))
+        self.assertEqual(p[1]["pixels"], 0)
+
 
 class DeviceDrawTest(unittest.TestCase):
     def test_depth_only_draw_has_no_pixel_price(self):
-        ev = event(0, "shadow", "S", 5000, vertices=24, rd={"ps_invocations": 5000, "vs_invocations": 24,
+        ev = event(0, "shadow", "S", 0, vertices=24, rd={"ps_invocations": 0, "vs_invocations": 24,
                                                                        "pixel_method": "samples",
                                                                        "vertex_method": "indices"})
         ev["code"] = {"vert": "device/shaders/a.vert.spv", "hash": "abc"}
         st = state([ev], {"S": (10, 3)})
         k = variants.VariantKey.of(ev)
-        st["files"][k] = {("vulkan", "vert"): "S.vert.spv"}
+        st["files"][k] = {"vert": "S.vert.spv"}
         st["captured"] = {k}
         c = cost.compute({}, [ev], st)
         r = c["events"][0]

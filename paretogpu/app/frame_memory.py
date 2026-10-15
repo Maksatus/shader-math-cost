@@ -3,35 +3,28 @@ import os
 
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.core import memory
-from paretogpu.store import memo as memo_store
+from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
-MEMO = "rd_memory/1"
-CAPTURE = "frame.rdc"
 ACTIONS = "rd_actions.json"
 MEMORY = "rd_memory.json"
 
 
-def read(frame_dir, rep=CONSOLE, memo=None):
-    """-> {"textures", "usage", "actions"} or None. A device frame's capture replays only on the phone, so its kept
-    rd_memory.json is read instead."""
-    capture, actions = os.path.join(frame_dir, CAPTURE), os.path.join(frame_dir, ACTIONS)
-    kept = os.path.join(frame_dir, MEMORY)
-    if not os.path.exists(capture) and os.path.exists(kept) and os.path.exists(actions):
-        rep.phase("rd_memory")
-        with open(kept, encoding="utf-8") as f, open(actions, encoding="utf-8") as g:
-            return {**json.load(f), "actions": json.load(g)["actions"]}
-    if not os.path.exists(capture) or not os.path.exists(actions):
+def read(frame_dir, frame, rep=CONSOLE):
+    """-> {"textures", "usage", "actions"} or None. rd_memory.json is read once from the capture (a device frame's
+    while it is captured) and kept in the snapshot."""
+    capture, serial = workspace.capture_of(frame_dir, frame)
+    actions, kept = os.path.join(frame_dir, ACTIONS), os.path.join(frame_dir, MEMORY)
+    if not os.path.exists(actions) or not (os.path.exists(kept) or capture and os.path.exists(capture)):
         rep.skip("rd_memory")
         return None
     rep.phase("rd_memory")
-    memo = memo or memo_store.default()
-    sig = rdoc.signature(capture)
-    raw = memo.get(MEMO, sig)
-    if raw is None:
+    if os.path.exists(kept):
+        with open(kept, encoding="utf-8") as f:
+            raw = json.load(f)
+    else:
         rep.log("reading the render targets and textures of the capture in RenderDoc ...")
-        raw = rdoc.memory(capture, os.path.join(frame_dir, MEMORY))
-        memo.put_many(MEMO, [(sig, raw)])
+        raw = rdoc.memory(capture, kept, serial)
     with open(actions, encoding="utf-8") as f:
         return {**raw, "actions": json.load(f)["actions"]}
 

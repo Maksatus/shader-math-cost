@@ -5,7 +5,7 @@ async function loadCompare(a, b) {
   const groups = {};
   for (const r of RUNS) (groups[r.snapshot] = groups[r.snapshot] || []).push(r);
   const opts = Object.entries(groups).map(([snap, rs]) => `<optgroup label="${esc(snap)}${rs[0].project ? " · " + esc(rs[0].project) : ""}">` +
-    rs.map(r => `<option value="${esc(r.id)}">${when(r.computed_at)} · ${M(r.total, 1)} млн · ${esc(r.main_core || "")}${r.api ? " · " + esc(r.api) : ""}</option>`).join("") + `</optgroup>`).join("");
+    rs.map(r => `<option value="${esc(r.id)}">${when(r.computed_at)} · ${M(r.total, 1)} млн · ${esc(r.main_core || "")}</option>`).join("") + `</optgroup>`).join("");
   $("#cmpA").innerHTML = `<option value="">— выберите —</option>` + opts;
   $("#cmpB").innerHTML = `<option value="">— выберите —</option>` + opts;
   const saved = store.get("compare") || {};
@@ -61,7 +61,7 @@ async function loadMaterials() {
   document.querySelectorAll("#cmpMode button").forEach(b => b.classList.toggle("on", b.dataset.m === "materials"));
   $("#tab-compare").classList.add("matmode");
   if (!$("#matProject").options.length) {
-    const ps = OPT.unity_projects;
+    const ps = OPT.unity_projects.filter(p => !p.device);
     $("#matProject").innerHTML = ps.map(p => `<option value="${esc(p.path)}">${esc(p.title)}</option>`).join("");
     const saved = (store.get("matcompare") || {}).project || store.get("project");
     if (ps.some(p => p.path === saved)) $("#matProject").value = saved;

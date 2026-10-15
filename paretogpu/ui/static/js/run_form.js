@@ -15,13 +15,22 @@ function projects() {
   $("#projectPath").style.display = $("#project").value === "__other" ? "" : "none";
 }
 const projectValue = () => recalc ? recalc.project : ($("#project").value === "__other" ? $("#projectPath").value.trim() : $("#project").value);
+const isPhone = () => !recalc && projectValue().startsWith("device:");
+const HOWTO = {
+  editor: "Откройте проект в Unity на Vulkan, включите Play Mode, выставьте нужный кадр в окне Game, выберите проект и нажмите «Проверить кадр».",
+  phone: "Подключите телефон по USB со сборкой проекта (development build), разблокируйте его и нажмите «Проверить кадр»: игра запустится на телефоне, а кадр снимется по кнопке «Снять кадр».",
+};
+function projectMode() {
+  $("#howtoText").textContent = HOWTO[isPhone() ? "phone" : "editor"];
+  renderAdv();
+}
 
 $("#project").onchange = () => {
   $("#projectPath").style.display = $("#project").value === "__other" ? "" : "none";
   if ($("#project").value !== "__other") store.set("project", $("#project").value);
-  checkEditor();
+  projectMode(); checkEditor();
 };
-$("#projectPath").onchange = () => { store.set("project", $("#projectPath").value.trim()); checkEditor(); };
+$("#projectPath").onchange = () => { store.set("project", $("#projectPath").value.trim()); projectMode(); checkEditor(); };
 
 let edSeq = 0;
 async function checkEditor(quiet) {
@@ -29,7 +38,7 @@ async function checkEditor(quiet) {
   if (recalc) { edReady = true; updateRun(); return; }
   if (!v) { el.textContent = ""; edReady = false; updateRun(); return; }
   const seq = ++edSeq;
-  if (!quiet) { el.className = "status wait"; el.textContent = "проверяю Unity…"; }
+  if (!quiet) { el.className = "status wait"; el.textContent = isPhone() ? "проверяю телефон…" : "проверяю Unity…"; }
   const s = await api("/api/editor?project=" + encodeURIComponent(v));
   if (seq !== edSeq) return;
   edReady = !!s.ready;
@@ -61,10 +70,20 @@ function loadSimple() {
   $("#customCores").value = s.cores || "";
 }
 
+const HELP = {
+  timeout: "Сколько ждать снимок, секунд.",
+  max_events: "Снять только первые N событий кадра (0 — все).",
+  wait: "Снять кадр через столько секунд после запуска игры, без кнопки «Снять кадр».",
+  variants: "Скомпилированные варианты; по умолчанию своя папка проекта: вариант компилируется один раз на все кадры.",
+  api: "Цены какого API: по умолчанию Vulkan, API сборки под Android.",
+  no_compile: "Только уже скомпилированные варианты, без сверки с шейдерами.",
+  out: "Куда писать отчёт; по умолчанию папка снимка.",
+};
+const PHONE_FIXED = new Set(["app", "serial"]);  // the server fills them from the chosen phone
 function advFields() {
-  const out = [], seen = new Set();
-  for (const cmd of ["frame", "cost"]) for (const a of SCHEMA[cmd].args) {
-    if (SIMPLE.has(a.dest) || seen.has(a.dest)) continue;
+  const out = [], seen = new Set(), phone = isPhone();
+  for (const cmd of [phone ? "device" : "frame", "cost"]) for (const a of SCHEMA[cmd].args) {
+    if (SIMPLE.has(a.dest) || seen.has(a.dest) || (phone && PHONE_FIXED.has(a.dest))) continue;
     if (recalc && cmd === "frame") continue;
     seen.add(a.dest); out.push(a);
   }
@@ -73,11 +92,11 @@ function advFields() {
 function renderAdv() {
   $("#adv").innerHTML = `<p class="muted small">Обычно не нужны: значения по умолчанию подобраны под проверку кадра.</p>` + advFields().map(a => {
     const id = "a-" + a.dest, lbl = esc(a.label || a.flag);
-    if (a.kind === "flag") return `<div class="row2"><label class="chk"><input type="checkbox" id="${id}"> ${lbl}<code>${esc(a.flag)}</code></label><div class="help">${esc(a.help)}</div></div>`;
+    if (a.kind === "flag") return `<div class="row2"><label class="chk"><input type="checkbox" id="${id}"> ${lbl}<code>${esc(a.flag)}</code></label><div class="help">${esc(HELP[a.dest] || "")}</div></div>`;
     const ph = a.dest === "variants" ? "своя папка на проект (paretogpu/out/variants_<проект>)" : a.default != null && a.default !== "" ? `по умолчанию: ${a.default}` : "";
     const ctl = a.choices ? `<select id="${id}"><option value="">по умолчанию (${esc(a.default)})</option>${a.choices.map(c => `<option>${esc(c)}</option>`).join("")}</select>`
       : `<input type="text" id="${id}" placeholder="${esc(ph)}">`;
-    return `<div class="row2"><label for="${id}">${lbl}<code>${esc(a.flag)}</code></label>${ctl}<div class="help">${esc(a.help)}</div></div>`;
+    return `<div class="row2"><label for="${id}">${lbl}<code>${esc(a.flag)}</code></label>${ctl}<div class="help">${esc(HELP[a.dest] || "")}</div></div>`;
   }).join("");
 }
 
@@ -106,7 +125,7 @@ function updateRun() {
   if (running() && job.waiting) { b.disabled = false; b.textContent = "📸 Снять кадр"; why.textContent = "Игра запущена на телефоне: откройте нужную сцену и нажмите."; return; }
   if (running()) { b.disabled = true; why.textContent = "Идёт проверка — новую можно начать после неё."; return; }
   if (!recalc && !projectValue()) { b.disabled = true; why.textContent = "Выберите проект."; return; }
-  if (!recalc && edReady === false) { b.disabled = true; why.textContent = "Кнопка станет активной, когда Unity с проектом откроется и будет готов."; return; }
+  if (!recalc && edReady === false) { b.disabled = true; why.textContent = isPhone() ? "Кнопка станет активной, когда телефон будет подключён и разблокирован." : "Кнопка станет активной, когда Unity с проектом откроется и будет готов."; return; }
   if (radio("devices") === "custom" && !$("#customCores").value.trim()) { b.disabled = true; why.textContent = "Впишите ядра Mali или выберите вариант выше."; return; }
   b.disabled = false; why.textContent = recalc ? "Unity нужен, только если шейдеры поменялись с прошлого расчёта." : "";
 }
@@ -135,5 +154,5 @@ function setRecalc(x) {
   if (x) $("#recalcCancel").onclick = () => setRecalc(null);
   $("#formTitle").textContent = x ? "Пересчёт снимка" : "Новая проверка";
   for (const id of ["#howto", "#projField", "#suffixField"]) $(id).style.display = x ? "none" : "";
-  renderAdv(); checkEditor(); updateRun();
+  projectMode(); checkEditor(); updateRun();
 }

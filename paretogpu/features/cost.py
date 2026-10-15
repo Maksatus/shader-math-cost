@@ -21,7 +21,7 @@ def run_command(args):
     if args.materials and not (project and os.path.isdir(project)):
         fail(f"--materials needs the Unity project (--project), got {project}", code="input")
     try:
-        c, state = cost.run(args.frame, root, cores, args.api, project, args.materials,
+        c, state = cost.run(args.frame, root, cores, project, args.materials,
                             compile_missing=not args.no_compile)
     except VariantsError as e:
         fail(f"variants failed: {e}", e)
@@ -36,16 +36,16 @@ def run_command(args):
     html.write_frame_report(c, os.path.join(out, RESULT.page), RESULT.title(c),
                            os.path.join(args.frame, workspace.THUMB))
     results.publish(RESULT, c, out, os.path.basename(os.path.abspath(args.frame)))
-    print_summary(c, len(state["keys"]), args.api)
+    print_summary(c, len(state["keys"]))
     for name in (RESULT.page, workspace.COST_CSV, RESULT.data, f"{cost_runs.COSTS}/{run_id}.json"):
         print(f"-> {os.path.abspath(os.path.join(out, name))}")
     return 0
 
 
-def print_summary(c, n_variants, api):
+def print_summary(c, n_variants):
     cov, t = c["coverage"], c["totals"].get(c["main_core"])
     print(f"{cov['draws_priced']} of {cov['draws']} draws and {cov['events_priced'] - cov['draws_priced']} of "
-          f"{cov['events'] - cov['draws']} dispatches priced, {n_variants} variants, {api}; pixels: "
+          f"{cov['events'] - cov['draws']} dispatches priced, {n_variants} variants; pixels: "
           + ", ".join(f"{k} {v}" for k, v in c["pixel_methods"].items())
           + "; vertices: " + ", ".join(f"{k} {v}" for k, v in c["vertex_methods"].items()))
     if t and t["total"]:
@@ -92,7 +92,7 @@ def print_summary(c, n_variants, api):
             print(f"  skipped {n}: {r}")
 
 
-TOTALS = ("main_core", "api", "total", "fragment", "vertex", "compute", "priced", "code_version")
+TOTALS = ("main_core", "total", "fragment", "vertex", "compute", "priced", "code_version")
 
 
 def _totals(c):
@@ -113,8 +113,6 @@ COST = Command(
                             "paretogpu/out/variants_<project>: a variant is compiled once for every frame)",
          label="Папка скомпилированных вариантов"),
      cores_args(),
-     Arg("--api", default="vulkan", choices=["vulkan", "gles"],
-         help="prices of this API (default vulkan: the Android API of the target project)", label="API цен"),
      Arg("--no-compile", action="store_true",
          help="use only the variants already in the folder (not checked against the shaders)", label="Не компилировать"),
      Arg("--materials", action="store_true", label="Все материалы проекта",

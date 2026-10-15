@@ -1,6 +1,8 @@
 "use strict";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const plural = (n, one, few, many) => { const k = n % 100;
+  return `${n} ${k >= 11 && k <= 14 ? many : n % 10 === 1 ? one : n % 10 >= 2 && n % 10 <= 4 ? few : many}`; };
 const num = x => x == null ? "—" : Math.round(x).toLocaleString("ru-RU");
 const M = (x, digits) => x == null ? "—" : (x / 1e6).toFixed(digits ?? (Math.abs(x) < 1e7 ? 2 : 1));
 const when = (t, year = false) => t ? new Date(t * 1000).toLocaleString("ru-RU",

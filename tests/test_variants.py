@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from paretogpu.adapters.gpu import backend
+from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import rules, variants
 from paretogpu.model.variant import CODE, NOT_FINISHED, STAGE, STOPPED, STOPPED_TWICE, VariantKey
 from paretogpu.store import variant_store
@@ -28,7 +29,7 @@ class RunTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
 
-    def compile_stub(self, project, keys, root, platforms, timeout=1800, rep=None):
+    def compile_stub(self, project, keys, root, timeout=1800, rep=None):
         self.compiled.append(list(keys))
         result = {"variants": []}
         raw = os.path.join(root, "_compiled")
@@ -41,7 +42,7 @@ class RunTest(unittest.TestCase):
                     fn = f"{i}_vulkan_{s}.bin"
                     with open(os.path.join(raw, fn), "wb") as f:
                         f.write(b"spv")
-                    files.append({"platform": "vulkan", "stage": s, "file": fn})
+                    files.append({"stage": s, "file": fn})
             result["variants"].append({"id": i, "files": files, "errors": errs, "fingerprint": self.fp.get(k.shader)})
         return variant_store.place(root, raw, keys, result)
 
@@ -50,14 +51,14 @@ class RunTest(unittest.TestCase):
                 mock.patch.object(rules, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
                 mock.patch.object(rules, "compile_variants", side_effect=self.compile_stub), \
                 mock.patch.object(backend(), "measure", return_value={"ok": False, "error": "stub"}):
-            return variants.run([EV], "project", self.root, ["Mali-G78"], ["vulkan"], rep=QUIET, **kw)
+            return variants.run([EV], "project", self.root, ["Mali-G78"], rep=QUIET, **kw)
 
     def test_current_variant_is_reused(self):
         self.run_once()
         st = self.run_once()
         self.assertEqual(self.compiled, [[KEY]])
         self.assertTrue(st["checked"])
-        self.assertEqual(set(st["files"][KEY]), {("vulkan", "vert"), ("vulkan", "frag")})
+        self.assertEqual(set(st["files"][KEY]), {"vert", "frag"})
 
     def test_changed_shader_is_compiled_again(self):
         self.run_once()
@@ -72,7 +73,7 @@ class RunTest(unittest.TestCase):
 
     def test_deleted_file_is_compiled_again(self):
         st = self.run_once()
-        os.remove(os.path.join(self.root, st["files"][KEY][("vulkan", "frag")]))
+        os.remove(os.path.join(self.root, st["files"][KEY]["frag"]))
         self.run_once()
         self.assertEqual(len(self.compiled), 2)
 
@@ -109,22 +110,7 @@ class RunTest(unittest.TestCase):
         self.result = {}
         st = self.run_once()
         self.assertEqual(len(self.compiled), 3)
-        self.assertEqual(set(st["files"][KEY]), {("vulkan", "vert"), ("vulkan", "frag")})
-
-    def test_errors_of_another_platform(self):
-        self.run_once()
-        self.result = {KEY: ["gles3 frag: error"]}
-        with mock.patch.object(rules.unity, "editor_ready", return_value=True), \
-                mock.patch.object(rules, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
-                mock.patch.object(rules, "compile_variants", side_effect=self.compile_stub):
-            variants.compile_keys([KEY], "project", self.root, ["gles3"], QUIET)
-        self.result = {}
-        self.fp["Test/Lit"] = "fp2"
-        st = self.run_once()
-        self.assertEqual(len(self.compiled), 3)
-        self.assertEqual(st["errors"][KEY], [])
-        with open(os.path.join(self.root, "variants.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["variants"][0]["errors"], ["gles3 frag: error"])
+        self.assertEqual(set(st["files"][KEY]), {"vert", "frag"})
 
     def test_failure_survives_a_run_without_the_editor(self):
         self.result = {KEY: ["vulkan frag: error"]}
@@ -201,7 +187,7 @@ class CapturedTest(unittest.TestCase):
         self.shadow = VariantKey("Test/Lit", 0, 2, "ShadowCaster", ())
         other = VariantKey("Test/Other", 0, 2, "ShadowCaster", ())
         for keys in ((self.twin, self.key, self.shadow), (other,)):
-            folder = os.path.join(self.root, keys[0].folder("vulkan"))
+            folder = os.path.join(self.root, keys[0].folder)
             os.makedirs(folder)
             manifest = []
             for k in keys:
@@ -212,7 +198,7 @@ class CapturedTest(unittest.TestCase):
                         f.write(data)
                     manifest.append({"shader": k.shader, "subshader": k.subshader, "pass_index": k.pass_index,
                                      "pass": k.pass_name, "keywords": list(k.keywords), "stage": STAGE[s],
-                                     "platform": "vulkan", "file": fn})
+                                     "file": fn})
             with open(os.path.join(folder, "manifest.json"), "w") as f:
                 json.dump(manifest, f)
         for name, data in (("v.vert.spv", b"VS"), ("f.frag.spv", b"FS"), ("g.frag.spv", b"OTHER"),
@@ -224,32 +210,49 @@ class CapturedTest(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
         shutil.rmtree(self.frame, ignore_errors=True)
 
+    PASSES = {"Test/Lit": [{"subshader": 0, "pass_index": 1, "pass": "Forward", "light_mode": "UniversalForward"},
+                           {"subshader": 0, "pass_index": 2, "pass": "ShadowCaster", "light_mode": "ShadowCaster"}]}
+
+    def identify(self, evs, passes=None):
+        with mock.patch.object(variants, "shader_passes", return_value=passes or self.PASSES) as asked:
+            n = variants.identify(evs, self.frame, self.root, "P", QUIET)
+        if n:
+            self.assertEqual(asked.call_args.args[:2], ("P", {"Test/Lit"}))
+        return n
+
     def ev(self, frag, shader="Test/Lit", mesh="Rock"):
         code = {"vert": "device/shaders/v.vert.spv", "frag": f"device/shaders/{frag}", "hash": frag[:1]} if frag             else {"vert": "device/shaders/s.vert.spv", "hash": "s"}
         return {"index": 0, "kind": "draw", "shader": shader, "pass": None, "subshader": 0, "pass_index": 0,
                 "keywords": [], "meshes": [mesh], "code": code}
 
     def test_unnamed_module_takes_the_code_s_shader(self):
-        evs = [self.ev("f.frag.spv", "Graphics Pipeline 7")]
-        self.assertEqual(variants.identify(evs, self.frame, self.root, QUIET), 1)
+        evs = [self.ev("f.frag.spv", None)]  # RenderDoc's own name ("Graphics Pipeline 7"): none
+        self.assertEqual(self.identify(evs), 1)
         self.assertEqual(VariantKey.of(evs[0]), self.key)
+
+    def test_light_mode_from_the_pass_table(self):
+        evs = [self.ev("f.frag.spv")]
+        self.identify(evs)
+        self.assertEqual(evs[0]["light_mode"], "UniversalForward")
+        with self.assertRaises(VariantsError):
+            self.identify([self.ev("f.frag.spv")], {"Test/Lit": []})
 
     def test_identify_and_place(self):
         evs = [self.ev("f.frag.spv"), self.ev("g.frag.spv"), self.ev("f.frag.spv", "Other")]
-        self.assertEqual(variants.identify(evs, self.frame, self.root, QUIET), 1)
+        self.assertEqual(self.identify(evs), 1)
         self.assertEqual(VariantKey.of(evs[0]), self.key)  # of the twins, the fewest keywords
         self.assertEqual((evs[0]["pass"], evs[0]["keywords"], evs[0]["code"]["variants"]), ("Forward", ["_A"], 2))
         self.assertEqual(VariantKey.of(evs[1]).keywords, (CODE + "g",))  # code the folder has never seen
         self.assertEqual(VariantKey.of(evs[2]).shader, "Other")  # another shader's code is not its variant
         placed = variants.place_captured(evs, self.frame, self.root)
-        self.assertEqual(placed[self.key], {("vulkan", "vert"): f"Test_Lit_vulkan/{self.key.base_name}.vert.spv",
-                                            ("vulkan", "frag"): f"Test_Lit_vulkan/{self.key.base_name}.frag.spv"})
-        self.assertEqual(placed[VariantKey.of(evs[1])][("vulkan", "frag")], "Test_Lit_device/g.frag.spv")
+        self.assertEqual(placed[self.key], {"vert": f"Test_Lit/{self.key.base_name}.vert.spv",
+                                            "frag": f"Test_Lit/{self.key.base_name}.frag.spv"})
+        self.assertEqual(placed[VariantKey.of(evs[1])]["frag"], "Test_Lit_device/g.frag.spv")
         with open(os.path.join(self.root, "Test_Lit_device", "g.frag.spv"), "rb") as f:
             self.assertEqual(f.read(), b"OTHER")
         with mock.patch.object(rules, "compile_variants") as compile_, \
                 mock.patch.object(backend(), "measure", return_value={"ok": False, "error": "stub"}):
-            st = variants.run(evs, None, self.root, ["Mali-G78"], ["vulkan"], rep=QUIET, captured=placed)
+            st = variants.run(evs, None, self.root, ["Mali-G78"], rep=QUIET, captured=placed)
         compile_.assert_not_called()  # the code is the variant: nothing to compile, no editor
         self.assertTrue(st["checked"])
         self.assertEqual(st["captured"], set(placed))
@@ -258,9 +261,10 @@ class CapturedTest(unittest.TestCase):
     def test_depth_only_by_its_mesh(self):
         color = self.ev("f.frag.spv")
         rock, tree = self.ev(None, "Test/Other (shared shader)"), self.ev(None, "Test/Other (shared shader)", "Tree")
-        self.assertEqual(variants.identify([color, rock, tree], self.frame, self.root, QUIET), 2)
+        self.assertEqual(self.identify([color, rock, tree]), 2)
         self.assertEqual(VariantKey.of(rock), self.shadow)
-        self.assertEqual(rock["code"]["files"], {"vert": f"Test_Lit_vulkan/{self.shadow.base_name}.vert.spv"})
+        self.assertEqual(rock["light_mode"], "ShadowCaster")
+        self.assertEqual(rock["code"]["files"], {"vert": f"Test_Lit/{self.shadow.base_name}.vert.spv"})
         self.assertNotIn("variant", tree["code"])
 
 
@@ -276,7 +280,7 @@ class LoopsPerCoreTest(unittest.TestCase):
 
     def test_only_the_cores_without_a_longest_path(self):
         key = VariantKey("S", 0, 0, "P")
-        state = {"keys": [key], "files": {key: {("vulkan", "frag"): "S.frag.spv"}},
+        state = {"keys": [key], "files": {key: {"frag": "S.frag.spv"}},
                  "measurements": {"S.frag.spv": {"Mali-G78": self.record(True), "Mali-G715": self.record(False)}}}
         asked = []
 

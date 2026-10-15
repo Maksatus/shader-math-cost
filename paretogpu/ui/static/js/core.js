@@ -40,7 +40,6 @@ function tab(name) {
   if (name === "ref" && !$("#refFrame").src) $("#refFrame").src = "/site/reference.html";
   if (name === "reports") loadReports();
   if (name === "compare") cmpMode === "materials" ? loadMaterials() : loadCompare();
-  if (name === "mat") loadMs();
   store.set("tab", name);
 }
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => tab(b.dataset.tab));
@@ -55,7 +54,7 @@ document.addEventListener("click", e => {
 async function loadEnv() {
   const d = await api("/api/doctor");
   const short = {"malioc (Arm Performance Studio)": "malioc", "RenderDoc": "RenderDoc", "Unity CLI (unity)": "Unity CLI",
-                 "Unity Editor (Hub)": "Unity"};
-  $("#env").innerHTML = d.checks.map(c => `<span class="envc ${c.status}">${esc(short[c.what] || c.what)}</span>`).join("");
+                 "spirv-as (RenderDoc)": "spirv-as", "RenderDoc for Arm": "RenderDoc Arm"};
+  $("#env").innerHTML = d.checks.map(c => `<span class="envc ${c.status}" title="${esc(c.detail)}">${esc(short[c.what] || c.what)}</span>`).join("");
   $("#siteInfo").textContent = d.site.updated ? `Данные замерены ${when(d.site.updated)} · таблица та же, что на сайте` : "";
 }

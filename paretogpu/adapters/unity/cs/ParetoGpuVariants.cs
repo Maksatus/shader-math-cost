@@ -1,10 +1,9 @@
 // Exact shader variants for malioc. Run: job "variants", config = parallel arrays, one entry per variant, id = index
 // (JsonUtility in a run_script assembly reads arrays of strings/numbers, not of this script's classes):
-//   {"shaders", "subshaders", "pass_indices", "passes", "keywords": space separated, "platforms": ["gles3", "vulkan"]}
-// Writes <out>/<id>_gles3_<vert|frag>.bin as it goes (GLSL, CompileVariant(..., forExternalTool: true) for Android);
-// vulkan: the shader's "Compile and show code" text (ShaderUtil.OpenCompiledShader, the build's compiler and variant
-// set) once per shader as <out>/vulkan_<n>.txt, files {"platform", "stage", "text"} (adapters/unity/compiled_text.py
-// assembles them; CompileVariant fails for Vulkan in 6.4 on Forward+, SSAO, URP post). Progress "variants i/n";
+//   {"shaders", "subshaders", "pass_indices", "passes", "keywords": space separated}
+// Vulkan only: the shader's "Compile and show code" text (ShaderUtil.OpenCompiledShader, the build's compiler and variant
+// set) once per shader as <out>/vulkan_<n>.txt, files {"stage", "text"} (adapters/unity/compiled_text.py
+// assembles them; CompileVariant for Vulkan in 6.4: "top-level params outside of cbuffers" on Forward+, SSAO, URP post). Progress "variants i/n";
 // answers {"unity", "variants": [{"id", "files", "fingerprint", "errors"}]}. Compute kernels (subshader -1) are refused: FindKernel / HasKernel /
 // ShaderUtil.CompileComputeShaderVariant crashed the 6000.3.18f1 editor from here.
 // Fingerprints: {"shaders"} -> {"unity", "shaders": {name: fingerprint}}, nothing compiled; a change means recompile.
@@ -39,14 +38,7 @@ public static class ParetoGpuVariants
         public int[] pass_indices = new int[0];
         public string[] passes = new string[0];
         public string[] keywords = new string[0];
-        public string[] platforms = { "gles3", "vulkan" };
     }
-
-    static readonly Dictionary<string, ShaderCompilerPlatform> Platforms = new Dictionary<string, ShaderCompilerPlatform>
-    {
-        { "gles3", ShaderCompilerPlatform.GLES3x },
-        { "vulkan", ShaderCompilerPlatform.Vulkan },
-    };
 
     static readonly (ShaderType type, string ext)[] Stages = { (ShaderType.Vertex, "vert"), (ShaderType.Fragment, "frag") };
 
@@ -84,39 +76,11 @@ public static class ParetoGpuVariants
                 if (v.pass != pass.Name && !(v.pass.StartsWith("<Unnamed Pass") && string.IsNullOrEmpty(pass.Name)))
                     throw new Exception($"pass {v.pass_index} is named '{pass.Name}', the snapshot says '{v.pass}': " +
                                         "the shader's passes changed since the snapshot");
-                foreach (var plat in cfg.platforms)
-                {
-                    if (!Platforms.TryGetValue(plat, out var sp))
-                    {
-                        errors.Add($"unknown platform {plat}");
-                        continue;
-                    }
-                    if (plat == "vulkan")
-                    {
-                        if (!texts.TryGetValue(v.shader, out var text))
-                            texts[v.shader] = text = CompiledText(shader, texts.Count);
-                        foreach (var (type, ext) in Stages)
-                            if (pass.HasShaderStage(type))
-                                files.Add($"{{\"platform\": \"vulkan\", \"stage\": {Str(ext)}, \"text\": {Str(text)}}}");
-                        continue;
-                    }
-                    foreach (var (type, ext) in Stages)
-                    {
-                        if (!pass.HasShaderStage(type))
-                            continue;
-                        var r = pass.CompileVariant(type, v.keywords, sp, BuildTarget.Android, true);
-                        var msgs = string.Join("; ", r.Messages.Where(m => m.severity == ShaderCompilerMessageSeverity.Error)
-                                                               .Select(m => m.message));
-                        if (!r.Success || r.ShaderData == null || r.ShaderData.Length == 0)
-                        {
-                            errors.Add($"{plat} {ext}: {(msgs.Length > 0 ? msgs : "compilation failed")}");
-                            continue;
-                        }
-                        var fn = $"{v.id}_{plat}_{ext}.bin";
-                        File.WriteAllBytes(Path.Combine(ParetoGpuJob.Folder, fn), r.ShaderData);
-                        files.Add($"{{\"platform\": {Str(plat)}, \"stage\": {Str(ext)}, \"file\": {Str(fn)}}}");
-                    }
-                }
+                if (!texts.TryGetValue(v.shader, out var text))
+                    texts[v.shader] = text = CompiledText(shader, texts.Count);
+                foreach (var (type, ext) in Stages)
+                    if (pass.HasShaderStage(type))
+                        files.Add($"{{\"stage\": {Str(ext)}, \"text\": {Str(text)}}}");
             }
             catch (Exception e)
             {
@@ -231,9 +195,9 @@ public static class ParetoGpuVariants
         return name;
     }
 
-    const string CompileMethod = "vulkan-compiled-text/2";  // part of the fingerprint: a new method recompiles all
+    const string CompileMethod = "vulkan-compiled-text/3";  // part of the fingerprint: a new method recompiles all
 
-    // Unity version, Android platform defines, color space, and for an asset its dependency hash (covers includes,
+    // Unity version, Android platform defines, color space, active pipeline asset, and for an asset its dependency hash (covers includes,
     // subgraphs); built-in shaders change only with Unity.
     static string Fingerprint(Shader shader)
     {
@@ -241,8 +205,12 @@ public static class ParetoGpuVariants
         var asset = string.IsNullOrEmpty(path) || path.StartsWith("Resources/") || path.StartsWith("Library/")
             ? "builtin"
             : path + "#" + AssetDatabase.GetAssetDependencyHash(path);
+        // the build's variant set ("Compile and show code") follows the active pipeline asset (a scene may swap it in Play Mode)
+        var rp = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
+        var rpPath = rp == null ? "" : AssetDatabase.GetAssetPath(rp);
+        var pipeline = rp == null ? "builtin" : rpPath + "#" + AssetDatabase.GetAssetDependencyHash(rpPath);
         return string.Join("|", CompileMethod, Application.unityVersion, PlayerSettings.colorSpace.ToString(),
-                           PlatformDefines(ShaderCompilerPlatform.GLES3x), PlatformDefines(ShaderCompilerPlatform.Vulkan), asset);
+                           PlatformDefines(ShaderCompilerPlatform.Vulkan), pipeline, asset);
     }
 
     // BuiltinShaderDefines the compiler gets for Android (normal map encoding, reversed Z, ...); "" if API is missing

@@ -25,6 +25,8 @@ class Profile(unittest.TestCase):
 
     def test_other_aspect_has_no_scale(self):
         self.assertIsNone(profile.describe(meta(), [1000, 1000])["frame_scale"])
+        # the snapshot's screen is as seen (a phone's rotation already applied, core/device): no orientation guess
+        self.assertIsNone(profile.describe(meta(screen=(1000, 2000)), [1000, 500])["frame_scale"])
 
     def test_frame_size(self):
         rows = [{"rt_size": [100, 100], "pixels": 10}, {"rt_size": [50, 50], "pixels": 500}, {"rt_size": [None, None]}]
