@@ -262,7 +262,7 @@ class Runner:
                 if e.get("note"):
                     p["note"] = e["note"]
         elif ev == "error":
-            s["error_code"] = e.get("code")
+            s["error_code"], s["error_details"] = e.get("code"), e.get("details")
 
     def _end_step(self, s, status):
         now = time.time()
@@ -318,8 +318,18 @@ class Runner:
             return json.loads(json.dumps(v))
 
 
-# (error code of model/errors.py, log text matched when no code was reported, hint)
+def _pipeline_hint(d):
+    if d["changed"]:
+        return (f"Пайплайн-ассет кадра {d['frame']} изменён после снимка: в «Compile and show code» нет "
+                f"{d['variants']} вариантов кадра. Верните ассет как был или снимите кадр заново.")
+    return (f"Кадр снят с пайплайн-ассетом {d['frame']}, а в редакторе активен {d['editor']}: в «Compile and show "
+            f"code» нет {d['variants']} вариантов кадра. Включите Play Mode (или сделайте активным тот же ассет) и "
+            "пересчитайте.")
+
+
+# (error code of model/errors.py, log text matched when no code was reported, hint: text, or a function of the error's details)
 HINTS = [
+    ("pipeline_asset", "pipeline asset", _pipeline_hint),
     ("unity_cli_off", "No Pipeline instance found", "Unity CLI в редакторе отключился. Включите его в Unity заново "
      "(пакет com.unity.pipeline) и запустите ещё раз: ожидание не поможет."),
     ("editor_busy", "does not answer Unity CLI or is busy", "Unity не отвечает: откройте проект в Unity и дождитесь "
@@ -355,12 +365,15 @@ def waiting(job):
 def hint_of(job):
     codes = ["device" if s["cmd"] == "device" and s["error_code"] == "renderdoc" else s["error_code"]
              for s in job["steps"] if s.get("error_code")]
+    details = {s["error_code"]: s.get("error_details") for s in job["steps"] if s.get("error_code")}
     text = ("\n".join(job["log"][-400:]) + "\n" + (job.get("error") or "")).lower()
     for code, needle, hint in HINTS:
+        if callable(hint) and not details.get(code):  # names values only the error event carries
+            continue
         if code in codes or (not codes and needle.lower() in text):
-            return {"text": hint}
+            return {"text": hint(details[code]) if callable(hint) else hint}
     for code, needle, hint in HINTS:
-        if codes and needle.lower() in text:
+        if codes and needle.lower() in text and not callable(hint):
             return {"text": hint}
     return {"text": "Что-то пошло не так, подробности в логе ниже."}
 

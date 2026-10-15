@@ -7,9 +7,10 @@ import unittest
 from unittest import mock
 
 from paretogpu.adapters.gpu import backend
+from paretogpu.adapters.unity import variants as unity_variants
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import rules, variants
-from paretogpu.model.variant import CODE, NOT_FINISHED, STAGE, STOPPED, STOPPED_TWICE, VariantKey
+from paretogpu.model.variant import CODE, NOT_FINISHED, NOT_IN_BUILD, STAGE, STOPPED, STOPPED_TWICE, VariantKey
 from paretogpu.store import variant_store
 from paretogpu.store.memo import Memo
 from paretogpu.views.reporter import QUIET
@@ -24,6 +25,7 @@ class RunTest(unittest.TestCase):
         self.root = tempfile.mkdtemp()
         self.compiled = []
         self.fp = {"Test/Lit": "fp1"}
+        self.pipeline = {"name": "RP", "path": "Assets/RP.asset", "hash": "h1"}
         self.result = {}  # errors of the next compile
 
     def tearDown(self):
@@ -48,7 +50,7 @@ class RunTest(unittest.TestCase):
 
     def run_once(self, editor=True, **kw):
         with mock.patch.object(rules.unity, "editor_ready", return_value=editor), \
-                mock.patch.object(rules, "current_fingerprints", side_effect=lambda p, s, r: dict(self.fp)), \
+                mock.patch.object(rules, "current_fingerprints", side_effect=lambda p, s, r: {"shaders": dict(self.fp), "pipeline": self.pipeline}), \
                 mock.patch.object(rules, "compile_variants", side_effect=self.compile_stub), \
                 mock.patch.object(backend(), "measure", return_value={"ok": False, "error": "stub"}):
             return variants.run([EV], "project", self.root, ["Mali-G78"], rep=QUIET, **kw)
@@ -59,6 +61,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(self.compiled, [[KEY]])
         self.assertTrue(st["checked"])
         self.assertEqual(set(st["files"][KEY]), {"vert", "frag"})
+        self.assertEqual(st["pipeline"], self.pipeline)
 
     def test_changed_shader_is_compiled_again(self):
         self.run_once()
@@ -299,3 +302,53 @@ class LoopsPerCoreTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PipelineTest(unittest.TestCase):
+    """The frame's pipeline asset vs the editor's: the build's variant set ("Compile and show code") follows it."""
+    FRAME = {"name": "K31_RP", "path": "Assets/K31_Renderer.asset", "hash": "a"}
+    EDITOR = {"name": "PC_RPAsset", "path": "Assets/Settings/PC_RPAsset.asset", "hash": "b"}
+
+    def state(self, editor, errors):
+        return {"pipeline": editor, "errors": {KEY: errors}}
+
+    def test_same_by_the_fields_both_know(self):
+        self.assertTrue(variants.same_pipeline(self.FRAME, dict(self.FRAME)))
+        self.assertTrue(variants.same_pipeline({"name": "K31_RP"}, self.FRAME))  # older snapshot: name only
+        self.assertFalse(variants.same_pipeline({"name": "K31_RP"}, self.EDITOR))
+        self.assertFalse(variants.same_pipeline(self.FRAME, {**self.FRAME, "hash": "c"}))
+        self.assertTrue(variants.same_pipeline(None, {"name": None, "path": None, "hash": None}))
+
+    def test_other_asset_and_missing_variant_fail_with_both_names(self):
+        missing = [f"vulkan frag: {NOT_IN_BUILD}: keywords of the frame no build variant of the pass has: _X"]
+        with self.assertRaises(variants.PipelineMismatch) as e:
+            variants.check_pipeline(self.FRAME, self.state(self.EDITOR, missing), {KEY})
+        self.assertEqual(e.exception.code, "pipeline_asset")
+        self.assertEqual(e.exception.details, {"frame": self.FRAME["path"], "editor": self.EDITOR["path"],
+                                               "changed": False, "variants": 1})
+        self.assertIn("Play Mode", str(e.exception))
+        with self.assertRaises(variants.PipelineMismatch) as e:
+            variants.check_pipeline(self.FRAME, self.state({**self.FRAME, "hash": "c"}, missing), {KEY})
+        self.assertTrue(e.exception.details["changed"])
+
+    def test_no_error_when_nothing_is_missing_or_unknown(self):
+        missing = [f"vulkan frag: {NOT_IN_BUILD}"]
+        variants.check_pipeline(self.FRAME, self.state(dict(self.FRAME), missing), {KEY})  # same asset: per draw
+        variants.check_pipeline(self.FRAME, self.state(self.EDITOR, ["shader not found"]), {KEY})
+        variants.check_pipeline(self.FRAME, self.state(None, missing), {KEY})  # the editor did not answer
+        variants.check_pipeline(self.FRAME, self.state(self.EDITOR, missing), set())  # not a frame variant
+
+
+class NotInBuildTest(unittest.TestCase):
+    K = VariantKey("Lit", 0, 1, "ForwardLit", ("_A", "_CLUSTER_LIGHT_LOOP"))
+
+    def why(self, *kws, pass_index=1):
+        return unity_variants.not_in_build(self.K, "frag", {(0, pass_index, frozenset(k), "frag"): "" for k in kws})
+
+    def test_names_the_keywords_no_build_variant_has(self):
+        self.assertTrue(self.why({"_A"}, {"_A", "_B"}).endswith(": _CLUSTER_LIGHT_LOOP"))
+        self.assertIn(NOT_IN_BUILD, self.why({"_A"}))
+
+    def test_combination_or_pass(self):
+        self.assertIn("combination", self.why({"_A"}, {"_CLUSTER_LIGHT_LOOP"}))
+        self.assertIn("no variant of this pass", self.why({"_A"}, pass_index=2))

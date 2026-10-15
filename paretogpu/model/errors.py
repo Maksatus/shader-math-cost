@@ -4,7 +4,8 @@
 class ParetoError(RuntimeError):
     code = "error"
 
-    def __init__(self, message="", code=None):
+    def __init__(self, message="", code=None, details=None):
         super().__init__(message)
         if code:
             self.code = code
+        self.details = details  # values the hint names

@@ -13,6 +13,7 @@ CODE = "spirv "  # the "keyword" of a variant a device ran: the hash of its code
 # ComputeShader.FindKernel / HasKernel and ShaderUtil.CompileComputeShaderVariant from a run_script crash the
 # 6000.3.18f1 editor, on built-in and package compute shaders alike
 COMPUTE_NOT_COMPILED = "compute kernel not compiled: compiling compute shaders from a script crashes Unity 6000.3"
+NOT_IN_BUILD = "not among the variants a build has (Compile and show code)"
 NOT_FINISHED = "no output: the Unity run did not finish"  # transient: compiled again next time
 OUTDATED = "only files of an older version of the shader: not used"
 STOPPED = "the Unity run stopped at this variant (the editor crashed or the connection broke)"
@@ -95,3 +96,4 @@ class VariantState(TypedDict, total=False):
     checked: bool         # the files were checked against the shaders in the open editor
     captured: set         # the variants whose files are the code a device ran (app/variants.place_captured)
     loops: dict           # {file: {core: LoopProfile}} of the files with dynamic loops (app/variants.loops_of)
+    pipeline: dict        # the editor's active pipeline asset {"name", "path", "hash"}; None if the editor did not answer

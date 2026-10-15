@@ -131,6 +131,7 @@ def snapshot(answer, meta):
         "project": meta.get("project"), "unity": None,
         "graphics_api": answer["api"], "quality": None, "quality_level": None,
         "build_target": "Android", "screen": answer["screen"], "rotation": answer["rotation"], "pipeline": None,
+        "build_pipeline": meta.get("build_pipeline"),
         "play_mode": True,
         "seconds": meta.get("seconds"), "total_events": len(events),
         "device": {"model": answer.get("device"), "serial": answer.get("serial"), "gpu": meta.get("gpu"),

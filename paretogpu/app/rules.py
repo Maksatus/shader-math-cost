@@ -52,7 +52,7 @@ class CompileRule(Rule):
         self.project, self.root = project, root
         self.compile_missing, self.recompile, self.retry_failed = compile_missing, recompile, retry_failed
         self.rep = rep
-        self.current = None
+        self.current = self.pipeline = None
         self.built = set()
 
     @property
@@ -88,7 +88,8 @@ class CompileRule(Rule):
         if self.compile_missing and draw:
             if self.project and unity.editor_ready(self.project, allow_play=True):
                 self.rep.phase("fingerprints")
-                self.current = current_fingerprints(self.project, [k.shader for k in draw], self.root)
+                answer = current_fingerprints(self.project, [k.shader for k in draw], self.root)
+                self.current, self.pipeline = answer["shaders"], answer["pipeline"]
             else:
                 self.rep.skip("fingerprints", "the editor does not answer")
                 self.rep.log("the editor does not answer Unity CLI: compiled variants are used without checking "

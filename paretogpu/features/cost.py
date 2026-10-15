@@ -4,6 +4,7 @@ from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import cost
 from paretogpu.app.frame_loops import LoopCountError
 from paretogpu.app import results
+from paretogpu.app.variants import PipelineMismatch
 from paretogpu.core import frame_cost
 from paretogpu.core import profile
 from paretogpu.features.common import cores_args, default_variants, fail, parse_cores
@@ -25,6 +26,8 @@ def run_command(args):
                             compile_missing=not args.no_compile)
     except VariantsError as e:
         fail(f"variants failed: {e}", e)
+    except PipelineMismatch as e:
+        fail(str(e), e)
     except LoopCountError as e:
         fail(f"loop trip counts failed: {e}", e)
     except ValueError as e:

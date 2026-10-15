@@ -6,6 +6,7 @@ import threading
 import time
 
 from paretogpu.adapters import renderdoc as rdoc
+from paretogpu.adapters.unity import assets
 from paretogpu.core import device
 from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
@@ -86,7 +87,8 @@ def build(frame_dir, answer_path, project, rep=CONSOLE):
         answer = json.load(f)
     snap, actions, mem = device.snapshot(answer, {
         "project": project and os.path.abspath(project), "app": answer.get("app"),
-        "gpu": answer.get("gpu"), "captured_at": answer.get("captured_at"), "seconds": answer.get("seconds")})
+        "gpu": answer.get("gpu"), "captured_at": answer.get("captured_at"), "seconds": answer.get("seconds"),
+        "build_pipeline": assets.build_pipeline(project) if project else None})
     for name, doc in ((workspace.SNAPSHOT_FILE, snap), (frame_memory.ACTIONS, actions), (frame_memory.MEMORY, mem)):
         path = os.path.join(frame_dir, name)
         with open(path + ".tmp", "w", encoding="utf-8", newline="\n") as f:

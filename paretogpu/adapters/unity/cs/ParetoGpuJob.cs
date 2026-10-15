@@ -86,6 +86,22 @@ public static class ParetoGpuJob
         return x is Failure f ? Fail(f.Code, f.Message) : Fail("error", x.ToString());
     }
 
+    // the editor's active pipeline asset (quality level's, else the default): its variant set is what "Compile and show code" has
+    public static (UnityEngine.Rendering.RenderPipelineAsset asset, string path, string hash) Pipeline()
+    {
+        var rp = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
+        if (rp == null)
+            return (null, null, null);
+        var path = AssetDatabase.GetAssetPath(rp);
+        return (rp, path, string.IsNullOrEmpty(path) ? null : AssetDatabase.GetAssetDependencyHash(path).ToString());
+    }
+
+    public static string PipelineFields()
+    {
+        var (rp, path, hash) = Pipeline();
+        return $"\"name\": {Str(rp == null ? null : rp.name)}, \"path\": {Str(path)}, \"hash\": {Str(hash)}";
+    }
+
     public static string Str(string v)
     {
         if (v == null)

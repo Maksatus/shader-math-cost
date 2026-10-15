@@ -9,7 +9,7 @@ from paretogpu.adapters.renderdoc import spirv_as
 from paretogpu.adapters.unity import bridge
 from paretogpu.adapters.unity import compiled_text
 from paretogpu.adapters.unity.cli import UnityError
-from paretogpu.model.variant import NOT_FINISHED, STOPPED, VariantKey
+from paretogpu.model.variant import NOT_FINISHED, NOT_IN_BUILD, STOPPED, VariantKey
 
 SCRIPT = "ParetoGpuVariants.cs"
 JOB = "variants"
@@ -27,8 +27,9 @@ def shader_query(project, entry, shaders, raw, timeout=600):
 
 
 def current_fingerprints(project, shaders, raw, timeout=600):
-    """-> {shader name: fingerprint, None if not found}."""
-    return shader_query(project, "Fingerprints", shaders, raw, timeout)
+    """-> {"shaders": {shader name: fingerprint, None if not found}, "pipeline": {"name", "path", "hash"} active}."""
+    return bridge.call(project, SCRIPT, "Fingerprints", raw, "fingerprints", {"shaders": sorted(set(shaders))},
+                       VariantsError, timeout)
 
 
 def compile_variants(project, keys, raw, timeout=1800, on_start=None, on_step=None):
@@ -66,7 +67,7 @@ def _assemble_texts(raw, keys, result):
                     parsed[x["text"]] = compiled_text.blocks(f.read())
             code = parsed[x["text"]].get((k.subshader, k.pass_index, frozenset(k.keywords), x["stage"]))
             if code is None:
-                v["errors"].append(f"vulkan {x['stage']}: not among the variants a build has (Compile and show code)")
+                v["errors"].append(f"vulkan {x['stage']}: {not_in_build(k, x['stage'], parsed[x['text']])}")
                 continue
             fn = f"{v['id']}_vulkan_{x['stage']}.bin"
             try:
@@ -77,6 +78,17 @@ def _assemble_texts(raw, keys, result):
                 continue
             files.append({"stage": x["stage"], "file": fn})
         v["files"] = files
+
+
+def not_in_build(k, stage, blocks):
+    """Why k's code is not in the text: the frame's keywords no build variant of its pass has, else the combination."""
+    built = [kw for (ss, pi, kw, st) in blocks if (ss, pi, st) == (k.subshader, k.pass_index, stage)]
+    if not built:
+        return f"{NOT_IN_BUILD}: the build has no variant of this pass"
+    extra = [w for w in k.keywords if not any(w in kw for kw in built)]
+    if extra:
+        return f"{NOT_IN_BUILD}: keywords of the frame no build variant of the pass has: {' '.join(extra)}"
+    return f"{NOT_IN_BUILD}: no build variant of the pass has this combination of the frame's keywords"
 
 
 def _config_keys(raw):

@@ -6,7 +6,7 @@
 // assembles them; CompileVariant for Vulkan in 6.4: "top-level params outside of cbuffers" on Forward+, SSAO, URP post). Progress "variants i/n";
 // answers {"unity", "variants": [{"id", "files", "fingerprint", "errors"}]}. Compute kernels (subshader -1) are refused: FindKernel / HasKernel /
 // ShaderUtil.CompileComputeShaderVariant crashed the 6000.3.18f1 editor from here.
-// Fingerprints: {"shaders"} -> {"unity", "shaders": {name: fingerprint}}, nothing compiled; a change means recompile.
+// Fingerprints: {"shaders"} -> {"unity", "pipeline": {"name", "path", "hash"} active asset, "shaders": {name: fingerprint}}, nothing compiled; a change means recompile.
 
 using System;
 using System.Collections.Generic;
@@ -174,7 +174,7 @@ public static class ParetoGpuVariants
             var shader = Find(name, byName);
             return $"{Str(name)}: {Str(shader == null ? null : Fingerprint(shader))}";
         });
-        return ParetoGpuJob.Done("{\"unity\": " + Str(Application.unityVersion) + ", \"shaders\": {\n " +
+        return ParetoGpuJob.Done("{\"unity\": " + Str(Application.unityVersion) + ", \"pipeline\": {" + ParetoGpuJob.PipelineFields() + "}, \"shaders\": {\n " +
                                  string.Join(",\n ", items) + "}}\n");
     }
 
@@ -206,9 +206,8 @@ public static class ParetoGpuVariants
             ? "builtin"
             : path + "#" + AssetDatabase.GetAssetDependencyHash(path);
         // the build's variant set ("Compile and show code") follows the active pipeline asset (a scene may swap it in Play Mode)
-        var rp = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
-        var rpPath = rp == null ? "" : AssetDatabase.GetAssetPath(rp);
-        var pipeline = rp == null ? "builtin" : rpPath + "#" + AssetDatabase.GetAssetDependencyHash(rpPath);
+        var (rp, rpPath, rpHash) = ParetoGpuJob.Pipeline();
+        var pipeline = rp == null ? "builtin" : rpPath + "#" + rpHash;
         return string.Join("|", CompileMethod, Application.unityVersion, PlayerSettings.colorSpace.ToString(),
                            PlatformDefines(ShaderCompilerPlatform.Vulkan), pipeline, asset);
     }

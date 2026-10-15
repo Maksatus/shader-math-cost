@@ -18,7 +18,7 @@ def positive_int(v):
 
 def fail(message, e=None, code=None):
     """message -> console; error code (model/errors.py) -> the UI's hint."""
-    rep.error(code or getattr(e, "code", "error"))
+    rep.error(code or getattr(e, "code", "error"), getattr(e, "details", None))
     sys.exit(message)
 
 

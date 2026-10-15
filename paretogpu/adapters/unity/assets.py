@@ -131,3 +131,41 @@ def scan(project):
             m["shader"] = guids.get(m["guid"])
             out.append(m)
     return sorted(out, key=lambda m: m["path"])
+
+
+_RP_REF = r"\{fileID:\s*-?\d+(?:,\s*guid:\s*([0-9a-f]{32}))?"
+
+
+def build_pipeline(project):
+    """The pipeline asset an Android build starts with (its default quality level's, else Graphics settings'), read
+    from ProjectSettings: {"name", "path", "hash": None, "quality"}; None if the build has no pipeline asset. A scene
+    may still swap it at run time."""
+    def read(name):
+        with open(os.path.join(project, "ProjectSettings", name), encoding="utf-8", errors="replace") as f:
+            return f.read()
+    quality = read("QualitySettings.asset")
+    levels = re.split(r"^  - serializedVersion:", quality.split("m_QualitySettings:", 1)[1], flags=re.M)[1:]
+    m = re.search(r"^  m_PerPlatformDefaultQuality:\s*\n(?:    \w+: \d+\n)*?    Android: (\d+)", quality, re.M)
+    level = levels[int(m.group(1))] if m and int(m.group(1)) < len(levels) else None
+    guid = None
+    if level:
+        g = re.search(r"^    customRenderPipeline: " + _RP_REF, level, re.M)
+        guid = g and g.group(1)
+    if not guid:
+        g = re.search(r"^  m_CustomRenderPipeline: " + _RP_REF, read("GraphicsSettings.asset"), re.M)
+        guid = g and g.group(1)
+    if not guid:
+        return None
+    path = None
+    for root in material_roots(project):
+        for meta in _walk(root, ".asset.meta"):
+            with open(meta, encoding="utf-8", errors="replace") as f:
+                found = _META_GUID.search(f.read())
+            if found and found.group(1) == guid:
+                path = os.path.relpath(meta[:-len(".meta")], project).replace(os.sep, "/")
+                break
+        if path:
+            break
+    qname = re.search(r"^    name: (.*)$", level, re.M) if level else None
+    return {"name": path and os.path.splitext(os.path.basename(path))[0], "path": path,
+            "hash": None, "quality": qname and qname.group(1).strip()}

@@ -11,7 +11,8 @@ from paretogpu.app.rules import CompileRule, LoopRule, MeasureRule
 from paretogpu.core import loops
 from paretogpu.core import pricing as heavy
 from paretogpu.model.frame import Event
-from paretogpu.model.variant import VariantKey, VariantState, slug
+from paretogpu.model.errors import ParetoError
+from paretogpu.model.variant import NOT_IN_BUILD, VariantKey, VariantState, slug
 from paretogpu.store import memo as memo_store
 from paretogpu.store import variant_store as store
 from paretogpu.views.reporter import CONSOLE
@@ -157,7 +158,36 @@ def run(events: list[Event], project, root, cores, jobs=None, compile_missing=Tr
     errors = {k: v["errors"] or ([NOT_COMPILED_YET] if v.get("pending") else []) for k, v in compiled.items()}
     return {"keys": keys, "files": {k: v["files"] for k, v in compiled.items()}, "errors": errors,
             "measurements": measurements, "checked": compiling.checked if todo else True,
-            "captured": set(captured)}
+            "captured": set(captured), "pipeline": compiling.pipeline}
+
+
+class PipelineMismatch(ParetoError):
+    code = "pipeline_asset"
+
+
+def same_pipeline(a, b):
+    """Fields both sides know must agree (an older snapshot has the name only)."""
+    a, b = a or {}, b or {}
+    return all(a[f] == b[f] for f in ("name", "path", "hash") if a.get(f) is not None and b.get(f) is not None)
+
+
+def check_pipeline(frame_pipeline, state: VariantState, keys):
+    """Raises PipelineMismatch when the editor's active pipeline asset is not the frame's and some of the frame's
+    variants (keys) are missing from the build's variant set: the editor's asset set that variant set."""
+    editor = state.get("pipeline")
+    if editor is None or same_pipeline(frame_pipeline, editor):
+        return
+    missing = [k for k in keys if any(NOT_IN_BUILD in e for e in state["errors"].get(k, []))]
+    if not missing:
+        return
+    frame = frame_pipeline or {}
+    details = {"frame": frame.get("path") or frame.get("name") or "builtin",
+               "editor": editor.get("path") or editor.get("name") or "builtin",
+               "changed": bool(frame.get("path")) and frame.get("path") == editor.get("path"), "variants": len(missing)}
+    what = (f"the frame's pipeline asset {details['frame']} was changed after the frame" if details["changed"] else
+            f"the frame was drawn with pipeline asset {details['frame']}, the editor has {details['editor']} active")
+    raise PipelineMismatch(f"{what}: {len(missing)} variants of the frame are {NOT_IN_BUILD} with it. Enter Play Mode "
+                           f"or make the frame's asset active, then run cost again", details=details)
 
 
 def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:

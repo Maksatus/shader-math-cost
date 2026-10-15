@@ -1,5 +1,5 @@
 """With PARETOGPU_PROGRESS=1 (set by ui/runner.py) phase/step/skip/error also print `##progress {json}` lines on
-stdout, {"event": "phase"|"step"|"skip"|"error", id, total, done, note, code}; ui/runner.py parses them.
+stdout, {"event": "phase"|"step"|"skip"|"error", id, total, done, note, code, details}; ui/runner.py parses them.
 Phase ids should be those Command.phases lists: the UI shows them in advance."""
 import json
 import os
@@ -36,8 +36,8 @@ class Reporter:
     def skip(self, pid, note=None):
         self._emit(event="skip", id=pid, note=note)
 
-    def error(self, code):
-        self._emit(event="error", code=code)
+    def error(self, code, details=None):
+        self._emit(event="error", code=code, details=details)
 
     def counter(self, total, every=0.25):
         """Thread-safe tick(n=1); emits step at most every `every` s (and at total)."""

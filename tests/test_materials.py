@@ -102,3 +102,35 @@ class ProjectTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildPipelineTest(unittest.TestCase):
+    """The asset an Android build starts with: its default quality level's, else Graphics settings'."""
+
+    def setUp(self):
+        self.p = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.p, "ProjectSettings"))
+        os.makedirs(os.path.join(self.p, "Assets", "Settings"))
+        for name, guid in (("Mobile_RP", "a" * 32), ("PC_RP", "b" * 32)):
+            with open(os.path.join(self.p, "Assets", "Settings", f"{name}.asset.meta"), "w") as f:
+                f.write(f"fileFormatVersion: 2\nguid: {guid}\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.p, ignore_errors=True)
+
+    def write(self, android, mobile_rp):
+        ref = "{fileID: 11400000, guid: %s, type: 2}"
+        with open(os.path.join(self.p, "ProjectSettings", "QualitySettings.asset"), "w") as f:
+            f.write("QualitySettings:\n  m_QualitySettings:\n  - serializedVersion: 5\n    name: PC\n"
+                    f"    customRenderPipeline: {ref % ('b' * 32)}\n  - serializedVersion: 5\n    name: Mobile\n"
+                    f"    customRenderPipeline: {ref % ('a' * 32) if mobile_rp else '{fileID: 0}'}\n"
+                    f"  m_PerPlatformDefaultQuality:\n    Android: {android}\n    Standalone: 0\n")
+        with open(os.path.join(self.p, "ProjectSettings", "GraphicsSettings.asset"), "w") as f:
+            f.write(f"GraphicsSettings:\n  m_CustomRenderPipeline: {ref % ('b' * 32)}\n")
+
+    def test_android_quality_level_then_graphics_settings(self):
+        self.write(1, True)
+        self.assertEqual(materials.build_pipeline(self.p), {"name": "Mobile_RP", "hash": None, "quality": "Mobile",
+                                                            "path": "Assets/Settings/Mobile_RP.asset"})
+        self.write(1, False)
+        self.assertEqual(materials.build_pipeline(self.p)["path"], "Assets/Settings/PC_RP.asset")

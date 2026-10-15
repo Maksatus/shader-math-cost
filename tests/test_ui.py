@@ -95,6 +95,17 @@ class HintTest(unittest.TestCase):
         self.assertIn("RenderDoc", runner.hint_of(self.job(["renderdoc failed"], cmd="frame"))["text"])
         self.assertIn("лог", runner.hint_of(self.job(["something else"]))["text"])
 
+    def test_pipeline_asset_hint_names_both_assets(self):
+        job = self.job(["the frame was drawn with pipeline asset ..."], ["pipeline_asset"])
+        job["steps"][0]["error_details"] = {"frame": "Assets/K31.asset", "editor": "Assets/PC.asset",
+                                            "changed": False, "variants": 6}
+        text = runner.hint_of(job)["text"]
+        for part in ("Assets/K31.asset", "Assets/PC.asset", "Play Mode", "пересчитайте", "6"):
+            self.assertIn(part, text)
+        job["steps"][0]["error_details"]["changed"] = True
+        self.assertIn("изменён после снимка", runner.hint_of(job)["text"])
+        self.assertIn("лог", runner.hint_of(self.job(["pipeline asset"]))["text"])  # no details: no names to give
+
     def test_renderdoc_failing_on_the_phone_gets_the_phone_hint(self):
         self.assertIn("телефона", runner.hint_of(self.job(["x"], ["renderdoc"], cmd="device"))["text"])
         self.assertIn("Load RenderDoc", runner.hint_of(self.job(["x"], ["renderdoc"], cmd="frame"))["text"])

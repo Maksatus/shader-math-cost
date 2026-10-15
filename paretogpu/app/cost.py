@@ -16,7 +16,7 @@ from paretogpu.core import profile
 from paretogpu.core.events import assign_stages, global_keywords_known
 from paretogpu.model.cores import main_core as main_core_of
 from paretogpu.model.cost import CostRun
-from paretogpu.model.variant import VariantState
+from paretogpu.model.variant import VariantKey, VariantState
 from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
@@ -37,9 +37,11 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
             compile_missing=compile_missing, rep=rep)
     if variants.identify(events, frame_dir, root, project, rep):
         events = assign_stages(events)  # the identified passes tell the stages
+    captured = variants.place_captured(events, frame_dir, root)
     state = variants.run(events + ([k.as_event() for k in mat_keys] if mat_keys else []), project, root, cores,
-                         compile_missing=compile_missing, rep=rep,
-                         captured=variants.place_captured(events, frame_dir, root))
+                         compile_missing=compile_missing, rep=rep, captured=captured)
+    variants.check_pipeline(frame.get("pipeline"), state,
+                            {VariantKey.of(e) for e in events if e["kind"] == "draw"} - set(captured))
     state["loops"] = variants.loops_of(state, root, cores, rep=rep)
     state["loop_bounds"] = variants.bounds_of(state, root, rep)
     state["loop_iters"] = frame_loops.iterations_of(frame_dir, frame, state, rep)

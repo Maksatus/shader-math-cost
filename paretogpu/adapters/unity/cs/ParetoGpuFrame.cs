@@ -222,11 +222,10 @@ public static class ParetoGpuFrame
 
     static string PipelineJson()
     {
-        var rp = QualitySettings.renderPipeline != null ? QualitySettings.renderPipeline
-            : UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline;
+        var (rp, path, hash) = ParetoGpuJob.Pipeline();
         if (rp == null) return "null";
         var seen = new HashSet<UnityEngine.Object>();
-        return AssetJson(rp, 0, seen);
+        return "{\"path\": " + Str(path) + ", \"hash\": " + Str(hash) + ", " + AssetJson(rp, 0, seen).Substring(1);
     }
 
     const int AssetDepth = 2, AssetFields = 400, AssetRefs = 32;
