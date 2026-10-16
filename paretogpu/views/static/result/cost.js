@@ -195,7 +195,8 @@ function renderCost() {
   function hwView() {
     if (!HW) return `<h2>Проходы на телефоне</h2><p class="verdict">Счётчики Mali с этого телефона не сняты: `
       + `${esc(D.hardware.error === "crashed" ? "проигрывание со счётчиками уронило драйвер" : D.hardware.error === "empty"
-        ? "драйвер вернул пустой ответ" : D.hardware.error || "нет данных")}. Настоящей нагрузки по проходам для этого кадра нет.</p>`;
+        ? "драйвер вернул пустой ответ" : D.hardware.error === "hung" ? "проигрывание со счётчиками зависло на телефоне (2 минуты без ответа, остановлено)"
+        : D.hardware.error || "нет данных")}. Настоящей нагрузки по проходам для этого кадра нет.</p>`;
     const EX = "Execution core active cycles", GA = "GPU active cycles";
     const UNITS = [["Arithmetic unit issue cycles", "арифметика"], ["Load/store unit issue cycles", "память (LS)"],
                    ["Texture unit issue cycles", "текстуры"], ["Varying unit issue cycles", "varying"]];
@@ -238,7 +239,7 @@ function renderCost() {
   function shaderCost() {
     const S = HW.shader_cost, T = "Шейдеры на телефоне";
     if (!S) return `<h2>${T}</h2><p class="sub">Цена шейдеров не мерилась: снимок снят с галочкой «Не мерить цену шейдеров».</p>`;
-    if (S.error) return `<h2>${T}</h2><p class="verdict">Замер подменой не удался: ${esc(S.error === "crashed" ? "проигрывание уронило драйвер" : S.error)}.</p>`;
+    if (S.error) return `<h2>${T}</h2><p class="verdict">Замер подменой не удался: ${esc(S.error === "crashed" ? "проигрывание уронило драйвер" : S.error === "hung" ? "проигрывание зависло на телефоне (2 минуты без ответа, остановлено)" : S.error)}.</p>`;
     const UN = {A: "арифм.", LS: "LS", T: "текст.", V: "varying"};
     const ok = S.shaders.filter(s => !s.error), bad = S.shaders.filter(s => s.error);
     const frag = ok.filter(s => s.mode === "colour"), draw = ok.filter(s => s.mode === "draw");

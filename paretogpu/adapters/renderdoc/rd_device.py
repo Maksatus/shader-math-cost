@@ -128,7 +128,7 @@ def discarding_of(f):
     return {m: v for m, v in shaders_of(f, "frag").items() if rd_spirv.discards(v[1])}
 
 
-def read_frame(leaves, f, job, names, textures, samples, discarding):
+def read_frame(leaves, f, job, names, textures, samples, discarding, tick=lambda: None):
     """-> (actions, draws) of the answer, with no replay call: the calls' state comes from the capture's structured
     data (rd_vulkan.py), not from moving the replay to every call."""
     tex = {t["id"]: t for t in textures}
@@ -148,6 +148,7 @@ def read_frame(leaves, f, job, names, textures, samples, discarding):
     discards = {e for _, _, events in discarding.values() for e in events}
     actions, draws = [], {}
     for a, path in leaves:
+        tick()
         kinds = [k for k, fl in KINDS if a.flags & fl]
         actions.append({"event": a.eventId, "name": a.name, "path": path, "flags": int(a.flags), "kinds": kinds,
                         "indices": a.numIndices, "instances": a.numInstances})
@@ -281,10 +282,10 @@ def rotation(controller):
     raise RuntimeError("the capture has no vkCreateSwapchainKHR: its screen orientation is unknown")
 
 
-def write(answer):
-    with open(out_path + ".tmp", "w", encoding="utf-8") as f:
+def write(answer, path=out_path):
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
         json.dump(answer, f)
-    os.replace(out_path + ".tmp", out_path)
+    os.replace(path + ".tmp", path)
 
 
 def main():
@@ -315,28 +316,32 @@ def main():
         shaded, discard_error = shaded_samples(rp.c, discarding)
     except Exception as e:
         discard_error = "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]
-    step("Mali counters of the render passes")
-    try:  # last: on some drivers (client) a counter replay crashes the device's server
-        mali = mali_counters(rp.c)
-    except Exception as e:
-        mali = {"names": [], "passes": {}, "error": "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]}
-    cost = None
-    if job.get("knockout") and mali["passes"] and rd.ShaderEncoding.SPIRV in rp.c.GetTargetShaderEncodings():
-        try:
-            cost = knockout(rp, f, step)
-        except Exception as e:
-            cost = {"error": "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]}
     model = rd.GetDeviceProtocolController("adb").GetFriendlyName(url)
-    rp.close()
     step("writing the frame")
-    actions, draws = read_frame(leaves, f, job, names, tex, samples, discarding)
+    actions, draws = read_frame(leaves, f, job, names, tex, samples, discarding, rp.keepalive)
     for e, v in shaded.items():
         draws[e]["samples_shaded"] = v
     screen = next(([t["width"], t["height"]] for t in tex if t["swapchain"]), None)
-    write({"device": model, "serial": job["serial"], "api": api, "capture": job["capture"],
-           "screen": screen[::-1] if screen and turn in (90, 270) else screen, "rotation": turn,
-           "actions": actions, "draws": draws, "textures": tex, "usage": usage, "discard_error": discard_error,
-           "mali": mali, "knockout": cost})
+    answer = {"device": model, "serial": job["serial"], "api": api, "capture": job["capture"],
+              "screen": screen[::-1] if screen and turn in (90, 270) else screen, "rotation": turn,
+              "actions": actions, "draws": draws, "textures": tex, "usage": usage, "discard_error": discard_error,
+              "mali": {"names": [], "passes": {}, "error": "hung"}, "knockout": None}
+    # last, each step's answer kept first: on some drivers (client) a counter replay crashes or hangs the server
+    write(answer, out_path + ".partial")
+    step("Mali counters of the render passes")
+    try:
+        mali = mali_counters(rp.c)
+    except Exception as e:
+        mali = {"names": [], "passes": {}, "error": "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]}
+    answer["mali"] = mali
+    if job.get("knockout") and mali["passes"] and rd.ShaderEncoding.SPIRV in rp.c.GetTargetShaderEncodings():
+        write({**answer, "knockout": {"error": "hung"}}, out_path + ".partial")
+        try:
+            answer["knockout"] = knockout(rp, f, step)
+        except Exception as e:
+            answer["knockout"] = {"error": "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]}
+    rp.close()
+    write(answer)
 
 
 try:

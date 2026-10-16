@@ -73,7 +73,7 @@ def capture(frame_dir, app, serial=None, wait=None, knockout=True, rep=CONSOLE):
                    "seconds": round(time.time() - t0, 1)})
     with open(out, "w", encoding="utf-8") as f:
         json.dump(answer, f)
-    for x in (out + ".in", out + ".progress", now):
+    for x in (out + ".in", out + ".progress", out + ".partial", now):
         if os.path.exists(x):
             os.remove(x)
     return out

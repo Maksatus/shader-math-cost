@@ -164,11 +164,21 @@ def device_unlocked(serial):
     return awake and not locked
 
 
+DEVICE_STALL = (("Mali counters", "shader cost:"), 120)  # steps a driver may hang in, seconds without progress
+
+
 def device_frame(job, out_json, timeout=2400, on_progress=None):
     """job {"serial", "app", "trigger", "wait", "capture", "shaders"} -> rd_device.py answer.
-    timeout: seconds counted from the capture on (the app may run as long as the user needs before it)."""
+    timeout: seconds counted from the capture on (the app may run as long as the user needs before it). A step of
+    DEVICE_STALL silent for its seconds: the server is stopped and the answer written before that step is used."""
     run = _start(DEVICE, out_json, serial=job["serial"], job={**job, "adb": adb()})
-    return _finish(run, timeout, on_progress, waiting=DEVICE_WAITING)
+
+    def stalled():
+        subprocess.run([adb(), "-s", job["serial"], "shell", "am", "force-stop", "org.renderdoc.renderdoccmd.arm64"],
+                       capture_output=True, timeout=30)
+        if os.path.exists(out_json + ".partial"):
+            os.replace(out_json + ".partial", out_json)
+    return _finish(run, timeout, on_progress, waiting=DEVICE_WAITING, stall=(*DEVICE_STALL, stalled))
 
 
 def _start(script, out_json, capture=None, serial=None, job=None):
@@ -192,22 +202,30 @@ def _start(script, out_json, capture=None, serial=None, job=None):
     return proc, log, out_json, "device" if serial else "renderdoc"
 
 
-def _finish(run, timeout, on_progress=None, waiting=None):
+def _finish(run, timeout, on_progress=None, waiting=None, stall=None):
     """-> the script's answer; RenderDocError on its traceback, a timeout or no answer. waiting: a progress text during
-    which the timeout does not run (the user's turn)."""
+    which the timeout does not run (the user's turn). stall: (step prefixes, seconds, then()) — such a step silent that
+    long ends the script, then() runs."""
     proc, log, out_json, code = run
-    t0, last = time.time(), None
+    t0, last, since = time.time(), None, time.time()
     try:
         while proc.poll() is None:
             if time.time() - t0 > timeout:
                 raise RenderDocError(f"qrenderdoc did not finish in {timeout} s (last step: {last})", code=code)
+            if stall and last and last.startswith(stall[0]) and time.time() - since > stall[1]:
+                proc.kill()
+                proc.wait()
+                stall[2]()
+                break
             try:
                 with open(out_json + ".progress", encoding="utf-8") as f:
                     text = f.read().strip()
             except OSError:
                 text = None
-            if text and text != last and on_progress:
-                on_progress(text)
+            if text and text != last:
+                since = time.time()
+                if on_progress:
+                    on_progress(text)
             last = text or last
             if waiting and last == waiting:
                 t0 = time.time()
