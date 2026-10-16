@@ -13,6 +13,7 @@ from paretogpu.views.reporter import CONSOLE
 
 DIR = "device"
 TRIGGER = "capture.now"
+ORDER = ["rd_wait", "rd_device", "rd_knockout"]
 
 
 def trigger(frame_dir):
@@ -20,9 +21,9 @@ def trigger(frame_dir):
     return os.path.join(frame_dir, DIR, TRIGGER)
 
 
-def capture(frame_dir, app, serial=None, wait=None, rep=CONSOLE):
-    """Captures when trigger(frame_dir) appears (Enter in the console makes it), or after `wait` s; -> path of the
-    answer json."""
+def capture(frame_dir, app, serial=None, wait=None, knockout=True, rep=CONSOLE):
+    """Captures when trigger(frame_dir) appears (Enter in the console makes it), or after `wait` s; knockout: each
+    shader's cycles measured by swapping it (rd_device.knockout); -> path of the answer json."""
     folder = os.path.join(frame_dir, DIR)
     os.makedirs(folder, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
@@ -43,22 +44,29 @@ def capture(frame_dir, app, serial=None, wait=None, rep=CONSOLE):
         threading.Thread(target=_enter, args=(now,), daemon=True).start()
     how = f"the capture is in {wait:g} s" if wait is not None else "press Enter or «Снять кадр»"
 
-    waited = []
+    phases = []
 
     def progress(text):
         if text == rdoc.DEVICE_WAITING:
-            waited.append(1)
+            phases.append("rd_wait")
             rep.phase("rd_wait")
             rep.log(f"  the app is running on the device: open the scene you want, then {how}; after the capture do "
                     "not touch the device")
-        else:
-            if waited:
-                rep.phase("rd_device")
-            rep.log(f"  {text}")
+            return
+        phase = "rd_knockout" if text.startswith("shader cost:") else "rd_device"
+        if phases and ORDER.index(phase) > ORDER.index(phases[-1]):
+            phases.append(phase)
+            rep.phase(phase)
+        if phase == "rd_knockout":
+            done, total = text.split()[-1].split("/")
+            rep.step(int(done), int(total))
+        rep.log(f"  {text}")
     answer = rdoc.device_frame({"serial": serial, "app": activity, "wait": wait, "trigger": os.path.abspath(now),
                                 "capture": os.path.abspath(os.path.join(frame_dir, device.CAPTURE)),
-                                "shaders": os.path.abspath(os.path.join(frame_dir, device.SHADERS))},
+                                "shaders": os.path.abspath(os.path.join(frame_dir, device.SHADERS)),
+                                "knockout": knockout},
                                out, on_progress=progress)
+    rep.done()
     if not answer["draws"]:
         raise rdoc.RenderDocError("the device frame has no draws (is the app showing its scene?)", code="device")
     answer.update({"app": activity, "gpu": gpu, "captured_at": time.time(),

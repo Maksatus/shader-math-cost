@@ -21,8 +21,7 @@ from paretogpu.model.errors import ParetoError
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = "ParetoGpuRenderDoc.cs"
 COUNTERS = os.path.join(HERE, "rd_counters.py")
-LOOPS = os.path.join(HERE, "rd_loops.py")
-GEOMETRY = os.path.join(HERE, "rd_geometry.py")
+DRAWS = os.path.join(HERE, "rd_draws.py")
 MEMORY = os.path.join(HERE, "rd_memory.py")
 DEVICE = os.path.join(HERE, "rd_device.py")
 THUMB = os.path.join(HERE, "rd_thumb.py")
@@ -149,7 +148,7 @@ def device_gpu(serial):
     """-> malioc core name ("Mali-G78") or None."""
     out = subprocess.run([adb(), "-s", serial, "shell", "dumpsys", "SurfaceFlinger"], capture_output=True, text=True,
                          timeout=60, encoding="utf-8", errors="replace").stdout
-    m = re.search(r"GLES: [^,]*, (?:Mali|Immortalis)-([A-Z]?\d+)", out)
+    m = re.search(r"(?:GLES: [^,]*, |Name: )(?:Mali|Immortalis)-([A-Z]?\d+)", out)
     return f"Mali-{m.group(1)}" if m else None
 
 
@@ -174,7 +173,7 @@ def device_frame(job, out_json, timeout=2400, on_progress=None):
 
 def _start(script, out_json, capture=None, serial=None, job=None):
     """qrenderdoc --python script; serial: RenderDoc for Arm, the capture replayed on that device (rd_replay.py)."""
-    for x in (out_json, out_json + ".error", out_json + ".progress", out_json + ".bin"):
+    for x in (out_json, out_json + ".error", out_json + ".progress"):
         if os.path.exists(x):
             os.remove(x)
     env = dict(os.environ, PARETOGPU_OUT=out_json, PARETOGPU_LIB=HERE, PARETOGPU_ROOT=ROOT)
@@ -317,63 +316,7 @@ def signature(path):
     return f"{st.st_size}|{int(st.st_mtime)}|{head}"
 
 
-def free_memory():
-    import ctypes
-
-    class Status(ctypes.Structure):
-        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-    st = Status()
-    st.dwLength = ctypes.sizeof(Status)
-    try:
-        return st.ullAvailPhys if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)) else None
-    except (AttributeError, OSError):
-        return None
-
-
-MAX_WORKERS = 4
-PROCESS_MEMORY = 128 << 20  # per qrenderdoc replay: this + 2x the capture size (measured: 252 MB, 102 MB)
-
-
-def workers_for(capture_path, calls):
-    free = free_memory()
-    per = PROCESS_MEMORY + 2 * os.path.getsize(capture_path)
-    by_memory = max(1, int(free // per)) if free else 1
-    return max(1, min(MAX_WORKERS, (os.cpu_count() or 4) // 4, by_memory, calls))
-
-
-def geometry(capture_path, asked, out_json, serial=None, timeout=3600, on_progress=None):
-    """asked [[eid, instances]] -> (rd_geometry.py meta {eid: info}, path of its float32 triangles)."""
-    meta = _finish(_start(GEOMETRY, out_json, capture_path, serial, asked), timeout, on_progress)
-    return meta, out_json + ".bin"
-
-
-def loop_iterations(capture_path, asked, out_json, serial=None, timeout=3600, workers=None):
-    """asked [{"key", "calls": [eid]}] (one draw event each) -> {key: {"loops", "nested", "pixels", "sums"} or
-    {"error"}} (rd_loops.py). Events split in frame order over processes that each replay the capture (one on a
-    device); RenderDocError only if all fail."""
-    asked = sorted(asked, key=lambda a: a["calls"][0])
-    k = 1 if serial else workers or workers_for(capture_path, len(asked))
-    parts = [p for p in (asked[i * len(asked) // k:(i + 1) * len(asked) // k] for i in range(k)) if p]
-    runs = [_start(LOOPS, f"{out_json}.{i}", capture_path, serial, part) for i, part in enumerate(parts)]
-    res, errors, t0 = {}, [], time.time()
-    try:
-        for run, part in zip(runs, parts):
-            try:
-                got = _finish(run, max(1, timeout - (time.time() - t0)))
-            except RenderDocError as e:
-                errors.append(str(e))
-                res.update({a["key"]: {"error": str(e)} for a in part})
-                continue
-            for name, v in got.pop("_seconds", {}).items():
-                res.setdefault("_seconds", {})[name] = res.get("_seconds", {}).get(name, 0) + v
-            res.update(got)
-    finally:
-        for proc, *_ in runs:
-            if proc.poll() is None:
-                proc.kill()
-    if errors and len(errors) == len(runs):
-        raise RenderDocError(errors[0])
-    return res
+def draws(capture_path, out_json, serial=None, timeout=3600, on_progress=None):
+    """rd_draws.py's walk over the capture's draws (post-VS triangles, loop trip counts) into out_json (+ .bin); a
+    device capture measures them in rd_device.py, in its replay."""
+    return _finish(_start(DRAWS, out_json, capture_path, serial), timeout, on_progress)

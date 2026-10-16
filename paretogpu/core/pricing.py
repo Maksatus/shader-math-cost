@@ -1,8 +1,12 @@
-"""Shader price on one core = cycles of the bottleneck pipe on malioc's longest path (compare cores of one class only).
+"""Shader price on one core = sum of the pipes' cycles on malioc's longest path (compare cores of one class only). On
+the hardware a shader's time is near its busiest pipe (Pixel 7 knockouts), but malioc splits the work between pipes
+otherwise: its busiest pipe ranked VATyakov's shaders x0.34..1.24 against the phone, its sum x1.1..1.45.
 Arith = malioc's arith_total "A", not max(FMA, CVT, SFU): equal on G57..G78, but G610 / G710 share issue
 (A ~ FMA + CVT + SFU/4) and G715 / G720 lie between max and sum. Longest path N/A (dynamic loops): core/loops forces
 n iterations, else total cycles raised per pipe to the shortest path (total counts spills once) + "dynamic_loop".
 regs_gt32 = half thread occupancy.
+LS: malioc charges every access as one lane per cycle; G78's counters show coalesced accesses (16 bytes per lane, a
+64-byte path: 4 lanes per cycle), so Valhall and later price LS / LS_LANES (K3.1).
 """
 from paretogpu.core import loops
 from paretogpu.model.measurement import MALI, Measurement, PipeModel, Score
@@ -12,6 +16,7 @@ FP16_THRESHOLD = 25
 FLAGS = ("regs_gt32", "spilling", "low_fp16", "sfu_bound", "dynamic_loop")
 LOOP_ITERS = 2            # default dynamic loop trip count (lights, probes, ray steps)
 LOOP_NS = (0, 1, 2, 4, 8)  # trip counts of the range in the report
+LS_LANES = 4
 
 
 def add_cycles(a, b):
@@ -33,9 +38,9 @@ def combined(rec: Measurement, model: PipeModel = MALI):
     return out
 
 
-def bottleneck(c, model: PipeModel = MALI):
-    """-> (cycles, [bound pipes]). Bifrost reports only 'arith'; on Valhall+ 'arith' is the total and fma / cvt / sfu
-    its breakdown, named as the bound when equal to it."""
+def pipe_cycles(c, model: PipeModel = MALI):
+    """-> (sum of the pipes' cycles, [busiest pipes]). Bifrost reports only 'arith'; on Valhall+ 'arith' is the total and
+    fma / cvt / sfu its breakdown, named as the busiest when equal to it."""
     arith = model.arith
     vals = {p: c[p] for p in model.pipes if c.get(p) is not None}
     sub = {p: vals.pop(p) for p in model.arith_sub if p in vals}
@@ -50,7 +55,11 @@ def bottleneck(c, model: PipeModel = MALI):
         if named:
             i = bound.index(arith)
             bound[i:i + 1] = named
-    return top, bound
+    return sum(vals.values()), bound
+
+
+def coalesced(c, arch):
+    return c if arch == "Bifrost" or not c.get("ls") else {**c, "ls": c["ls"] / LS_LANES}
 
 
 def fallback(c):
@@ -66,7 +75,7 @@ def score(rec: Measurement, fp16_threshold=FP16_THRESHOLD, cycles=None, path=Non
             cycles, path = c["longest"], "longest"
         else:
             cycles, path = fallback(c), "total"
-    cyc, bound = bottleneck(cycles)
+    cyc, bound = pipe_cycles(coalesced(cycles, rec.get("arch")))
     vs = rec["variants"].values()
     fp16 = [v["fp16_pct"] for v in vs if v["fp16_pct"] is not None]
     flags = {
@@ -97,8 +106,7 @@ def price(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -
 
 
 def loop_parts(recs: dict, file, core, n, loop_data, fp16_threshold=FP16_THRESHOLD) -> list | None:
-    """-> [{"n", "cycles"}] per outer loop in code order, cycles = price minus price with that loop at 0 (parts of a
-    bottleneck need not sum to the price); None without loop data."""
+    """-> [{"n", "cycles"}] per outer loop in code order, cycles = price minus price with that loop at 0; None without loop data."""
     p = (loop_data.get(file) or {}).get(core)
     if not p:
         return None

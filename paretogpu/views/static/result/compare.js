@@ -2,11 +2,12 @@ function renderCompare() {
   const x = D.by_core[core];
   const head = `<div class="card"><h1>Сравнение кадров</h1>
     <div class="ab">${side(D.a, "A")}<div class="arrow">→</div>${side(D.b, "B")}</div>
-    <div class="mode">${D.same_frame
+    <div class="mode">${D.model_vs_phone ? "<b>Снимок с ПК и снимок с телефона.</b> Модель ПК проверяется замером телефона по шейдерам." : D.same_frame
       ? "<b>Тот же снимок, посчитанный дважды.</b> Пиксели и вершины одинаковые, поэтому разница — это цена шейдеров и число повторов их циклов."
       : "<b>Два разных снимка.</b> Разница складывается из цены шейдеров, числа повторов их циклов (свет, пробы) и объёма работы: ракурс, сцена, LOD, анимации. Ниже они разделены."}</div>
     ${D.warnings.length ? `<div class="warn"><ul>${D.warnings.map(w => `<li>${esc(msg(w))}</li>`).join("")}</ul></div>` : ""}
     <p class="small" style="margin:10px 0 0">${refLink("compare-frames", "Как читать сравнение")}</p></div>`;
+  if (D.model_vs_phone) { $("#app").innerHTML = head + modelVsPhone(D.model_vs_phone); return; }
   if (!x) { $("#app").innerHTML = head; return; }
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;
   const loops = x.loops || 0;
@@ -83,5 +84,24 @@ function details(s) {
       ${evs ? `<details style="margin-top:6px"><summary>События (${v.events_count}${v.events_count > v.events.length ? `, показаны ${v.events.length} с наибольшей разницей` : ""})</summary>
         <table style="margin-top:4px"><tr><th>Объект</th><th>Стадия</th><th class="n">Номер A / B</th><th class="n">Пиксели</th><th class="n">A</th><th class="n">B</th><th class="n">Разница</th></tr>${evs}</table></details>` : ""}</div>`;
   }).join("") + (shown.length && same.length ? `<div class="small muted">Ещё ${plural(same.length, "вариант", "варианта", "вариантов")} без изменений: ${same.map(v => esc(v.pass || v.variant)).join(", ")}</div>` : "");
+}
+function modelVsPhone(m) {
+  const pcSide = m.phone === "a" ? "B" : "A", phSide = m.phone.toUpperCase();
+  if (m.error) return `<div class="card"><h2>Модель ПК и замер телефона</h2><p class="muted">Снимок ${pcSide} (ПК) посчитан без ядра ${esc(m.core)} телефона: пересчитайте его с этим ядром.</p></div>`;
+  const ratio = (a, b) => a != null && b > 0 ? `×${(a / b).toFixed(2)}` : "—";
+  const MODE = {colour: "цвет пиксельного шейдера", draw: "draw целиком"};
+  const rows = [...m.rows].sort((a, b) => b.exec - a.exec);
+  const off = r => r.model != null && r.exec > r.noise && (r.model / r.exec > 1.5 || r.model / r.exec < 0.67);
+  return `<div class="card"><h2>Модель ПК и замер телефона <small>${esc(m.core)}</small></h2>
+    <p>Снимок ${pcSide} — расчёт на ПК, снимок ${phSide} — замер на телефоне подменой шейдеров. Так проверяется модель: те же шейдеры, расчёт против железа.
+    Сцены должны совпадать (ракурс, толпа), иначе разница — ещё и объём работы.</p>
+    <div class="kpis"><div class="kpi"><div class="k">Модель ПК, кадр</div><div class="v">${M(m.frame.model)}</div><div class="s">млн тактов, с тенями</div></div>
+      <div class="kpi"><div class="k">Телефон, кадр</div><div class="v">${M(m.frame.phone)}</div><div class="s">млн тактов ядер</div></div>
+      <div class="kpi"><div class="k">Модель / телефон</div><div class="v">${ratio(m.frame.model, m.frame.phone)}</div><div class="s">&nbsp;</div></div></div>
+    <table style="margin-top:12px"><tr><th>Шейдер</th><th>Что</th><th>Стадия</th><th class="n">Модель ПК</th><th class="n">Телефон</th><th class="n">± замера</th><th class="n">Модель / телефон</th></tr>
+    ${rows.map(r => `<tr><td><b>${esc(r.shader)}</b></td><td class="muted">${MODE[r.mode] || r.mode}</td><td>${esc(STAGE[r.stage] || r.stage || "")}</td>
+      <td class="n">${r.model == null ? "нет в ПК" : M(r.model)}</td><td class="n"><b>${M(r.exec)}</b></td><td class="n muted">${M(r.noise)}</td>
+      <td class="n ${off(r) ? "bad" : ""}">${r.exec > r.noise ? ratio(r.model, r.exec) : "шум"}</td></tr>`).join("")}</table>
+    <p class="small muted" style="margin-top:8px">млн тактов на ядре телефона. Красным — модель ошибается больше чем в 1.5 раза. «Draw целиком» — только вершинные шейдеры одного шейдера Unity; общий полноэкранный вершинный шейдер постобработки не сравнивается.</p></div>`;
 }
 VIEWS.compare = renderCompare;

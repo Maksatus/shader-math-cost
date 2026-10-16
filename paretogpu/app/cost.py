@@ -5,13 +5,14 @@ import os
 import time
 
 from paretogpu.app import code_version
-from paretogpu.app import frame_loops
-from paretogpu.app import frame_quads
+from paretogpu.app import frame_draws
 from paretogpu.app import frame_memory
 from paretogpu.app import materials as project_materials
 from paretogpu.app import variants
+from paretogpu.core import device
 from paretogpu.core import frame_cost
 from paretogpu.core import materials as shaders
+from paretogpu.core import memory
 from paretogpu.core import profile
 from paretogpu.core.events import assign_stages, global_keywords_known
 from paretogpu.model.cores import main_core as main_core_of
@@ -44,12 +45,20 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
                             {VariantKey.of(e) for e in events if e["kind"] == "draw"} - set(captured))
     state["loops"] = variants.loops_of(state, root, cores, rep=rep)
     state["loop_bounds"] = variants.bounds_of(state, root, rep)
-    state["loop_iters"] = frame_loops.iterations_of(frame_dir, frame, state, rep)
-    quad_warnings = frame_quads.threads_of(frame_dir, frame, events, rep)
+    if frame.get("device"):
+        rep.skip("quads")
+        state["loop_iters"], quad_warnings = {}, []
+    else:
+        state["loop_iters"], quad_warnings = frame_draws.run(frame_dir, events, state, rep, root=root)
     capture = frame_memory.read(frame_dir, frame, rep)
     rep.phase("report")
-    c = frame_cost.compute(frame, events, state, cores, main_core)
+    tiles = memory.tile_threads(capture["textures"], capture["usage"], capture["actions"], events) if capture else []
+    c = frame_cost.compute(frame, events, state, cores, main_core, tiles)
     c["memory"] = frame_memory.passes(capture, events, c["events"], [x["name"] for x in c["cores"]], rep)
+    if capture:
+        dev = frame.get("device") or {}
+        core = dev.get("gpu") if dev.get("gpu") in [x["name"] for x in c["cores"]] else c["main_core"]
+        c["hardware"] = device.hardware(dev, capture["actions"], events, c["events"] + c["geometry"], core)
     c["variants_checked"] = state["checked"]
     prof = profile.describe(frame, profile.frame_size(c["events"]))
     c["profile"] = {**prof, "warnings": profile.warnings(prof),
@@ -70,4 +79,5 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
     c["variants_dir"] = os.path.abspath(root)
     c["computed_at"] = time.time()
     c["code_version"] = code_version.current()
+    rep.done()
     return c, state

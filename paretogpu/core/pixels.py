@@ -1,4 +1,4 @@
-"""Draw pixels = fragment shader threads: rd["threads"] from the draw's quads (app/frame_quads, PC and device alike);
+"""Draw pixels = fragment shader threads: rd["threads"] from the draw's quads (app/frame_draws, PC and device alike);
 without them rd["ps_invocations"]: RenderDoc PSInvocations, or Samples Passed in a device frame (core/device); 0 for a
 draw that ran no fragment shader."""
 from paretogpu.model.frame import Event

@@ -19,8 +19,10 @@ function renderCost() {
   </div>
   <div class="stagebar" id="stagebar"></div>
   <div class="stages" id="stages"></div>
+  <section id="hw"></section>
   <section id="memory"></section>
   <section id="main"></section>
+  <section id="geometry"></section>
   <section id="missing"></section>
   <section id="project"></section>`;
   Object.assign(AUTO_TIPS, {
@@ -28,31 +30,34 @@ function renderCost() {
   });
   const TOP = 50;
   const STAGE_NAMES = {post: "пост", opaque: "opaque", transparent: "transparent", shadow: "тени", prepass: "prepass",
-                       ui: "UI", compute: "compute", other: "прочее"};
+                       ui: "UI", compute: "compute", tile: "тайл Mali", other: "прочее"};
   const STAGE_COLORS = {post: "#a594f0", opaque: "#7fb2e5", transparent: "#6cc4c4", shadow: "#8b939c", prepass: "#d9b36e",
-                        ui: "#e3a1c4", compute: "#b9a3e0", other: "#5f6873"};
+                        ui: "#e3a1c4", compute: "#b9a3e0", tile: "#9fb7a4", other: "#5f6873"};
   const BY = [["event", "события"], ["shader", "шейдер"], ["variant", "вариант"], ["object", "объект"], ["rt", "RT"]];
+  const HW = D.hardware && !D.hardware.error && D.hardware.passes.length ? D.hardware : null;
   const st = { core: D.main_core, by: "event", q: "", stage: "", all: false, sort: ["total", -1],
-               tab: "frame", pf: "all", psort: ["px", -1], msort: ["time", -1], open: new Set() };
+               tab: D.frame.device ? (D.hardware ? "hw" : "passes") : "frame", pf: "all", psort: ["px", -1], msort: ["time", -1], open: new Set() };
   const P = D.project_shaders;
   const cyc = v => v == null ? "—" : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2);
   const mc = v => v == null ? "—" : (v / 1e6).toFixed(v >= 1e8 ? 0 : v >= 1e7 ? 1 : 2);
   const pc = v => v == null ? "—" : (100 * v).toFixed(v >= 0.1 ? 1 : 2) + "%";
   const short = c => c.replace("Mali-", "").replace("Immortalis-", "");
   const objName = s => String(s || "").replace(/^\(RP \d+:\d+\) /, "");
+  const shaderName = r => r.shader || `не опознан: ${objName(r.object)}`;
 
   const thumb = document.getElementById("frThumb");
   if (thumb) thumb.onclick = () => thumb.classList.toggle("big");
   const f = D.frame, cov = D.coverage;
   document.title = document.getElementById("title").textContent =
     `Стоимость кадра: ${f.project ? f.project.split(/[\\/]/).pop() : ""} ${((D.profile || {}).frame_size || []).join("×")}`.trim();
-  const dev = f.device || null;
+  const dev = f.device || null, PHONE = !!dev;
   document.getElementById("meta").textContent =
     (dev ? `Телефон ${dev.model || "?"} · ${dev.gpu || "GPU ?"} · ${f.graphics_api}`
       + `${dev.captured_at ? " · " + when(dev.captured_at) : ""}${dev.app ? " · " + dev.app : ""} · `
       : `Unity ${f.unity} · ${f.graphics_api} в редакторе, quality ${f.quality}, ${f.play_mode ? "Play Mode" : "Edit Mode"} · `) +
+    (dev ? `malioc ${D.malioc || ""} · ${D.frame_dir || ""}` :
     `цены: malioc ${D.malioc || ""}` + (D.variants_checked === false ? " (варианты не сверены с шейдерами)" : "") + ` · draw с ценой ${cov.draws_priced} из ${cov.draws} · пиксели: ` +
-    Object.entries(D.pixel_methods).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${D.frame_dir || ""}`;
+    Object.entries(D.pixel_methods).map(([k, v]) => `${k} ${v}`).join(", ") + ` · ${D.frame_dir || ""}`);
 
   const PROF = D.profile || {warnings: []};
   const size = a => a ? a.join("×") : "?";
@@ -107,7 +112,7 @@ function renderCost() {
     if (!MEM || !MEM.passes.length) { el.innerHTML = ""; return; }
     const dev = (MEM.assumptions.devices || {})[st.core], T = MEM.totals, R = (T.roofline || {})[st.core];
     let h = `<h2>Проходы <small>${MEM.passes.length} · ${dev ? esc(dev.device) : short(st.core) + ": нет данных устройства"}</small></h2>`;
-    if (R) {
+    if (R && !PHONE) {
       const memFrame = R.mem_ms > R.alu_ms;
       const other = MEM.passes.filter(p => passBound(p) === (memFrame ? "alu" : "memory"));
       h += `<p class="verdict"><b>Кадр упирается в ${memFrame ? "память" : "шейдеры"}</b>: шейдеры ${ms(R.alu_ms)} мс, память ${ms(R.mem_ms)} мс.`
@@ -126,11 +131,13 @@ function renderCost() {
     const [mk, md] = st.msort;
     const rows = [...MEM.passes].sort((x, y) => { const a = val(x, mk), b = val(y, mk); return (a < b ? -1 : a > b ? 1 : 0) * md; });
     const mth = (k, label, cls, tip) => `<th class="${cls} ${mk === k ? "sorted" : ""}" data-mk="${k}" title="${tip}">${label}${mk === k ? (md < 0 ? " ↓" : " ↑") : ""}</th>`;
-    h += `<div class="wrap ev mem"><table><colgroup><col style="width:4%"><col style="width:19%"><col style="width:8%"><col style="width:13%">`
-      + `<col style="width:8%"><col style="width:8%"><col style="width:22%"><col style="width:6%"><col style="width:6%"><col style="width:6%"></colgroup><thead><tr>`
+    const model = !PHONE, cols = model ? 10 : 7;
+    h += `<div class="wrap ev mem"><table><colgroup>` + (model ? `<col style="width:4%"><col style="width:19%"><col style="width:8%"><col style="width:13%">`
+      + `<col style="width:8%"><col style="width:8%"><col style="width:22%"><col style="width:6%"><col style="width:6%"><col style="width:6%">`
+      : `<col style="width:4%"><col style="width:26%"><col style="width:10%"><col style="width:36%"><col style="width:8%"><col style="width:8%"><col style="width:8%">`) + `</colgroup><thead><tr>`
       + mth("index", "#", "num", "Порядок в кадре") + mth("name", "Проход", "l", "Имя прохода")
-      + mth("bound", "Упор", "l", "Что дольше: шейдеры или память") + mth("time", "% времени", "l", "Доля во времени кадра")
-      + mth("alu", "Шейдеры, мс", "num", "Циклы / (ядра × частота)") + mth("mem", "Память, мс", "num", "Байты / скорость памяти")
+      + (model ? mth("bound", "Упор", "l", "Что дольше: шейдеры или память") + mth("time", "% времени", "l", "Доля во времени кадра")
+        + mth("alu", "Шейдеры, мс", "num", "Циклы / (ядра × частота)") : "") + mth("mem", "Память, мс", "num", "Байты / скорость памяти")
       + mth("rt", "RT", "l", "L — читается из памяти, S — пишется в память, clear — очищается")
       + mth("load", "Чтение", "num", "Чтение RT, МБ") + mth("store", "Запись", "num", "Запись RT, МБ")
       + mth("textures", "Текстуры", "num", "Чтение текстур, МБ") + `</tr></thead><tbody>`;
@@ -139,12 +146,12 @@ function renderCost() {
       const t = passMs(p), share = t != null && R && R.frame_ms ? t / R.frame_ms : null;
       h += `<tr class="r ${open ? "open" : ""}" data-g="m:${p.index}">`
         + `<td class="num st">${p.index + 1}</td><td class="l">${esc(p.name)}</td>`
-        + `<td class="l">${r ? (memb ? '<span class="warnc">память</span>' : "шейдеры") : "—"}</td>`
-        + `<td class="l">${share == null ? "—" : `<div class="pct"><span>${pc(share)}</span><i style="width:${Math.max(1, 100 * t / (maxMs || 1))}%"></i></div>`}</td>`
-        + `<td class="num ${r && !memb ? "big" : ""}">${r ? ms(r.alu_ms) : "—"}</td><td class="num ${memb ? "big" : ""}">${r ? ms(r.mem_ms) : "—"}</td>`
+        + (model ? `<td class="l">${r ? (memb ? '<span class="warnc">память</span>' : "шейдеры") : "—"}</td>`
+          + `<td class="l">${share == null ? "—" : `<div class="pct"><span>${pc(share)}</span><i style="width:${Math.max(1, 100 * t / (maxMs || 1))}%"></i></div>`}</td>`
+          + `<td class="num ${r && !memb ? "big" : ""}">${r ? ms(r.alu_ms) : "—"}</td>` : "") + `<td class="num ${memb || !model ? "big" : ""}">${r ? ms(r.mem_ms) : "—"}</td>`
         + `<td class="l tg">${p.targets.map(tgt).join("")}</td>`
         + `<td class="num">${mb(p.bytes.load)}</td><td class="num">${mb(p.bytes.store)}</td><td class="num">${mb(p.bytes.textures)}</td></tr>`;
-      if (open) h += `<tr class="det"><td colspan="10"><div class="dl">${plural(p.calls, "вызов", "вызова", "вызовов")} · события ${p.events.map(i => i + 1).join(", ") || "—"}</div>`
+      if (open) h += `<tr class="det"><td colspan="${cols}"><div class="dl">${plural(p.calls, "вызов", "вызова", "вызовов")} · события ${p.events.map(i => i + 1).join(", ") || "—"}</div>`
         + ((p.resolves || []).length ? `<div class="dl">Resolve в тайле: ${p.resolves.map(n => `<span class="kw">${esc(n)}</span>`).join("")}</div>` : "")
         + `<div class="dl">Тяжёлые текстуры: `
         + (p.textures.length ? p.textures.map(t => `<span class="kw">${esc(t.name)} ${t.size.join("×")} — ${mb(t.bytes)} МБ</span>`).join("") : "нет")
@@ -154,8 +161,169 @@ function renderCost() {
     h += `</tbody></table></div><p class="sub">`
       + (dev ? `${dev.cores} ядер × ${dev.mhz} МГц, память ${dev.gbps} ГБ/с · ` : "")
       + `за кадр ${mb(T.bytes.total)} МБ · RT сжаты ×${A.afbc} (AFBC), ${A.native ? "текстуры в форматах телефона" : "текстуры как ASTC 6×6"}`
-      + ` · циклы проходов в сумме равны итогу кадра; подгрузка цели в тайл — это байты «Чтение», не циклы</p>`;
-    el.innerHTML = h;
+      + (model ? ` · циклы проходов в сумме равны итогу кадра без строк «тайл Mali» (потоки драйвера в тайле, в событиях)` : "") + `</p>`;
+    el.innerHTML = h + (model ? hardwareTable() : "");
+  }
+  function hardwareTable() {
+    const H = D.hardware;
+    if (!H) return "";
+    if (H.error) return `<h2>Модель и телефон</h2><p class="sub">Счётчики Mali не сняты: ${esc(H.error === "crashed"
+      ? "проигрывание со счётчиками уронило драйвер телефона" : H.error)}.</p>`;
+    const EX = "Execution core active cycles", hv = (p, k) => (p.hw || {})[k];
+    const x = (a, b) => a && b ? `×${(a / b).toFixed(2)}` : "—";
+    let h = `<h2>Модель и телефон <small>${short(H.core)} · ${H.passes.length} проходов Vulkan</small></h2>`
+      + (() => { const pr = H.passes.filter(p => !p.geometry), m = pr.reduce((t, p) => t + p.model, 0),
+                     e = pr.reduce((t, p) => t + (hv(p, EX) || 0), 0);
+        return `<p class="verdict">Проходы с расчётом (без теней и глубины): модель <b>${mc(m)}</b> млн циклов, телефон <b>${mc(e)}</b> млн (${x(m, e)}).</p>`; })()
+      + `<div class="wrap ev mem"><table><thead><tr><th class="num">#</th><th class="l">Проход</th><th class="num">Вызовы</th>`
+      + `<th class="num" title="Циклы модели на ядре телефона, без поправок">Модель</th>`
+      + `<th class="num" title="${EX}: циклы, когда в ядре есть варп (сумма ядер), со всеми ожиданиями">Телефон</th>`
+      + `<th class="num">Модель / телефон</th><th class="num" title="Arithmetic unit issue cycles">A</th>`
+      + `<th class="num" title="Load/store unit issue cycles">LS</th><th class="num" title="Texture unit issue cycles">T</th>`
+      + `</tr></thead><tbody>`;
+    H.passes.forEach((p, i) => {
+      const e = hv(p, EX);
+      h += `<tr><td class="num st">${i + 1}</td><td class="l">${esc(p.name)}</td><td class="num">${p.draws}</td>`
+        + `<td class="num">${p.geometry && !p.model ? "не считается" : mc(p.model)}</td><td class="num big">${e == null ? "—" : mc(e)}</td>`
+        + `<td class="num">${p.geometry && !p.model ? "—" : x(p.model, e)}</td>`
+        + ["Arithmetic unit issue cycles", "Load/store unit issue cycles", "Texture unit issue cycles"]
+          .map(k => `<td class="num">${hv(p, k) == null ? "—" : mc(hv(p, k))}</td>`).join("") + `</tr>`;
+    });
+    return h + `</tbody></table></div><p class="sub">млн циклов, сумма ядер; счётчики Mali RenderDoc for Arm по проходам `
+      + `того же кадра · проходы только с геометрией на телефоне дольше модели: ядра ждут tiler</p>`;
+  }
+  function hwView() {
+    if (!HW) return `<h2>Проходы на телефоне</h2><p class="verdict">Счётчики Mali с этого телефона не сняты: `
+      + `${esc(D.hardware.error === "crashed" ? "проигрывание со счётчиками уронило драйвер" : D.hardware.error === "empty"
+        ? "драйвер вернул пустой ответ" : D.hardware.error || "нет данных")}. Настоящей нагрузки по проходам для этого кадра нет.</p>`;
+    const EX = "Execution core active cycles", GA = "GPU active cycles";
+    const UNITS = [["Arithmetic unit issue cycles", "арифметика"], ["Load/store unit issue cycles", "память (LS)"],
+                   ["Texture unit issue cycles", "текстуры"], ["Varying unit issue cycles", "varying"]];
+    const hv = (p, k) => (p.hw || {})[k];
+    const rows = HW.passes.filter(p => hv(p, EX) != null).sort((a, b) => hv(b, EX) - hv(a, EX));
+    const total = rows.reduce((s, p) => s + hv(p, EX), 0), gpu = rows.reduce((s, p) => s + (hv(p, GA) || 0), 0);
+    const max = Math.max(0, ...rows.map(p => hv(p, EX)));
+    const limit = p => {
+      const e = hv(p, EX), u = UNITS.filter(([k]) => hv(p, k) != null).map(([k, n]) => [n, hv(p, k) / e]);
+      if (!e || !u.length) return "—";
+      const [n, s] = u.sort((a, b) => b[1] - a[1])[0];
+      return s < 0.5 ? `<span class="warnc">ожидание</span> <span class="st">· ${n} ${pc(s)}</span>` : `${n} <span class="st">${pc(s)}</span>`;
+    };
+    const top = rows[0];
+    let h = `<h2>Проходы на телефоне <small>${esc(dev ? dev.model || "" : "")} · ${short(HW.core)} · счётчики Mali (RenderDoc for Arm) · замер, не расчёт</small></h2>`
+      + `<p class="verdict">Кадр: <b>${mc(total)}</b> млн тактов ядер, GPU занят <b>${mc(gpu)}</b> млн тактов. `
+      + (top ? `Тяжелее всего — <b>${esc(top.name)}</b>: ${pc(hv(top, EX) / total)} кадра.` : "") + `</p>`
+      + `<div class="wrap ev mem"><table><colgroup><col style="width:4%"><col style="width:26%"><col style="width:20%"><col style="width:9%">`
+      + `<col style="width:9%"><col style="width:7%"><col style="width:25%"></colgroup><thead><tr>`
+      + `<th class="num">#</th><th class="l">Проход</th><th class="l" title="${EX}: доля суммы по проходам">% кадра</th>`
+      + `<th class="num" title="${EX}, сумма ядер">Такты ядер, млн</th><th class="num" title="${GA}">GPU, млн</th>`
+      + `<th class="num">Draw</th><th class="l" title="Самый загруженный блок ядра: его такты / такты ядер. Меньше 50% — ядра больше ждут (tiler, память), чем считают">Упор</th>`
+      + `</tr></thead><tbody>`;
+    rows.forEach((p, i) => {
+      const e = hv(p, EX), open = st.open.has("h:" + p.event);
+      h += `<tr class="r ${open ? "open" : ""}" data-g="h:${p.event}"><td class="num st">${i + 1}</td><td class="l">${esc(p.name)}</td>`
+        + `<td class="l"><div class="pct"><span>${pc(e / total)}</span><i style="width:${Math.max(1, 100 * e / (max || 1))}%"></i></div></td>`
+        + `<td class="num big">${mc(e)}</td><td class="num">${mc(hv(p, GA))}</td><td class="num">${p.draws}</td><td class="l">${limit(p)}</td></tr>`;
+      if (open) {
+        const sh = Object.entries(p.shaders || {}).sort((a, b) => b[1] - a[1]);
+        h += `<tr class="det"><td colspan="7"><div class="dg num">`
+          + HW.names.filter(k => hv(p, k) != null).map(k => `<div><span>${esc(k)}</span>${mc(hv(p, k))} млн</div>`).join("")
+          + `</div><div class="dl">Шейдеры прохода (сколько draw): ${sh.length ? sh.map(([n, c]) => `<span class="kw">${esc(n)} · ${c}</span>`).join("") : "нет draw"}</div>`
+          + `<div class="dl st">Начало прохода: событие ${p.event} в RenderDoc</div></td></tr>`;
+      }
+    });
+    return h + `</tbody></table></div><p class="sub">Такты по проходам целиком: Mali не меряет отдельные draw. `
+      + `Сумма проходов сверена с живой игрой (Streamline) на Pixel 7.</p>` + shaderCost();
+  }
+  function shaderCost() {
+    const S = HW.shader_cost, T = "Шейдеры на телефоне";
+    if (!S) return `<h2>${T}</h2><p class="sub">Цена шейдеров не мерилась: снимок снят с галочкой «Не мерить цену шейдеров».</p>`;
+    if (S.error) return `<h2>${T}</h2><p class="verdict">Замер подменой не удался: ${esc(S.error === "crashed" ? "проигрывание уронило драйвер" : S.error)}.</p>`;
+    const UN = {A: "арифм.", LS: "LS", T: "текст.", V: "varying"};
+    const ok = S.shaders.filter(s => !s.error), bad = S.shaders.filter(s => s.error);
+    const frag = ok.filter(s => s.mode === "colour"), draw = ok.filter(s => s.mode === "draw");
+    const sumP = s => Object.values(s.pipes).reduce((a, b) => a + b, 0);
+    const cyc = s => Math.abs(s.exec) <= s.noise ? `<span class="st" title="в пределах разброса замера">~0</span><span class="st"> ±${mc(s.noise)}</span>`
+      : `${mc(s.exec)}<span class="st"> ±${mc(s.noise)}</span>`;
+    const bar = (v, max) => `<div class="pct"><span>${pc(Math.max(0, v) / S.frame)}</span><i style="width:${Math.max(1, 100 * Math.max(0, v) / (max || 1))}%"></i></div>`;
+    const blocks = s => Object.entries(s.pipes).filter(([, v]) => v > 0.005e6).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${UN[k] || k} ${mc(v)}`).join(" · ") || "—";
+    const per = (v, n) => n ? (v / n).toFixed(v / n < 10 ? 2 : 1) : "—";
+    const model = s => s.model == null ? "—" : `${mc(s.model)}<span class="st" title="модель / замер (такты блоков)"> ×${sumP(s) > 0 ? (s.model / sumP(s)).toFixed(2) : "—"}</span>`;
+    const why = s => {
+      const px = s.mode === "colour", n = px ? s.pixels : s.vertices, unit = px ? "пиксель" : "вершину", m = s.malioc;
+      if (!n || (!px && s.pixels)) return "";
+      const f = v => (v / n).toFixed(v / n < 10 ? 2 : 1);
+      const meas = Object.entries(s.pipes).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${UN[k] || k} ${f(v)}`).join(" · ");
+      return `<div class="dl">Телефон, тактов на ${unit}: блоки ${meas || "—"} (сумма ${f(sumP(s))}), ядро ${f(s.exec)}</div>`
+        + (m ? `<div class="dl">malioc, тактов на ${unit}: <b>${m.price.toFixed(1)}</b> (сумма блоков) · упор ${esc(m.bound.join(", ") || "—")} · регистров ${m.regs}`
+          + (m.fp16 != null ? ` · fp16 ${Math.round(m.fp16)}%` : "") + (m.flags.length ? " · " + m.flags.map(x => `<span class="badge flagbad">${esc(FLAG[x] || x)}</span>`).join(" ") : "")
+          + (sumP(s) > 0 ? ` · <span class="st">модель / телефон ×${(m.price * n / sumP(s)).toFixed(2)}</span>` : "") + `</div>` : "");
+    };
+    const det = (s, more) => `<tr class="det"><td colspan="9">${why(s)}<div class="dl">Проходы: ${s.passes.map(p => `<span class="kw">${esc(p.name)} · ${mc(p.exec)} из ${mc(p.base)} млн</span>`).join("") || "нет изменений"}</div>`
+      + (Object.keys(s.names).length > 1 ? `<div class="dl">Этот код у шейдеров: ${Object.entries(s.names).map(([n, c]) => `<span class="kw">${esc(n)} · ${c}</span>`).join("")}</div>` : "")
+      + (more || "") + `<div class="dl st">SPIR-V: ${esc(s.file)} · блоки: ${blocks(s)}</div></td></tr>`;
+    const label = s => { const n = Object.keys(s.names).length;
+      const where = s.passes.length === 1 ? ` <span class="st">· ${esc(s.passes[0].name)}</span>` : "";
+      return `<span class="shn">${esc(s.shader)}</span>` + where + (n > 1 ? ` <span class="st" title="${esc(Object.keys(s.names).join(", "))}">+ ещё ${n - 1}</span>` : ""); };
+    const row = (k, cells, s, more) => { const open = st.open.has(k);
+      return `<tr class="r ${open ? "open" : ""}" data-g="${esc(k)}">${cells}</tr>` + (open ? det(s, more) : ""); };
+    const fmax = Math.max(0, ...frag.map(s => s.exec)), top = frag[0];
+    let h = `<h2>${T} <small>каждый шейдер подменён в проигрывании кадра · замер, не расчёт</small></h2>`
+      + `<p class="verdict">Кадр проигрывается с каждым шейдером, у которого убрана работа; разница тактов — его цена. `
+      + (top ? `Дороже всех пиксельных — <b>${esc(top.shader)}</b>: ${mc(top.exec)} млн, ${pc(top.exec / S.frame)} кадра.` : "") + `</p>`
+      + `<h3>Пиксельные шейдеры <small>цвет заменён нулём · ${frag.length}</small></h3>`
+      + `<div class="wrap ev mem"><table><colgroup><col style="width:3%"><col style="width:28%"><col style="width:14%"><col style="width:11%">`
+      + `<col style="width:10%"><col style="width:8%"><col style="width:12%"><col style="width:7%"><col style="width:7%"></colgroup><thead><tr>`
+      + `<th class="num">#</th><th class="l">Шейдер</th><th class="l" title="Доля тактов ядер всего кадра">% кадра</th>`
+      + `<th class="num" title="Такты ядер (Execution core active) в проходах, где шейдер рисует; ± — разброс между проигрываниями">Такты, млн</th>`
+      + `<th class="num" title="Пиксели его draw (Samples Passed)">Пиксели</th><th class="num" title="Такты ядер на пиксель">На пиксель</th>`
+      + `<th class="num" title="Цена цвета по модели (malioc × пиксели); × — модель / такты блоков замера">Модель, млн</th>`
+      + `<th class="num">Draw</th><th class="num">Проходы</th></tr></thead><tbody>`;
+    frag.forEach((s, i) => { h += row("k:c:" + s.file, `<td class="num st">${i + 1}</td><td class="l">${label(s)}</td>`
+      + `<td class="l">${bar(s.exec, fmax)}</td><td class="num big">${cyc(s)}</td><td class="num">${num(s.pixels)}</td>`
+      + `<td class="num">${per(s.exec, s.pixels)}</td><td class="num">${model(s)}</td><td class="num">${s.draws}</td><td class="num">${s.passes.length}</td>`, s); });
+    h += `</tbody></table></div>`;
+    if (draw.length) {
+      const dmax = Math.max(0, ...draw.map(s => s.exec));
+      h += `<h3>Вершинные шейдеры <small>позиция вынесена за экран: уходит вся работа их draw · ${draw.length}</small></h3>`
+        + `<div class="wrap ev mem"><table><colgroup><col style="width:3%"><col style="width:28%"><col style="width:14%"><col style="width:11%">`
+        + `<col style="width:14%"><col style="width:14%"><col style="width:7%"><col style="width:7%"></colgroup><thead><tr>`
+        + `<th class="num">#</th><th class="l">Шейдер</th><th class="l" title="Доля тактов ядер всего кадра">% кадра</th>`
+        + `<th class="num" title="Вся работа его draw: позиция, тайлинг, varyings и пиксели">Draw целиком, млн</th>`
+        + `<th class="num">Вершины</th><th class="num" title="Такты на вершину; только у draw без пикселей (тени, глубина), иначе в цене и пиксели">На вершину</th>`
+        + `<th class="num">Draw</th><th class="num">Проходы</th></tr></thead><tbody>`;
+      draw.forEach((s, i) => {
+        h += row("k:d:" + s.file, `<td class="num st">${i + 1}</td><td class="l">${label(s)}</td>`
+          + `<td class="l">${bar(s.exec, dmax)}</td><td class="num big">${cyc(s)}</td>`
+          + `<td class="num">${num(s.vertices)}</td><td class="num">${s.pixels ? "—" : per(s.exec, s.vertices)}</td><td class="num">${s.draws}</td><td class="num">${s.passes.length}</td>`, s); });
+      h += `</tbody></table></div>`;
+    }
+    h += `<p class="sub">Пиксельный шейдер: убран только расчёт цвета; draw целиком: убрана вся работа draw с этим вершинным шейдером, `
+      + `включая их пиксели, поэтому эти цифры с пиксельной таблицей не складываются. Цена цвета может включать и расчёт varyings: драйвер выкидывает varyings, которые больше никто не читает. Цены шейдеров не складываются в такты прохода точно: блоки ядра работают параллельно. `
+      + `В шумном проходе (большой ±) точнее смотреть такты блоков в раскрытой строке: они не гуляют.</p>`;
+    if (bad.length) h += `<p class="sub">Не замерены: ${bad.map(s => `${esc(s.shader)} (${esc(s.error === "no_output" ? "нет выхода" : s.error)})`).join(", ")}.</p>`;
+    return h;
+  }
+  function geometryTable() {
+    const G = D.geometry || [];
+    if (!G.length) return "";
+    const m = new Map();
+    for (const r of G) {
+      const k = r.stage + "|" + shaderName(r);
+      if (!m.has(k)) m.set(k, {stage: r.stage, shader: shaderName(r), draws: 0, vertices: 0, triangles: 0, objects: new Set()});
+      const a = m.get(k); a.draws++; a.vertices += r.vertices; a.triangles += r.triangles || 0; a.objects.add(objName(r.object));
+    }
+    const rows = [...m.values()].sort((a, b) => b.vertices - a.vertices);
+    return `<h2>Не считается на ПК <small>тени и глубина · ${plural(G.length, "draw", "draw", "draw")}</small></h2>`
+      + `<p class="sub">Эти проходы на Mali упираются в обработку треугольников (tiler), а не в шейдер: расчёт занижал их в 3–4 раза, `
+      + `поэтому их нет в итоге кадра и в процентах выше. Настоящая нагрузка — во вкладке «Телефон» снимка с телефона.</p>`
+      + `<div class="wrap ev"><table><thead><tr><th class="l">Проход</th><th class="l">Шейдер</th><th class="num">Draw</th>`
+      + `<th class="num">Вершины</th><th class="num">Треугольники</th></tr></thead><tbody>`
+      + rows.map(a => `<tr><td class="l"><span class="dot" style="background:${STAGE_COLORS[a.stage] || STAGE_COLORS.other}"></span>`
+        + `${esc(STAGE_NAMES[a.stage] || a.stage)}</td><td class="l"><span class="shn">${esc(a.shader)}</span>`
+        + (a.objects.size > 1 ? ` <span class="st">${plural(a.objects.size, "объект", "объекта", "объектов")}</span>` : "")
+        + `</td><td class="num">${a.draws}</td><td class="num">${num(a.vertices)}</td><td class="num">${num(a.triangles)}</td></tr>`).join("")
+      + `</tbody></table></div>`;
   }
   function stages() {
     const g = (D.groups[st.core] || {}).stage || [];
@@ -172,7 +340,8 @@ function renderCost() {
     document.querySelectorAll(".stage").forEach(el => el.onclick = () => { st.stage = el.dataset.s; draw(); });
   }
   function groupRows() {
-    const key = r => st.by === "object" ? objName(r.object) : st.by === "rt" ? r.rt : r[st.by];
+    const key = r => st.by === "object" ? objName(r.object) : st.by === "rt" ? r.rt
+      : st.by === "shader" ? shaderName(r) : r[st.by];
     const m = new Map();
     for (const r of D.events) {
       const c = cost(r); if (!c || !match(r)) continue;
@@ -196,8 +365,8 @@ function renderCost() {
   const HEAD_TIPS = {
     share: "Доля в шейдерных циклах кадра", events: "Сколько событий (draw / dispatch) в группе",
     pixels: "Потоки фрагментного шейдера (метка рядом — откуда число)",
-    price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
-    px_price: "Цена одного пикселя: циклы самого загруженного блока ядра на самом длинном пути",
+    price: "Цена одного пикселя: сумма циклов блоков ядра на самом длинном пути",
+    px_price: "Цена одного пикселя: сумма циклов блоков ядра на самом длинном пути",
     total: "Пиксели × цена пикселя + вершины × цена вершины, млн циклов",
     px: "Цена одного пикселя на основном ядре", vtx: "Цена одной вершины (Position + Varying)",
     mats: "Сколько материалов проекта дают этот скомпилированный шейдер", regs: "Рабочие регистры: больше 32 — вдвое меньше потоков",
@@ -271,7 +440,7 @@ function renderCost() {
          + `<td class="l"><div class="pct"><span>${pc(c.share)}</span><i style="width:${Math.max(1, 100 * c.share / (max || 1))}%"></i></div></td>`
          + `<td class="l"><span class="dot" style="background:${STAGE_COLORS[r.stage] || STAGE_COLORS.other}"></span>`
          + `<span class="sh">${esc(names[0])}</span>${names.length > 1 ? ` <span class="st">+${names.length - 1}</span>` : ""}${flagCount(c.flags)}</td>`
-         + `<td class="l"><span class="shn">${esc(r.shader)}</span> <span class="pass">· ${esc(compute ? r.kernel : r.pass)}</span></td>`
+         + `<td class="l"><span class="shn">${esc(shaderName(r))}</span> <span class="pass">· ${esc(compute ? r.kernel : r.pass)}</span></td>`
          + `<td class="num">${num(compute ? r.threads : r.pixels)}${warn}</td>`
          + `<td class="num">${cyc(compute ? c.cs_price : c.px_price)}${loop}</td>`
          + `<td class="num big">${mc(c.total)}</td></tr>`;
@@ -330,11 +499,11 @@ function renderCost() {
     return h + "</tbody></table></div>";
   }
   const tabs = document.getElementById("tabs");
-  [["frame", "Кадр"], ["passes", MEM && MEM.passes.length ? `Проходы · ${MEM.passes.length}` : ""],
+  [["hw", HW ? `Телефон · ${plural(HW.passes.length, "проход", "прохода", "проходов")}` : D.hardware ? "Телефон · нет счётчиков" : ""], ["frame", dev ? "" : "Кадр"], ["passes", MEM && MEM.passes.length ? `Проходы · ${MEM.passes.length}` : ""],
    ["project", P ? `Шейдеры проекта · ${P.rows.length}` : ""]].forEach(([k, l]) => { if (!l) return;
     const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
     b.onclick = () => { st.tab = k; draw(); }; tabs.appendChild(b); });
-  if (!P && !(MEM && MEM.passes.length)) tabs.classList.add("hide");
+  if (!P && !HW && !(MEM && MEM.passes.length)) tabs.classList.add("hide");
   const pfSeg = document.getElementById("pfilter");
   [["all", "все"], ["frame", "в кадре"], ["notframe", "не в кадре"]].forEach(([k, l]) => {
     const b = document.createElement("button"); b.dataset.v = k; b.textContent = l;
@@ -408,16 +577,23 @@ function renderCost() {
   }
 
   function bindOpen() {
-    document.querySelectorAll("#main tr.r, #project tr.r, #memory tr.r").forEach(el => el.onclick = () => {
+    document.querySelectorAll("#main tr.r, #project tr.r, #memory tr.r, #hw tr.r").forEach(el => el.onclick = () => {
       const k = el.dataset.g ?? +el.dataset.i; st.open.has(k) ? st.open.delete(k) : st.open.add(k); draw(); });
   }
   function draw() {
     tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.tab));
     pfSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.pf));
-    const proj = st.tab === "project", passes = st.tab === "passes";
+    const proj = st.tab === "project", passes = st.tab === "passes", hw = st.tab === "hw";
     document.querySelectorAll(".project-only").forEach(el => el.classList.toggle("hide", !proj));
-    for (const id of ["stagebar", "stages", "main", "missing"]) document.getElementById(id).classList.toggle("hide", st.tab !== "frame");
+    for (const id of ["stagebar", "stages", "main", "geometry", "missing"]) document.getElementById(id).classList.toggle("hide", st.tab !== "frame");
     document.getElementById("memory").classList.toggle("hide", !passes);
+    document.getElementById("hw").classList.toggle("hide", !hw);
+    document.querySelector(".controls").classList.toggle("hide", hw);
+    if (hw) {
+      document.getElementById("hw").innerHTML = hwView();
+      bindOpen();
+      return;
+    }
     bySeg.closest(".group").classList.toggle("hide", st.tab !== "frame");
     for (const id of ["q", "all"]) document.getElementById(id).closest(".group").classList.toggle("hide", passes);
     document.getElementById("project").classList.toggle("hide", !proj);
@@ -446,6 +622,7 @@ function renderCost() {
     document.querySelectorAll("thead th[data-k]").forEach(el => el.onclick = () => {
       const k = el.dataset.k; st.sort = [k, st.sort[0] === k ? -st.sort[1] : (k === "name" || k === "shader" || k === "index" ? 1 : -1)]; draw(); });
     bindOpen();
+    document.getElementById("geometry").innerHTML = geometryTable();
     document.getElementById("missing").innerHTML = D.missing.length
       ? `<h2>Без цены <small>${D.missing.length} — не входят в итог</small></h2><div class="wrap"><table><tbody>`
         + D.missing.map(m => `<tr><td class="num">${m.index + 1}</td><td class="l">${esc(STAGE_NAMES[m.stage] || m.stage)}</td>`

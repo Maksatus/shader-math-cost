@@ -70,7 +70,7 @@ def plan(preset_id, values, sch):
         if not pkg:
             raise ValueError("нет Android-пакета проекта (ProjectSettings: applicationIdentifier)")
         first = [("device", {"frame": frame_dir, "project": project, "app": pkg, "serial": serial,
-                             "wait": values.get("wait")})]
+                             "wait": values.get("wait"), "no_shader_cost": values.get("no_shader_cost")})]
         values = {**values, "project": project}
     elif preset_id == "frame_cost":
         if not values.get("project"):

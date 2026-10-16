@@ -1,16 +1,15 @@
 # Runs inside RenderDoc for Arm GPUs' qrenderdoc --python (not the normal interpreter). In: PARETOGPU_IN {"serial",
 # "app": "package/activity", "trigger": file whose appearance means "capture now", "wait": seconds instead (None: the
-# trigger), "capture": local .rdc, "shaders": folder for <hash>.<vert|frag|comp>.spv, "adb"}, PARETOGPU_LIB.
+# trigger), "capture": local .rdc, "shaders": folder for <hash>.<vert|frag|comp>.spv,
+# "knockout": measure the fragment shaders by swapping them, "adb"}, PARETOGPU_LIB, PARETOGPU_ROOT.
 # Out: PARETOGPU_OUT {"device", "serial", "api", "capture", "screen", "rotation", "actions", "draws", "textures",
-# "usage", "discard_error"}; <out>.progress, traceback -> <out>.error.
-import hashlib
+# "usage", "discard_error", "mali", "knockout"}; <out>.progress, traceback -> <out>.error.
 import json
 import os
 import subprocess
 import sys
 import time
 import traceback
-from array import array
 from types import SimpleNamespace
 
 import renderdoc as rd
@@ -18,19 +17,21 @@ import renderdoc as rd
 sys.path.insert(0, os.environ["PARETOGPU_LIB"])
 import rd_replay  # noqa: E402
 import rd_spirv  # noqa: E402
-from rd_replay import block_bytes, ok  # noqa: E402
+import rd_vulkan  # noqa: E402
+from rd_replay import ok  # noqa: E402
 
 out_path = os.environ["PARETOGPU_OUT"]
 
-BLEND = {"Zero": "Zero", "One": "One", "SrcCol": "SrcColor", "InvSrcCol": "OneMinusSrcColor", "DstCol": "DstColor",
-         "InvDstCol": "OneMinusDstColor", "SrcAlpha": "SrcAlpha", "InvSrcAlpha": "OneMinusSrcAlpha",
-         "DstAlpha": "DstAlpha", "InvDstAlpha": "OneMinusDstAlpha"}
 KINDS = (("draw", rd.ActionFlags.Drawcall), ("dispatch", rd.ActionFlags.Dispatch), ("clear", rd.ActionFlags.Clear),
          ("copy", rd.ActionFlags.Copy), ("resolve", rd.ActionFlags.Resolve), ("present", rd.ActionFlags.Present),
          ("begin_pass", rd.ActionFlags.BeginPass), ("end_pass", rd.ActionFlags.EndPass))
-STAGES = ((rd.ShaderStage.Vertex, "vert"), (rd.ShaderStage.Pixel, "frag"))
 WAITING = "the app is running: waiting for the capture"
 ROTATION = {1: 0, 2: 90, 4: 180, 8: 270}  # VkSurfaceTransformFlagBitsKHR
+KNOCKOUT_REPEATS = 3  # Execution core active varies ±2-3% between replays, issue cycles do not
+# Mali counters RenderDoc for Arm gives per render pass (keyed by its vkCmdBeginRenderPass event), summed over the cores
+MALI = ("Execution core active cycles", "Arithmetic unit issue cycles", "Load/store unit issue cycles",
+        "Texture unit issue cycles", "Varying unit issue cycles", "Fragment threads",
+        "Position shader thread invocations", "Varying shader thread invocations", "GPU active cycles")
 
 
 def step(text):
@@ -91,7 +92,7 @@ def capture(url, remote, job):
 
 
 def leaf_actions(controller):
-    """-> [(action as plain data, path)]: they outlive the controller (the replay reopens the capture)."""
+    """-> [(action as plain data, path)]."""
     sf = controller.GetStructuredFile()
     out = []
 
@@ -102,126 +103,63 @@ def leaf_actions(controller):
             else:
                 out.append((SimpleNamespace(
                     eventId=a.eventId, name=a.GetName(sf), flags=a.flags, numIndices=a.numIndices,
-                    numInstances=a.numInstances, indexOffset=a.indexOffset,
-                    dispatchDimension=list(a.dispatchDimension)), "/".join(path)))
+                    numInstances=a.numInstances), "/".join(path)))
     walk(controller.GetRootActions(), [])
     return sorted(out, key=lambda x: x[0].eventId)
 
 
-def write_shader(refl, short, folder, cache):
-    rid = int(refl.resourceId)
-    if rid not in cache:
-        raw = bytes(refl.rawBytes)
-        h = hashlib.sha1(raw + refl.entryPoint.encode()).hexdigest()[:16]
-        name = f"{h}.{short}.spv"
-        path = os.path.join(folder, name)
-        if not os.path.exists(path):
-            with open(path + ".tmp", "wb") as f:
-                f.write(raw)
-            os.replace(path + ".tmp", path)
-        cache[rid] = {"hash": h, "file": name, "entry": refl.entryPoint, "bytes": len(raw)}
-    return cache[rid]
+def samples_passed(controller):
+    if rd.GPUCounter.SamplesPassed not in controller.EnumerateCounters():
+        return {}
+    return {r.eventId: r.value.u64 for r in controller.FetchCounters([rd.GPUCounter.SamplesPassed])}
 
 
-def unique_vertices(controller, pipe, a):
-    ib = pipe.GetIBuffer()
-    if ib.resourceId == rd.ResourceId.Null() or ib.byteStride not in (2, 4) or not a.numIndices:
-        return None
-    data = controller.GetBufferData(ib.resourceId, ib.byteOffset + a.indexOffset * ib.byteStride,
-                                    a.numIndices * ib.byteStride)
-    idx = array("H" if ib.byteStride == 2 else "I")
-    idx.frombytes(bytes(data)[:len(data) - len(data) % ib.byteStride])
-    seen = set(idx)
-    seen.discard(0xFFFF if ib.byteStride == 2 else 0xFFFFFFFF)
-    return len(seen)
+def shaders_of(f, stage):
+    """-> {module id: (entry, SPIR-V, [draw events])} of the frame's draws' "frag" / "vert" shaders."""
+    out = {}
+    for e, st in sorted(f.calls.items()):
+        if stage in st["stages"] and "comp" not in st["stages"]:
+            module, entry = st["stages"][stage]
+            out.setdefault(module, (entry, f.modules[module], []))[2].append(e)
+    return out
 
 
-def lost(rp, event, done, total):
-    """After the device's server dies the API keeps answering with empty objects, no exception."""
-    why = ("RenderDoc's server on the device is gone (the driver crashed replaying it)" if not rp.alive()
-           else "the replay returned no pipeline")
-    raise RuntimeError(f"the replay on the device failed at event {event} (call {done}/{total}): {why}; the frame "
-                       "is not written")
+def discarding_of(f):
+    return {m: v for m, v in shaders_of(f, "frag").items() if rd_spirv.discards(v[1])}
 
 
-def read_frame(rp, job, names, textures):
-    """-> (actions, draws, discarding {frag shader id: (ResourceId, entry, SPIR-V, [events])})."""
-    samples = {}
-    if rd.GPUCounter.SamplesPassed in rp.c.EnumerateCounters():
-        for r in rp.c.FetchCounters([rd.GPUCounter.SamplesPassed]):
-            samples[r.eventId] = r.value.u64
-    leaves = leaf_actions(rp.c)
-    actions, draws, cache, blocks, discarding = [], {}, {}, {}, {}
-    work = [a for a, _ in leaves if a.flags & (rd.ActionFlags.Drawcall | rd.ActionFlags.Dispatch)]
-    done = 0
+def read_frame(leaves, f, job, names, textures, samples, discarding):
+    """-> (actions, draws) of the answer, with no replay call: the calls' state comes from the capture's structured
+    data (rd_vulkan.py), not from moving the replay to every call."""
+    tex = {t["id"]: t for t in textures}
+    written = {}
+
+    def write(module, entry, short):
+        if (module, entry) not in written:
+            raw = f.modules[module]
+            h, name = rd_vulkan.shader_file(raw, entry, short)
+            path = os.path.join(job["shaders"], name)
+            if not os.path.exists(path):
+                with open(path + ".tmp", "wb") as fh:
+                    fh.write(raw)
+                os.replace(path + ".tmp", path)
+            written[(module, entry)] = {"hash": h, "file": name, "entry": entry, "bytes": len(raw)}
+        return written[(module, entry)]
+    discards = {e for _, _, events in discarding.values() for e in events}
+    actions, draws = [], {}
     for a, path in leaves:
-        name = a.name
-        kinds = [k for k, f in KINDS if a.flags & f]
-        actions.append({"event": a.eventId, "name": name, "path": path, "flags": int(a.flags), "kinds": kinds,
+        kinds = [k for k, fl in KINDS if a.flags & fl]
+        actions.append({"event": a.eventId, "name": a.name, "path": path, "flags": int(a.flags), "kinds": kinds,
                         "indices": a.numIndices, "instances": a.numInstances})
         if not ({"draw", "dispatch"} & set(kinds)):
             continue
-        done += 1
-        if done % 20 == 1:
-            step(f"reading the frame: call {done}/{len(work)}")
-        rp.go(a.eventId)
-        controller = rp.c
-        pipe = controller.GetPipelineState()
-        d = {"event": a.eventId}
-        if "dispatch" in kinds:
-            refl = pipe.GetShaderReflection(rd.ShaderStage.Compute)
-            if refl is None:
-                lost(rp, a.eventId, done, len(work))
-            d["shaders"] = {"comp": {**write_shader(refl, "comp", job["shaders"], cache),
-                                     "name": names.get(int(refl.resourceId))}}
-            d["blocks"] = block_bytes(controller, pipe, rd.ShaderStage.Compute, refl, blocks)
-            d["groups"] = list(a.dispatchDimension)
-            d["group_size"] = list(refl.dispatchThreadsDimension)
-            draws[a.eventId] = d
-            continue
-        sh, ub = {}, {}
-        for stage, short in STAGES:
-            refl = pipe.GetShaderReflection(stage)
-            if refl is not None:
-                sh[short] = {**write_shader(refl, short, job["shaders"], cache),
-                             "name": names.get(int(refl.resourceId))}
-                ub.update(block_bytes(controller, pipe, stage, refl, blocks))
-                if short == "frag":
-                    rid = pipe.GetShader(stage)
-                    if int(rid) not in discarding and rd_spirv.discards(bytes(refl.rawBytes)):
-                        discarding[int(rid)] = (rid, refl.entryPoint, bytes(refl.rawBytes), [])
-                    if int(rid) in discarding:
-                        discarding[int(rid)][3].append(a.eventId)
-                        d["discards"] = True
-        if "vert" not in sh:
-            lost(rp, a.eventId, done, len(work))
-        outs = [t.resource for t in pipe.GetOutputTargets() if t.resource != rd.ResourceId.Null()]
-        depth = pipe.GetDepthTarget().resource
-        target = outs[0] if outs else depth
-        tex = textures.get(int(target))
-        blends = pipe.GetColorBlends()
-        b = blends[0] if blends else None
-        vk = controller.GetVulkanPipelineState()
-        ds = vk.depthStencil
-        meshes = [names.get(int(v.resourceId)) or "" for v in pipe.GetVBuffers()
-                  if v.resourceId != rd.ResourceId.Null()]
-        d.update({
-            "shaders": sh, "blocks": ub, "pipeline": names.get(int(pipe.GetGraphicsPipelineObject())),
-            "rt": {"id": int(target), "name": names.get(int(target)) or "", "width": tex.width if tex else None,
-                   "height": tex.height if tex else None, "samples": tex.msSamp if tex else 1, "count": len(outs),
-                   "backbuffer": bool(tex and tex.creationFlags & rd.TextureCategory.SwapBuffer)},
-            "blend": (f"{BLEND.get(str(b.colorBlend.source).split('.')[-1], 'One')} "
-                      f"{BLEND.get(str(b.colorBlend.destination).split('.')[-1], 'Zero')}" if b and b.enabled
-                      else "One Zero"),
-            "write_mask": b.writeMask if b else 0,
-            "ztest": str(ds.depthFunction).split(".")[-1] if ds.depthTestEnable else "Disabled",
-            "zwrite": bool(ds.depthTestEnable and ds.depthWriteEnable),
-            "cull": str(vk.rasterizer.cullMode).split(".")[-1],
-            "meshes": list(dict.fromkeys(m for m in meshes if m)),
-            "unique_vertices": unique_vertices(controller, pipe, a) if a.flags & rd.ActionFlags.Indexed else None,
-            "indexed": bool(a.flags & rd.ActionFlags.Indexed), "samples_passed": samples.get(a.eventId)})
+        d = {"event": a.eventId, **rd_vulkan.describe(f.calls[a.eventId], names, tex, write)}
+        if "draw" in kinds:
+            if a.eventId in discards:
+                d["discards"] = True
+            d["samples_passed"] = samples.get(a.eventId)
         draws[a.eventId] = d
-    return actions, draws, discarding
+    return actions, draws
 
 
 def shaded_samples(controller, discarding):
@@ -232,8 +170,10 @@ def shaded_samples(controller, discarding):
     if rd.ShaderEncoding.SPIRV not in controller.GetTargetShaderEncodings():
         return {}, "no_spirv_edit"
     replaced = []
+    ids = {int(x.resourceId): x.resourceId for x in controller.GetResources()}
     try:
-        for rid, entry, raw, events in discarding.values():
+        for module, (entry, raw, events) in discarding.items():
+            rid = ids[module]
             new = rd_spirv.without_discard(raw)
             if new is None:
                 continue
@@ -251,6 +191,77 @@ def shaded_samples(controller, discarding):
             controller.RemoveReplacement(rid)
             controller.FreeTargetResource(sid)
     return {e: values[e] for _, _, events in replaced for e in events if e in values}, None
+
+
+def _mali(controller):
+    have = {controller.DescribeCounter(c).name: c for c in controller.EnumerateCounters()}
+    return [(n, have[n]) for n in MALI if n in have]
+
+
+def _fetch(controller, counters):
+    slot = {int(c): i for i, (_, c) in enumerate(counters)}
+    passes = {}
+    for r in controller.FetchCounters([c for _, c in counters]):
+        v = r.value.u64 if r.value.u64 < 1 << 62 else r.value.d
+        passes.setdefault(r.eventId, [None] * len(counters))[slot[int(r.counter)]] = v
+    return passes
+
+
+def _median(controller, counters):
+    runs = [_fetch(controller, counters) for _ in range(KNOCKOUT_REPEATS)]
+    out = {}
+    for e in runs[0]:
+        cols = zip(*(r.get(e) or [None] * len(counters) for r in runs))
+        out[e] = [sorted(x)[len(x) // 2] if None not in x else None for x in cols]
+    return out, {e: max(r[e][0] or 0 for r in runs if e in r) - min(r[e][0] or 0 for r in runs if e in r)
+                 for e in runs[0]}
+
+
+def mali_counters(controller):
+    """-> {"names", "passes": {begin event: [value per name]}} of the MALI counters this GPU has."""
+    counters = _mali(controller)
+    if not counters:
+        return {"names": [], "passes": {}, "error": "no_mali_counters"}
+    passes = _fetch(controller, counters)
+    return {"names": [n for n, _ in counters], "passes": passes, "error": None if passes else "empty"}
+
+
+# no "varyings zeroed" knockout: the driver folds constant varyings into the fragment shader, which then costs less too
+KNOCKOUTS = (("frag", "colour", rd_spirv.zero_outputs), ("vert", "draw", rd_spirv.off_screen))
+
+
+def knockout(rp, f, step):
+    """Mali counters per pass with each shader swapped in turn for a stub (rd_spirv): "colour" = the fragment shader's
+    colour zeroed, "draw" = the vertex shader's position off screen (its draws cost nothing); median of KNOCKOUT_REPEATS replays. -> {"names", "base", "spread": {pass: exec max - min of the base
+    replays}, "shaders": [{"stage", "mode", "file", "events", "passes" | "error"}]}."""
+    c = rp.c
+    counters = _mali(c)
+    ids = {int(x.resourceId): x.resourceId for x in c.GetResources()}
+    jobs = [(stage, mode, make, module, v) for stage, mode, make in KNOCKOUTS
+            for module, v in sorted(shaders_of(f, stage).items())]
+    step(f"shader cost: 0/{len(jobs)}")
+    base, spread = _median(c, counters)
+    out = []
+    for k, (stage, mode, make, module, (entry, raw, events)) in enumerate(jobs):
+        step(f"shader cost: {k + 1}/{len(jobs)}")
+        row = {"stage": stage, "mode": mode, "file": rd_vulkan.shader_file(raw, entry, stage)[1], "events": events}
+        out.append(row)
+        stub = make(raw)
+        if stub is None:
+            row["error"] = "no_output"
+            continue
+        sid, errors = c.BuildTargetShader(entry, rd.ShaderEncoding.SPIRV, stub, rd.ShaderCompileFlags(),
+                                          rd.ShaderStage.Pixel if stage == "frag" else rd.ShaderStage.Vertex)
+        if sid == rd.ResourceId.Null():
+            row["error"] = f"not built: {errors}"[:300]
+            continue
+        c.ReplaceResource(ids[module], sid)
+        try:
+            row["passes"] = _median(c, counters)[0]
+        finally:
+            c.RemoveReplacement(ids[module])
+            c.FreeTargetResource(sid)
+    return {"names": [n for n, _ in counters], "base": base, "spread": spread, "shaders": out}
 
 
 def rotation(controller):
@@ -289,27 +300,43 @@ def main():
     if api != "Vulkan":
         raise RuntimeError(f"the capture is {api}: a device frame needs a Vulkan build (its SPIR-V and pipeline state)")
     os.makedirs(job["shaders"], exist_ok=True)
+    # the device's server drops a client silent for 15 s: replay calls first, the local work after
     names = {int(x.resourceId): None if x.autogeneratedName else x.name for x in rp.c.GetResources()}
-    textures = {int(t.resourceId): t for t in rp.c.GetTextures()}
     turn = rotation(rp.c)
-    actions, draws, discarding = read_frame(rp, job, names, textures)
-    step("reading the textures")
     tex, usage = rd_replay.textures(rp.c, True)
-    screen = next(([t["width"], t["height"]] for t in tex if t["swapchain"]), None)
-    model = rd.GetDeviceProtocolController("adb").GetFriendlyName(url)
-    answer = {"device": model, "serial": job["serial"], "api": api, "capture": job["capture"],
-              "screen": screen[::-1] if screen and turn in (90, 270) else screen, "rotation": turn,
-              "actions": actions, "draws": draws, "textures": tex, "usage": usage, "discard_error": None}
-    write(answer)  # the frame is kept if a replay below crashes
+    leaves = leaf_actions(rp.c)
+    samples = samples_passed(rp.c)
+    step("reading the frame's calls from the capture")
+    f = rd_replay.state(rp.c, job["capture"])
+    discarding = discarding_of(f)
     step(f"counting the fragments of the draws whose shaders discard ({len(discarding)} shaders)")
+    shaded, discard_error = {}, None
     try:
-        shaded, answer["discard_error"] = shaded_samples(rp.c, discarding)
-        for e, v in shaded.items():
-            draws[e]["samples_shaded"] = v
+        shaded, discard_error = shaded_samples(rp.c, discarding)
     except Exception as e:
-        answer["discard_error"] = "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]
-    write(answer)
+        discard_error = "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]
+    step("Mali counters of the render passes")
+    try:  # last: on some drivers (client) a counter replay crashes the device's server
+        mali = mali_counters(rp.c)
+    except Exception as e:
+        mali = {"names": [], "passes": {}, "error": "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]}
+    cost = None
+    if job.get("knockout") and mali["passes"] and rd.ShaderEncoding.SPIRV in rp.c.GetTargetShaderEncodings():
+        try:
+            cost = knockout(rp, f, step)
+        except Exception as e:
+            cost = {"error": "crashed" if not rp.alive() else f"{type(e).__name__}: {e}"[:300]}
+    model = rd.GetDeviceProtocolController("adb").GetFriendlyName(url)
     rp.close()
+    step("writing the frame")
+    actions, draws = read_frame(leaves, f, job, names, tex, samples, discarding)
+    for e, v in shaded.items():
+        draws[e]["samples_shaded"] = v
+    screen = next(([t["width"], t["height"]] for t in tex if t["swapchain"]), None)
+    write({"device": model, "serial": job["serial"], "api": api, "capture": job["capture"],
+           "screen": screen[::-1] if screen and turn in (90, 270) else screen, "rotation": turn,
+           "actions": actions, "draws": draws, "textures": tex, "usage": usage, "discard_error": discard_error,
+           "mali": mali, "knockout": cost})
 
 
 try:

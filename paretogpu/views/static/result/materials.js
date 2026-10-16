@@ -38,7 +38,7 @@ function pipesTable(xa, xb, k, n) {
     ${v(la, key, ta)}${v(lb, key, tb)}${d(la && la[key], lb && lb[key])}
     ${v(ga && ga.shortest, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.shortest, key)}${v(ga && ga.total, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.total, key)}</tr>`).join("");
   return `<h3>По конвейерам <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}</span></h3>
-    <table class="cmp">${cols(7)}<tr><th rowspan="2">Конвейер</th><th class="n grp" colspan="3" title="Самый дорогой путь через шейдер: каждый if идёт по более дорогой ветке. По нему считается цена; ● — самый загруженный блок, его циклы и есть цена">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
+    <table class="cmp">${cols(7)}<tr><th rowspan="2">Конвейер</th><th class="n grp" colspan="3" title="Самый дорогой путь через шейдер: каждый if идёт по более дорогой ветке. По нему считается цена — сумма блоков; ● — самый загруженный блок">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
       <th class="n grp gl" colspan="2" title="Все if идут по дешёвой ветке">Короткий путь</th><th class="n grp gl" colspan="2" title="Каждая инструкция один раз: обе ветки if, тело цикла один раз. Объём кода, а не время">Всего (весь код)</th></tr>
       <tr><th class="n">A</th><th class="n">B</th><th class="n">B − A</th><th class="n gl">A</th><th class="n">B</th><th class="n gl">A</th><th class="n">B</th></tr>${rows}</table>
     <div class="small" style="margin-top:6px">${notes.length ? `<span class="muted">${notes.join(" ")}</span> ` : ""}${refLink("pipes", "блоки ядра и пути")}</div>`;

@@ -5,7 +5,7 @@ const pct = (d, a) => !a ? (d ? "нов." : "0%") : (d > 0 ? "+" : d < 0 ? "−"
 const cls = d => d < 0 ? "good" : d > 0 ? "bad" : "";
 const pr = x => x == null ? "—" : (+x).toFixed(2);
 const STAGE = {opaque: "непрозрачное", transparent: "прозрачное", post: "постобработка", shadow: "тени", prepass: "препасс",
-  ui: "UI", compute: "compute", other: "прочее"};
+  ui: "UI", compute: "compute", tile: "тайл Mali", other: "прочее"};
 const PART = {fragment: "пиксели", vertex: "вершины", compute: "compute"};
 const UNIT = {fragment: "пикс.", vertex: "верш.", compute: "потоков"};
 const FLAG = {spilling: "spilling", regs_gt32: "регистров > 32", low_fp16: "мало fp16", dynamic_loop: "динамический цикл", sfu_bound: "упор в SFU"};

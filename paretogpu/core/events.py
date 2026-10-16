@@ -167,13 +167,28 @@ def match(events: list[Event], actions, counters=None):
     A counter not in `counters` (rd_actions.json) is None, not 0: Mali has no pipeline statistics.
     -> (matched, missing, count-mismatched draws)."""
     calls = [a for a in actions if "draw" in a["kinds"] or "dispatch" in a["kinds"]]
-    pos, matched, missing, mismatched = 0, 0, 0, 0
+    pos, mismatched = 0, 0
     wanted = [ev for ev in events if ev["kind"] in ("draw", "compute")]
+    spans = [None] * len(wanted)
 
     def total(sel, name):
         if counters is not None and name not in counters:
             return None
         return sum(a.get(name) or 0 for a in sel)
+
+    def assign(ev, sel):
+        ps, vs, cs = total(sel, "ps_invocations"), total(sel, "vs_invocations"), total(sel, "cs_invocations")
+        gpu = total(sel, "gpu_duration")
+        ev["rd"] = {"calls": len(sel), "events": [a["event"] for a in sel], "ps": ps, "vs": vs,
+                    "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
+                    "samples": total(sel, "samples_passed"),
+                    "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
+        if sel[0].get("blocks"):  # the call's uniform bytes: SPIR-V loop bounds (core/loops.spirv_bounds)
+            ev["params"] = {**(ev.get("params") or {}), **sel[0]["blocks"]}
+        bad = _check(ev, sel, ps) if ev["kind"] == "draw" else None
+        if bad:
+            ev["rd"]["mismatch"], ev["rd"]["count_mismatch"] = bad[0], bad[1:]
+        return bool(bad)
     for i, ev in enumerate(wanted):
         want = "dispatch" if ev["kind"] == "compute" else "draw"
         key, n = _norm(ev["path"]), max(1, ev["draw_calls"] or 1)
@@ -192,21 +207,35 @@ def match(events: list[Event], actions, counters=None):
             j += 1
         if len(got) != n:
             ev["rd"] = None
-            missing += 1
             continue
         pos = got[-1] + 1
-        sel = [calls[k] for k in got]
-        ps, vs, cs = total(sel, "ps_invocations"), total(sel, "vs_invocations"), total(sel, "cs_invocations")
-        gpu = total(sel, "gpu_duration")
-        ev["rd"] = {"calls": n, "events": [a["event"] for a in sel], "ps": ps, "vs": vs,
-                    "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
-                    "samples": total(sel, "samples_passed"),
-                    "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
-        if sel[0].get("blocks"):  # the call's uniform bytes: SPIR-V loop bounds (core/loops.spirv_bounds)
-            ev["params"] = {**(ev.get("params") or {}), **sel[0]["blocks"]}
-        bad = _check(ev, sel, ps) if ev["kind"] == "draw" else None
-        if bad:
-            ev["rd"]["mismatch"], ev["rd"]["count_mismatch"] = bad[0], bad[1:]
-            mismatched += 1
-        matched += 1
-    return matched, missing, mismatched
+        spans[i] = (got[0], got[-1])
+        mismatched += assign(ev, [calls[k] for k in got])
+    # Unity can close a marker early (the capture's path differs): a run of unmatched draws between two matched events
+    # takes the calls between them when their numbers and index counts agree exactly
+    i = 0
+    while i < len(wanted):
+        if spans[i] is not None:
+            i += 1
+            continue
+        j = i
+        while j < len(wanted) and spans[j] is None:
+            j += 1
+        lo = spans[i - 1][1] + 1 if i else 0
+        hi = spans[j][0] if j < len(wanted) else len(calls)
+        gap, p, sels = calls[lo:hi], 0, []
+        for ev in wanted[i:j]:
+            n = max(1, ev["draw_calls"] or 1)
+            sel = gap[p:p + n]
+            if (ev["kind"] != "draw" or len(sel) != n or any("draw" not in a["kinds"] for a in sel)
+                    or not (ev.get("indices") or ev.get("vertices")) or _check(ev, sel, None)):
+                break
+            sels.append(sel)
+            p += n
+        if len(sels) == j - i and p == len(gap):
+            for k, (ev, sel) in enumerate(zip(wanted[i:j], sels)):
+                spans[i + k] = (lo, lo)
+                mismatched += assign(ev, sel)
+        i = j
+    matched = sum(1 for s in spans if s is not None)
+    return matched, len(wanted) - matched, mismatched

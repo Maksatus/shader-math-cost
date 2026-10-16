@@ -140,7 +140,7 @@ class ModelTest(unittest.TestCase):
                                29.0 - 0.5 * 9.0 - 4.0 + 0.5 * (4.0 - 29.0 + 9.0 + 4.0))
 
 class LoopCounterTest(unittest.TestCase):
-    """rd_loop_counter: the fragment shader rd_loops.py swaps in to read trip counts as colour."""
+    """rd_loop_counter: the fragment shader rd_draws.py swaps in to read trip counts as colour."""
 
     def counter(self):
         import importlib.util

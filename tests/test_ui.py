@@ -32,7 +32,7 @@ class PresetsTest(unittest.TestCase):
         self.assertEqual(cost["variants"], workspace.variants_dir(r"D:\Game"))
         self.assertTrue(cost["no_compile"])
         self.assertEqual(presets.report_of("cost", cost), os.path.join(frame_dir, "frame_report.html"))
-        self.assertEqual(presets.phases_of("frame", frame), ["rd_capture", "snapshot", "rd_counters"])
+        self.assertEqual(presets.phases_of("frame", frame), ["rd_capture", "snapshot", "rd_counters", "rd_draws"])
 
     def test_frame_cost_of_a_phone_is_a_device_snapshot_priced_like_the_editors(self):
         with mock.patch.object(presets, "android_package", return_value="com.game"):

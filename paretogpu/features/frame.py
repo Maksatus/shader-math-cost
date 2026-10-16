@@ -73,4 +73,4 @@ FRAME = Command(
          label="Суффикс снимка"),
      Arg("--timeout", type=int, default=1800, help="seconds", label="Таймаут снимка, с"),
      Arg("--max-events", type=int, default=0, help="stop after N events (0 = all)", label="Не больше событий")],
-    run_command, phases=lambda v: ["rd_capture", "snapshot", "rd_counters"], title="Снимок кадра")
+    run_command, phases=lambda v: ["rd_capture", "snapshot", "rd_counters", "rd_draws"], title="Снимок кадра")

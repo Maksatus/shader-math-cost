@@ -16,6 +16,7 @@ using System.Reflection;
 using System.Text;
 using UnityEditor;
 using UnityEditor.Rendering;
+using Unity.CodeEditor;
 using UnityEngine;
 
 public static class ParetoGpuVariants
@@ -53,6 +54,7 @@ public static class ParetoGpuVariants
             id = i, shader = cfg.shaders[i], subshader = cfg.subshaders[i], pass_index = cfg.pass_indices[i],
             pass = cfg.passes[i], keywords = cfg.keywords[i].Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries),
         }).ToList();
+        using var quiet = new NoOpen();
         foreach (var v in variants)
         {
             var files = new List<string>();
@@ -176,6 +178,38 @@ public static class ParetoGpuVariants
         });
         return ParetoGpuJob.Done("{\"unity\": " + Str(Application.unityVersion) + ", \"pipeline\": {" + ParetoGpuJob.PipelineFields() + "}, \"shaders\": {\n " +
                                  string.Join(",\n ", items) + "}}\n");
+    }
+
+    // OpenCompiledShader opens its file in the external code editor (Rider): a code editor that opens nothing while compiling
+    sealed class NoOpen : IExternalCodeEditor, IDisposable
+    {
+        const string Path = "paretogpu-no-open";
+        static NoOpen registered;
+        readonly string was;
+
+        public NoOpen()
+        {
+            if (registered == null)
+                CodeEditor.Register(registered = this);
+            was = CodeEditor.CurrentEditorInstallation == Path ? "" : CodeEditor.CurrentEditorInstallation;
+            CodeEditor.SetExternalScriptEditor(Path);
+        }
+
+        public void Dispose() => CodeEditor.SetExternalScriptEditor(was);
+
+        public CodeEditor.Installation[] Installations => new[] { new CodeEditor.Installation { Name = "ParetoGPU", Path = Path } };
+
+        public bool TryGetInstallationForPath(string editorPath, out CodeEditor.Installation installation)
+        {
+            installation = Installations[0];
+            return editorPath == Path;
+        }
+
+        public void OnGUI() { }
+        public void SyncIfNeeded(string[] addedFiles, string[] deletedFiles, string[] movedFiles, string[] movedFromFiles, string[] importedFiles) { }
+        public void SyncAll() { }
+        public void Initialize(string editorInstallationPath) { }
+        public bool OpenProject(string filePath = "", int line = -1, int column = -1) => true;
     }
 
     // "Compile and show code" for Vulkan, variants of the build only (as the inspector's default) -> file in the job folder

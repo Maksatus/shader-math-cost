@@ -42,6 +42,23 @@ class DiscardTest(unittest.TestCase):
         self.assertFalse(rd_spirv.discards(raw))
         self.assertIsNone(rd_spirv.without_discard(raw))
 
+    def test_stubs(self):
+        z, off = rd_spirv.zero_outputs, rd_spirv.off_screen
+        for name, make in (("alpha_clip.frag.spv", z), ("loop_lights.frag.spv", z), ("tex_x24.frag.spv", z),
+                           ("wave_pos.vert.spv", z), ("wave_pos.vert.spv", off)):
+            raw = read(name)
+            new = make(raw)
+            self.assertGreater(len(new), len(raw))
+            self.assertEqual(rd_spirv.discards(new), rd_spirv.discards(raw))
+            val = spirv_val()
+            if val:
+                with tempfile.TemporaryDirectory() as d:
+                    path = os.path.join(d, "x.spv")
+                    with open(path, "wb") as f:
+                        f.write(new)
+                    r = subprocess.run([val, "--target-env", "vulkan1.1", path], capture_output=True, text=True)
+                    self.assertEqual(r.returncode, 0, name + ": " + r.stdout + r.stderr)
+
     def test_not_spirv(self):
         with self.assertRaises(ValueError):
             rd_spirv.discards(b"not a shader")

@@ -13,7 +13,7 @@ def run_command(args):
         fail(f"{args.frame} already holds a snapshot: give a new folder", code="input")
     os.makedirs(args.frame, exist_ok=True)
     try:
-        path = device_app.capture(args.frame, args.app, args.serial, args.wait)
+        path = device_app.capture(args.frame, args.app, args.serial, args.wait, not args.no_shader_cost)
         print(f"-> {os.path.abspath(path)}")
         project = args.project or workspace.snapshot_project(args.frame)
         snap = device_app.build(args.frame, path, project)
@@ -33,6 +33,8 @@ DEVICE = Command(
          label="Пакет приложения"),
      Arg("--serial", help="adb serial of the device (default: the only one)", label="Устройство (adb serial)"),
      Arg("--wait", type=float, help="capture this many seconds after the start (default: when you press Enter, or the "
-                                    "window's «Снять кадр»)", label="Секунд до захвата")],
+                                    "window's «Снять кадр»)", label="Секунд до захвата"),
+     Arg("--no-shader-cost", action="store_true", label="Не мерить цену шейдеров на телефоне (подмена, ~1–2 мин)",
+         help="skip measuring each fragment shader on the phone by swapping it for one with zero colour")],
     run_command, title="Кадр с телефона",
-    phases=lambda v: ["rd_start", "rd_wait", "rd_device"])
+    phases=lambda v: ["rd_start", "rd_wait", "rd_device"] + ([] if v.get("no_shader_cost") else ["rd_knockout"]))

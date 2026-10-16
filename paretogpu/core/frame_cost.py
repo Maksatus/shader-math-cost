@@ -1,6 +1,7 @@
 """Frame cost per core: draw = pixels x px_price + vertices x vtx_price, dispatch = threads x cs_price (core/pricing).
 Units: malioc cycles x invocations; only cores of one generation compare in absolute numbers (pipe widths differ).
-Vertex price = Position + Varying for every vertex: IDVS shades Varying only for visible ones, so it is an upper bound.
+Vertex price = Position + Varying for every vertex: IDVS shades Varying only for visible ones, so it is an upper bound;
+a draw without a fragment shader (or with no fragment threads) runs Position only.
 px_ref / vtx_ref / cs_ref = price with every outer loop once (REF_N): trip-count independent, used by core/compare.
 """
 import math
@@ -9,6 +10,7 @@ import re
 from collections import OrderedDict, defaultdict
 
 from paretogpu.core import loops
+from paretogpu.core.memory import TILE_PRICE
 from paretogpu.core import pixels as px
 from paretogpu.core import profile
 from paretogpu.core import variants
@@ -126,7 +128,16 @@ def _price_compute(row, recs, counts, loop_data):
     return found
 
 
+GEOMETRY = ("shadow", "prepass")  # passes bound by the tiler on Mali (K3.1: model 0.23..0.34 of the counters): not priced
 NO_SHADER = {"cycles": 0.0, "bound": [], "path": None, "flags": [], "work_regs": None, "fp16_pct": None}
+
+
+def _position_only(recs, core):
+    """Without a fragment shader IDVS runs no varying shading (K3.1: 0 varying threads in the shadow passes)."""
+    rec = recs[core]
+    if "position" not in rec.get("variants", {}):
+        return recs
+    return {**recs, core: {**rec, "variants": {"position": rec["variants"]["position"]}}}
 
 
 def _price_draw(row, recs, counts, loop_data):
@@ -140,8 +151,10 @@ def _price_draw(row, recs, counts, loop_data):
             continue
         if ff:
             d = price_draw(recs, row["files"], c, n, loop_data)
+            if not row["pixels"]:  # a PC frame's depth-only draw keeps the variant's empty fragment shader
+                d["vtx"] = price(_position_only(recs["vertex"], c), fv, c, n["vertex"], loop_data)
         else:
-            v = price(recs["vertex"], fv, c, n["vertex"], loop_data)
+            v = price(_position_only(recs["vertex"], c), fv, c, n["vertex"], loop_data)
             d = {"px": NO_SHADER, "vtx": v, "flags": [x for x in v["flags"] if x != "low_fp16"]}
         f, v = d["px"], d["vtx"]
         found[c] = recs["vertex"][c]["arch"]
@@ -159,6 +172,25 @@ def _price_draw(row, recs, counts, loop_data):
         if (loop_data.get(fv) or {}).get(c):
             row["cost"][c]["vtx_ref"] = price(recs["vertex"], fv, c, REF_N, loop_data)["cycles"]
     return found
+
+
+TILE = "Mali tile threads"
+
+
+def _tile_row(index, t, cores):
+    """Mali's own fragment threads of a render pass (tile preload / resolve), core/memory.TILE_PRICE each."""
+    what = " + ".join(dict.fromkeys(p[0] for p in t["parts"]))
+    return {
+        "index": index, "kind": "tile", "stage": "tile", "object": f"{TILE}: {what}", "path": t["path"], "meshes": [],
+        "shader": TILE, "pass": what, "keywords": [], "rt": t["parts"][0][1], "rt_size": [None, None],
+        "pixels": t["threads"], "pixel_method": "tile", "pixel_note": None, "vertices": 0, "vertex_method": None,
+        "threads": 0, "thread_method": None, "kernel": None, "variant": f"{TILE} | {what}", "key": [TILE, what],
+        "files": {}, "reason": None, "loop": None, "tile": t["parts"], "tile_event": t["event"],
+        "cost": {c: {"px_price": TILE_PRICE, "vtx_price": None, "px_bound": [], "vtx_bound": [], "px_path": None,
+                     "vtx_path": None, "fragment": t["threads"] * TILE_PRICE, "vertex": 0.0, "compute": 0.0,
+                     "total": t["threads"] * TILE_PRICE, "flags": [], "px_regs": None, "vtx_regs": None,
+                     "px_fp16": None, "px_ref": TILE_PRICE, "vtx_ref": None} for c in cores},
+    }
 
 
 def _totals(rows, cores):
@@ -182,8 +214,9 @@ def _unforced(loop_data, measurements, cores):
 
 
 def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
-            main_core=MAIN_CORE) -> CostRun:
-    """-> frame_cost.json. An event priced on only some cores is in "missing" with "cores" = the unpriced ones."""
+            main_core=MAIN_CORE, tiles=None) -> CostRun:
+    """-> frame_cost.json. An event priced on only some cores is in "missing" with "cores" = the unpriced ones.
+    tiles: core/memory.tile_threads(), priced as rows of kind "tile"."""
     pix = px.resolve(events)
     loop_data = state.get("loops") or {}
     bounds = state.get("loop_bounds") or {}
@@ -220,9 +253,16 @@ def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
                             "shader": r["shader"], "pass": r["pass"], "cores": lost,
                             "reason": ("no price on " + ", ".join(lost)) if r["cost"]
                             else r["reason"] or "no core has both stages measured"})
-    totals = _totals(rows, cores)
-    rows.sort(key=lambda r: -(r["cost"].get(main_core, {}).get("total", -1)))
+    top = max((r["index"] for r in rows), default=-1)
+    rows += [_tile_row(top + 1 + k, t, cores) for k, t in enumerate(tiles or [])]
+    tri = {ev["index"]: (ev.get("indices") or ev.get("vertices") or 0) // 3 for ev in events}
+    geometry = [{**r, "geometry": True, "triangles": tri.get(r["index"], 0)} for r in rows if r["stage"] in GEOMETRY]
+    priced = [r for r in rows if r["stage"] not in GEOMETRY]
+    totals = _totals(priced, cores)
+    priced.sort(key=lambda r: -(r["cost"].get(main_core, {}).get("total", -1)))
+    geometry.sort(key=lambda r: -r["vertices"])
     draws = [r for r in rows if r["kind"] == "draw"]
+    rows = priced
     return {
         "frame": {k: v for k, v in meta.items() if k not in ("events", "pipeline")},
         "cores": [{"name": c, "arch": found_cores[c]} for c in cores], "main_core": main_core,
@@ -236,11 +276,12 @@ def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
                       not r["loop"]["loops"] or any(x["from"] not in KNOWN for x in r["loop"]["loops"]))),
                   "unforced": _unforced(loop_data, state.get("measurements") or {}, cores)},
         "coverage": {"draws": len(draws), "draws_priced": sum(1 for r in draws if r["cost"]),
-                     "events": len(rows), "events_priced": sum(1 for r in rows if r["cost"])},
+                     "events": len(rows) + len(geometry) - len(tiles or []),
+                     "events_priced": sum(1 for r in rows + geometry if r["cost"] and r["kind"] != "tile")},
         "pixel_methods": dict(sorted(_count(r["pixel_method"] for r in draws).items())),
         "vertex_methods": dict(sorted(_count(r["vertex_method"] for r in draws).items())),
         "groups": {c: groups(rows, c) for c in cores},
-        "missing": missing, "events": rows,
+        "missing": missing, "events": rows, "geometry": geometry,
     }
 
 

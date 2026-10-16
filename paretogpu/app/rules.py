@@ -7,6 +7,7 @@ from paretogpu.adapters.unity import cli as unity
 from paretogpu.adapters.unity import variants as unity_variants
 from paretogpu.app.engine import MISSING, Rule
 from paretogpu.core import loops
+from paretogpu.core import ubo
 from paretogpu.core import pricing as heavy
 from paretogpu.model.measurement import LoopProfile, Measurement
 from paretogpu.model.shaderfile import stage_of
@@ -171,10 +172,16 @@ class _Hashes:
         return h
 
 
+def _source(path):
+    """The code malioc measures: SPIR-V with dynamically indexed uniform blocks read as storage buffers (core/ubo)."""
+    src = read_source(path)
+    return ubo.dynamic_as_buffer(src) if isinstance(src, bytes) else src
+
+
 class MeasureRule(Rule):
     """(file relative to root, core) -> Measurement (Vulkan), stage from the extension; memo hits get "cached"."""
     phase = "measure"
-    memo = "measure/1"
+    memo = "measure/2"
 
     def __init__(self, root, info=None, gpu=None):
         self.root, self.info = root, info or {}
@@ -201,7 +208,7 @@ class MeasureRule(Rule):
         rel, core = key
         path = os.path.join(self.root, rel)
         try:
-            r = self.gpu.measure(read_source(path), core, "vulkan", stage_of(path))
+            r = self.gpu.measure(_source(path), core, "vulkan", stage_of(path))
         except (OSError, self.gpu.Error) as e:  # fails this file, not the run
             r = {"ok": False, "error": str(e)}
         if not r["ok"]:
@@ -264,7 +271,7 @@ def parametric(src, api, stage, core, gpu=None, forced=None) -> LoopProfile | No
 class LoopRule(Rule):
     """(file, core) -> LoopProfile; None when its loops cannot be forced (then priced by total cycles)."""
     phase = "loops"
-    memo = "loops/4"
+    memo = "loops/5"
 
     def __init__(self, root, gpu=None):
         self.root = root
@@ -286,7 +293,7 @@ class LoopRule(Rule):
             lock = self.locks.setdefault(fn, threading.Lock())
         with lock:
             if fn not in self.forced:
-                src = read_source(os.path.join(self.root, fn))
+                src = _source(os.path.join(self.root, fn))
                 self.forced[fn] = src, loops.forced(src)
             return self.forced[fn]
 

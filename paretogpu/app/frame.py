@@ -8,6 +8,7 @@ import subprocess
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.adapters.unity import frame as unity_frame
 from paretogpu.adapters.unity.frame import SnapshotError
+from paretogpu.app import frame_draws
 from paretogpu.core.events import match, normalize, pixel_count
 from paretogpu.model.frame import Snapshot
 from paretogpu.store import workspace
@@ -80,4 +81,8 @@ def run(project, out, timeout=1800, max_events=0, rep=CONSOLE, renderdoc=True) -
     finally:
         if rd:
             rdoc.resume(project, was_paused)
+    if rd:
+        rep.phase("rd_draws")
+        rep.log("  renderdoc draws: post-VS geometry and loop trip counts")
+        rdoc.draws(os.path.join(out, CAPTURE), os.path.join(out, frame_draws.FILE), on_progress=rep.log)
     return {**meta, "events": events}

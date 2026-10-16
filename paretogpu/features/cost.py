@@ -2,7 +2,7 @@ import os
 
 from paretogpu.adapters.unity.variants import VariantsError
 from paretogpu.app import cost
-from paretogpu.app.frame_loops import LoopCountError
+from paretogpu.app.frame_draws import LoopCountError
 from paretogpu.app import results
 from paretogpu.app.variants import PipelineMismatch
 from paretogpu.core import frame_cost
@@ -59,6 +59,7 @@ def print_summary(c, n_variants):
         for r in [r for r in c["events"] if mc in r["cost"]][:10]:
             x = r["cost"][mc]
             work = (f"threads {r['threads']:>8,} x {x['cs_price']:6.2f}" if r["kind"] == "compute" else
+                    f"threads {r['pixels']:>8,} x {x['px_price']:6.2f}" if r["kind"] == "tile" else
                     f"px {r['pixels']:>10,} x {x['px_price']:6.2f}  vtx {r['vertices']:>8,} x {x['vtx_price']:5.2f}")
             print(f"  {100 * x['share']:5.1f}%  #{r['index'] + 1:<4} {r['stage']:11s} {r['object'][:38]:38s} "
                   f"{(r['shader'] or '')[:34]:34s} {work}")
@@ -124,7 +125,7 @@ COST = Command(
      Arg("--out", help="output folder (default: the snapshot folder)", label="Папка результата")],
     run_command, title="Цена кадра",
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
-                                                                         "bounds", "rd_loops", "rd_geometry", "rd_memory",
+                                                                         "bounds", "quads", "rd_memory",
                                                                          "report"],
     report=lambda v: os.path.join(v.get("out") or v["frame"], RESULT.page),
     ui_values=default_variants, result=RESULT)

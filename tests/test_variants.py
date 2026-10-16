@@ -69,6 +69,35 @@ class RunTest(unittest.TestCase):
         self.run_once()
         self.assertEqual(self.compiled, [[KEY], [KEY]])
 
+    def test_entries_of_another_file_name_are_replaced(self):
+        sub = os.path.join(self.root, KEY.folder)
+        os.makedirs(sub)
+        with open(os.path.join(sub, "old.vert"), "wb") as f:
+            f.write(b"glsl")
+        with open(os.path.join(sub, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump([{"file": "old.vert", "shader": KEY.shader, "pass": KEY.pass_name, "subshader": KEY.subshader,
+                        "pass_index": KEY.pass_index, "keywords": list(KEY.keywords), "stage": STAGE["vert"],
+                        "fingerprint": "old"}], f)
+        self.run_once()
+        st = self.run_once()
+        self.assertEqual(len(self.compiled), 1)
+        self.assertEqual(set(st["files"][KEY]), {"vert", "frag"})
+        self.assertFalse(os.path.exists(os.path.join(sub, "old.vert")))
+
+    def test_manifest_of_another_folder_is_ignored(self):
+        self.run_once()
+        other = os.path.join(self.root, KEY.folder + "_vulkan")
+        os.makedirs(other)
+        with open(os.path.join(other, "old.vert.spv"), "wb") as f:
+            f.write(b"spv")
+        with open(os.path.join(other, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump([{"file": "old.vert.spv", "shader": KEY.shader, "pass": KEY.pass_name,
+                        "subshader": KEY.subshader, "pass_index": KEY.pass_index, "keywords": list(KEY.keywords),
+                        "stage": STAGE["vert"], "fingerprint": "old"}], f)
+        st = self.run_once()
+        self.assertEqual(len(self.compiled), 1)
+        self.assertTrue(st["files"][KEY]["vert"].startswith(KEY.folder + "/"))
+
     def test_recompile(self):
         self.run_once()
         self.run_once(recompile=True)

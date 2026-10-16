@@ -5,6 +5,8 @@ import unittest
 
 from paretogpu.core import frame_cost as cost
 from paretogpu.core import loops
+from paretogpu.core import memory
+from paretogpu.core import pricing
 from paretogpu.core import pixels
 from paretogpu.model import variant as variants
 
@@ -127,7 +129,7 @@ class PixelsTest(unittest.TestCase):
 
     def test_quads_unless_no_fragment_shader_ran(self):
         evs = [event(0, "opaque", "S", 777, rd={"ps_invocations": 777, "threads": 900}),
-               event(1, "shadow", "S", 0, rd={"ps_invocations": 0})]  # frame_quads leaves it without threads
+               event(1, "shadow", "S", 0, rd={"ps_invocations": 0})]  # frame_draws leaves it without threads
         p = pixels.resolve(evs)
         self.assertEqual((p[0]["pixels"], p[0]["method"]), (900, "quads"))
         self.assertEqual(p[1]["pixels"], 0)
@@ -143,9 +145,15 @@ class DeviceDrawTest(unittest.TestCase):
         k = variants.VariantKey.of(ev)
         st["files"][k] = {"vert": "S.vert.spv"}
         st["captured"] = {k}
+        vs = st["measurements"]["S.vert.spv"]["Mali-G78"]["variants"]
+        vs["varying"]["longest"] = {**vs["varying"]["longest"], "fma": 5.0, "arith": 5.0}
         c = cost.compute({}, [ev], st)
-        r = c["events"][0]
+        # a shadow draw is listed apart, out of the frame's totals: Mali's tiler bounds it, not the shader
+        self.assertEqual((c["events"], c["totals"]["Mali-G78"]["total"]), ([], 0))
+        r = c["geometry"][0]
+        self.assertEqual((r["geometry"], r["triangles"]), (True, (ev.get("indices") or 24) // 3))
         x = r["cost"]["Mali-G78"]
+        # no fragment shader: no varying shading, Position only
         self.assertEqual((x["px_price"], x["fragment"], x["vertex"]), (0.0, 0.0, 24 * 3))
         self.assertEqual((r["pixel_method"], r["vertex_method"]), ("samples", "indices"))
         self.assertEqual(c["missing"], [])
@@ -153,6 +161,27 @@ class DeviceDrawTest(unittest.TestCase):
         del st["captured"]
         c = cost.compute({}, [ev], st)
         self.assertEqual(c["coverage"]["draws_priced"], 0)
+
+    def test_ls_coalesced_on_valhall(self):
+        ev = event(0, "opaque", "M", 100, vertices=3)
+        st = state([ev], {"M": (2, 1)})
+        rec = st["measurements"]["M.frag.spv"]["Mali-G78"]
+        rec["variants"]["main"]["longest"] = {**rec["variants"]["main"]["longest"], "ls": 12.0}
+        x = cost.compute({}, [ev], st)["events"][0]["cost"]["Mali-G78"]
+        self.assertEqual((x["px_price"], x["px_bound"]), (2 + 12.0 / pricing.LS_LANES, ["ls"]))
+        rec["arch"] = "Bifrost"
+        x = cost.compute({}, [ev], st)["events"][0]["cost"]["Mali-G78"]
+        self.assertEqual(x["px_price"], 2 + 12.0)
+
+    def test_tile_threads_are_rows(self):
+        evs = [event(0, "opaque", "A", 100)]
+        tiles = [{"event": 5, "path": "Camera/(RP 1:0) Opaque", "threads": 4000,
+                  "parts": [["msaa", "Color", 3200], ["resolve", "Resolve", 800]]}]
+        c = cost.compute({}, evs, state(evs, {"A": (10, 1)}), tiles=tiles)
+        t = next(r for r in c["events"] if r["kind"] == "tile")
+        self.assertEqual((t["index"], t["pixels"], t["cost"]["Mali-G78"]["total"]), (1, 4000, 4000 * memory.TILE_PRICE))
+        self.assertAlmostEqual(c["totals"]["Mali-G78"]["total"], 100 * 10 + 4 * 1 + 4000 * memory.TILE_PRICE)
+        self.assertEqual(c["coverage"]["events"], 1)
 
 
 if __name__ == "__main__":

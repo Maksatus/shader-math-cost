@@ -232,9 +232,48 @@ def compare(a: CostRun, b: CostRun) -> dict:
     for side, i in (("A", ia), ("B", ib)):
         if i["checked"] is False:
             warn.append({"code": "unchecked", "side": side})
+    ma, mb = _measured(a), _measured(b)
+    if bool(ma) != bool(mb):
+        return {"a": ia, "b": ib, "same_frame": False, "cores": cores, "main_core": main, "warnings": [],
+                "by_core": {}, "model_vs_phone": dict(model_vs_phone(a, b) if mb else model_vs_phone(b, a),
+                                                      phone="b" if mb else "a"), "made_at": time.time()}
     by_core = {c: compare_core(a, b, c) for c in cores}
     return {"a": ia, "b": ib, "same_frame": same, "cores": cores, "main_core": main, "warnings": warn,
             "by_core": by_core, "made_at": time.time()}
+
+
+def _measured(c):
+    sc = (c.get("hardware") or {}).get("shader_cost")
+    return sc if sc and not sc.get("error") else None
+
+
+def model_vs_phone(pc, phone):
+    """The PC snapshot's model against the phone's measured shader cost (core/device.shader_cost), per shader and draw
+    stage on the phone's core: "colour" rows against the model's fragment cycles, whole-draw rows (one shader name only)
+    against the model's total. -> {"core", "frame": {"model", "phone"}, "rows"} or {"core", "error"}."""
+    sc, core = _measured(phone), phone["hardware"]["core"]
+    if core not in [x["name"] for x in pc.get("cores") or []]:
+        return {"core": core, "error": "core_missing"}
+    model = Counter()
+    for r in (pc.get("events") or []) + (pc.get("geometry") or []):
+        x = (r.get("cost") or {}).get(core)
+        if x:
+            model[("colour", r.get("shader"), r["stage"])] += x.get("fragment") or 0.0
+            model[("draw", r.get("shader"), r["stage"])] += x.get("total") or 0.0
+    rows = {}
+    for s in sc["shaders"]:
+        if s.get("error") or s["mode"] not in ("colour", "draw") or (s["mode"] == "draw" and len(s["names"]) != 1):
+            continue
+        k = (s["mode"], s["shader"], s.get("draw_stage"))
+        r = rows.setdefault(k, {"mode": k[0], "shader": k[1], "stage": k[2], "model": model.get(k), "exec": 0.0,
+                                "noise": 0.0, "pipes": 0.0})
+        r["exec"] += s["exec"]
+        r["noise"] += s["noise"]
+        r["pipes"] += sum(s["pipes"].values())
+    rows = list(rows.values())
+    priced = sum(((r.get("cost") or {}).get(core) or {}).get("total") or 0.0
+                 for r in (pc.get("events") or []) + (pc.get("geometry") or []))
+    return {"core": core, "error": None, "frame": {"model": priced, "phone": sc["frame"]}, "rows": rows}
 
 
 def brief(cmp, n=3):

@@ -6,6 +6,7 @@ samples (samples_shaded with discard removed when present; 0 without a fragment 
 vertices = distinct indices x instances (editor: VSInvocations); params = uniform block bytes {"@set.binding": base64}
 for core/loops.spirv_bounds. Paths get "(RP n:m)" like the editor's native passes.
 """
+import bisect
 import hashlib
 import re
 
@@ -136,7 +137,8 @@ def snapshot(answer, meta):
         "seconds": meta.get("seconds"), "total_events": len(events),
         "device": {"model": answer.get("device"), "serial": answer.get("serial"), "gpu": meta.get("gpu"),
                    "app": meta.get("app"), "captured_at": meta.get("captured_at"),
-                   "discard_error": answer.get("discard_error"), "imgui_draws": imgui,
+                   "discard_error": answer.get("discard_error"), "imgui_draws": imgui, "mali": answer.get("mali"),
+                   "knockout": answer.get("knockout"),
                    "discard_unshaded": sum(1 for e in events if e["rd"].get("discards")
                                            and e["rd"].get("samples_shaded") is None)},
         "renderdoc": {"capture": CAPTURE, "replay": answer["serial"], "matched": len(events), "missing": 0,
@@ -155,3 +157,134 @@ def markers(path):
     if "ExecuteRenderGraph" in segs:
         segs = segs[segs.index("ExecuteRenderGraph") + 1:]
     return [m for m in (_RP.sub("", s) for s in segs) if m and not SKIP.match(m)]
+
+
+EXEC = "Execution core active cycles"
+PIPES = {"A": "Arithmetic unit issue cycles", "LS": "Load/store unit issue cycles", "T": "Texture unit issue cycles",
+         "V": "Varying unit issue cycles"}
+
+
+def hardware(dev, actions, events, rows, core):
+    """The phone's Mali counters per render pass (dev["mali"], rd_device.py) beside the model's cycles of the same pass
+    on the phone's core: draws by their first call, Mali tile rows by their pass. No correction either way.
+    -> {"core", "names", "passes": [{"event", "name", "draws", "model", "tile", "hw"}], "model", "exec"} or None."""
+    mali = (dev or {}).get("mali")
+    if not mali:
+        return None
+    if mali.get("error") or not mali.get("passes"):
+        return {"core": core, "error": mali.get("error") or "empty", "names": [], "passes": []}
+    begins = sorted(a["event"] for a in actions if a["name"].startswith("vkCmdBeginRenderPass"))
+    first = {ev["index"]: (ev.get("rd") or {}).get("events", [None])[0] for ev in events}
+    path = {a["event"]: a.get("path") or "" for a in actions}
+    out = {b: {"event": b, "name": None, "draws": 0, "model": 0.0, "tile": 0.0} for b in begins}
+    for r in rows:
+        x = (r.get("cost") or {}).get(core)
+        call = r.get("tile_event") if r["kind"] == "tile" else first.get(r["index"])
+        if not x or call is None or not begins or call < begins[0]:
+            continue
+        p = out[begins[bisect.bisect_right(begins, call) - 1]]
+        if r.get("geometry"):
+            p["geometry"] = True
+        else:
+            p["model"] += x["total"]
+        if r["kind"] == "tile":
+            p["tile"] += x["total"]
+        else:
+            p["draws"] += 1
+            sh = p.setdefault("shaders", {})
+            k = r.get("shader") or r.get("object") or "—"
+            sh[k] = sh.get(k, 0) + 1
+            what = (markers(r.get("path")) or [r["stage"]])[-1] if r["stage"] in ("post", "other") else r["stage"]
+            p.setdefault("what", {})
+            p["what"][what] = p["what"].get(what, 0.0) + x["total"]
+    names = mali["names"]
+    res = []
+    for b in begins:
+        hw = (mali["passes"].get(str(b)) or mali["passes"].get(b))
+        p = out[b]
+        if hw is None and not p["model"]:
+            continue
+        what = p.pop("what", {})
+        p["name"] = " + ".join(sorted(what, key=lambda k: -what[k])) or (markers(path.get(b)) or ["—"])[-1]
+        p["hw"] = dict(zip(names, hw)) if hw else None
+        res.append(p)
+    total = sum((p["hw"] or {}).get(EXEC) or 0 for p in res)
+    return {"core": core, "error": None, "names": names, "passes": res, "model": sum(p["model"] for p in res),
+            "exec": total, "shader_cost": shader_cost(dev.get("knockout"), events, begins, res, rows, first, core)}
+
+
+MODEL_PART = {"colour": "fragment", "draw": "total"}
+
+
+def _malioc(mine, core, stage):
+    """-> malioc's view of a shader's draws on `core`: price per thread (weighted by threads), bound pipes, registers,
+    fp16 share, flags; None without prices."""
+    k, n = ("px", "pixels") if stage == "frag" else ("vtx", "vertices")
+    got = [(r, ((r.get("cost") or {}).get(core) or {})) for r in mine]
+    got = [(r, c) for r, c in got if c.get(f"{k}_price") is not None]
+    if not got:
+        return None
+    w = sum(r.get(n) or 0 for r, _ in got)
+    price = (sum((r.get(n) or 0) * c[f"{k}_price"] for r, c in got) / w if w
+             else sum(c[f"{k}_price"] for _, c in got) / len(got))
+    fp16 = [c["px_fp16"] for _, c in got if k == "px" and c.get("px_fp16") is not None]
+    return {"price": round(price, 3), "bound": sorted({b for _, c in got for b in c.get(f"{k}_bound") or []}),
+            "regs": max((c.get(f"{k}_regs") or 0) for _, c in got), "fp16": min(fp16) if fp16 else None,
+            "flags": sorted({f for _, c in got for f in c.get("flags") or []})}
+
+
+def shader_cost(ko, events, begins, passes, rows, first, core):
+    """dev["knockout"] (rd_device.knockout) -> {"error", "frame", "shaders": [{"stage", "mode", "shader", "names",
+    "file", "draws", "pixels", "vertices", "model", "exec", "noise", "pipes", "passes", "error"}]} by measured cycles:
+    base minus the replay with the shader swapped for its stub, over the passes it draws in (later passes reading its
+    output are not its cost; issue cycles are exact, Execution core active moves by "noise" between replays). model:
+    the same part of its draws priced by the model on `core`."""
+    if not ko:
+        return None
+    if ko.get("error"):
+        return {"error": ko["error"], "shaders": []}
+    names, base, spread = ko["names"], ko["base"], ko["spread"]
+    ex = names.index(EXEC)
+    pipe = {k: names.index(n) for k, n in PIPES.items() if n in names}
+    pname = {str(p["event"]): p["name"] for p in passes}
+    by_call = {e: ev.get("shader") or "—" for ev in events for e in (ev.get("rd") or {}).get("events") or []}
+    priced = {first.get(r["index"]): r for r in rows if r["kind"] != "tile"}
+    frame = sum((v[ex] or 0) for v in base.values())
+    out = []
+    for sh in ko["shaders"]:
+        seen = {}
+        for e in sh["events"]:
+            if e in by_call:
+                seen[by_call[e]] = seen.get(by_call[e], 0) + 1
+        mine = [priced[e] for e in sh["events"] if e in priced]
+        part = MODEL_PART.get(sh.get("mode", "colour"))
+        stages = {}
+        for r in mine:
+            stages[r["stage"]] = stages.get(r["stage"], 0) + 1
+        model = [((r.get("cost") or {}).get(core) or {}).get(part) for r in mine] if part else []
+        row = {"stage": sh.get("stage", "frag"), "mode": sh.get("mode", "colour"),
+               "shader": max(seen, key=seen.get) if seen else sh["file"], "names": seen, "file": sh["file"],
+               "draws": len(sh["events"]), "pixels": sum(r.get("pixels") or 0 for r in mine),
+               "vertices": sum(r.get("vertices") or 0 for r in mine),
+               "model": sum(model) if model and None not in model else None,
+               "malioc": _malioc(mine, core, sh.get("stage", "frag")),
+               "draw_stage": max(stages, key=stages.get) if stages else None,
+               "error": sh.get("error"), "exec": 0.0, "noise": 0.0, "pipes": {k: 0.0 for k in pipe}, "passes": []}
+        out.append(row)
+        own = sorted({str(begins[bisect.bisect_right(begins, e) - 1]) for e in sh["events"] if begins and e >= begins[0]},
+                     key=int)
+        for p in own:
+            b, k = base.get(p), (sh.get("passes") or {}).get(p)
+            if not b or not k or b[ex] is None or k[ex] is None:
+                continue
+            d_pipe = {n: (b[i] or 0) - (k[i] or 0) for n, i in pipe.items()}
+            d = b[ex] - k[ex]
+            row["exec"] += d
+            row["noise"] += spread.get(p) or 0
+            for n in pipe:
+                row["pipes"][n] += d_pipe[n]
+            row["passes"].append({"event": int(p), "name": pname.get(p, p), "exec": d, "base": b[ex]})
+        if not seen and row["passes"]:
+            row["shader"] = f"{row['passes'][0]['name']}: {sh['file']}"
+    out.sort(key=lambda r: -r["exec"])
+    return {"error": None, "frame": frame, "shaders": out}

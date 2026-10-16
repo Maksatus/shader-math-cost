@@ -29,6 +29,8 @@ def load_manifests(root, fingerprints=None):
                 if "subshader" not in m or not os.path.exists(os.path.join(root, d, m["file"])):
                     continue
                 k = VariantKey(m["shader"], m["subshader"], m["pass_index"], m["pass"], tuple(m["keywords"]))
+                if d != k.folder:
+                    continue
                 have.setdefault(k, {})[SHORT[m["stage"]]] = f"{d}/{m['file']}"
                 if fingerprints is not None:
                     fp = m.get("fingerprint")
@@ -61,9 +63,18 @@ def place(root, raw, keys, result):
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 old = json.load(f)
+        new = {_slot(e) for e in entries}
         names = {e["file"] for e in entries}
-        _write_json(path, [e for e in old if e["file"] not in names] + entries)
+        keep = [e for e in old if e["file"] not in names and _slot(e) not in new]
+        for e in old:
+            if e not in keep and e["file"] not in names and os.path.exists(os.path.join(root, sub, e["file"])):
+                os.remove(os.path.join(root, sub, e["file"]))
+        _write_json(path, keep + entries)
     return errors
+
+
+def _slot(e):
+    return e.get("shader"), e.get("subshader"), e.get("pass_index"), tuple(e.get("keywords") or ()), e.get("stage")
 
 
 def _write_json(path, data):

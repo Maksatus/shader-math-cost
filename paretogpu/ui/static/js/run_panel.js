@@ -109,8 +109,10 @@ function renderJob(j) {
   if (detailsOpen === null) detailsOpen = j.status === "failed";
   const card = $("#jobCard");
   const keepLog = logEl && card.contains(logEl) ? logEl : null;
+  const top = keepLog ? keepLog.scrollTop : 0, page = window.scrollY;
   card.innerHTML = head + hint + res + `<details class="more" id="detBox" ${detailsOpen ? "open" : ""}><summary>Подробнее: все шаги и лог</summary>${steps}<pre class="log" id="log"></pre></details>`;
-  if (keepLog) $("#log").replaceWith(keepLog);
+  if (keepLog) { $("#log").replaceWith(keepLog); keepLog.scrollTop = top; }
+  window.scrollTo(window.scrollX, page);
   logEl = $("#log");
   $("#detBox").addEventListener("toggle", e => { detailsOpen = e.target.open; });
   card.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act(b.dataset.act, j));

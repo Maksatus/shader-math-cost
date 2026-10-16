@@ -219,5 +219,40 @@ class DeviceFrame(unittest.TestCase):
         self.assertEqual(m["passes"][0]["bytes"]["store"], 0)
 
 
+class TileThreads(unittest.TestCase):
+    """The VATyakov K31_Heavy passes whose Mali fragment threads the G78 counters show (K3.1)."""
+
+    def test_msaa_resolve_and_depth_loads(self):
+        def named(eid, name):
+            return {"event": eid, "name": name, "path": "Cam", "kinds": []}
+        texs = [dict(tex(1, "MS", 10, 10, "R11G11B10_FLOAT", 1600, color=True), samples=4),
+                tex(2, "Resolved", 10, 10, "R11G11B10_FLOAT", 400, color=True),
+                dict(tex(3, "MSZ", 10, 10, "D24S8", 1600, depth=True), samples=4),
+                tex(4, "Z", 10, 10, "D24S8", 400, depth=True), tex(5, "Post", 10, 10, "R8G8B8A8_UNORM", 400)]
+        usage = {"1": [[10, "Clear"], [11, "ResolveSrc"], [21, "ColorTarget"], [22, "ResolveSrc"],
+                       [31, "ColorTarget"], [32, "ResolveSrc"]],
+                 "2": [[10, "Discard"], [11, "ResolveDst"], [22, "ResolveDst"], [32, "ResolveDst"]],
+                 "3": [[20, "Clear"], [21, "DepthStencilTarget"], [31, "DepthStencilTarget"]],
+                 "4": [[41, "DepthStencilTarget"]], "5": [[41, "ColorTarget"], [51, "ColorTarget"]]}
+        acts = [named(10, "vkCmdBeginRenderPass(Clear)"), named(11, "vkCmdEndRenderPass(Store)"),
+                named(20, "vkCmdBeginRenderPass(C=Load, DS=Clear)"), named(21, "vkCmdDrawIndexed()"),
+                named(22, "vkCmdEndRenderPass(C=Store, DS=Store)"),
+                named(30, "vkCmdBeginRenderPass(C=Load, DS=Load)"), named(31, "vkCmdDrawIndexed()"),
+                named(32, "vkCmdEndRenderPass(C=Store, DS=Don't Care)"),
+                named(40, "vkCmdBeginRenderPass(C=Load, DS=Load)"), named(41, "vkCmdDraw()"),
+                named(42, "vkCmdEndRenderPass(C=Store, DS=Store)"),
+                named(50, "vkCmdBeginRenderPass(Load)"), named(51, "vkCmdDraw()"), named(52, "vkCmdEndRenderPass(Store)")]
+        got = {t["event"]: t["threads"] for t in memory.tile_threads(texs, usage, acts)}
+        # clear + resolve 4 + 1, load + resolve 4 + 1, + MSAA depth load 4, single-sample depth load 1, colour load 0
+        self.assertEqual(got, {10: 500, 20: 500, 30: 900, 40: 100})
+
+    def test_editor_driver_padding(self):
+        ms = dict(tex(1, "MS", 10, 10, "R11G11B10_FLOAT", 6400, color=True), samples=4)
+        self.assertEqual(memory.target_size(ms), 400 * 4 * memory.AFBC)
+        self.assertEqual(memory.target_size({**ms, "native": True}), 400 * 16 * memory.AFBC)
+        self.assertEqual(memory.format_bytes("D32S8_TYPELESS"), 5)
+        self.assertIsNone(memory.format_bytes("BC7_SRGB"))
+
+
 if __name__ == "__main__":
     unittest.main()

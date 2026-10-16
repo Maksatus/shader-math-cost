@@ -123,6 +123,21 @@ class Compare(unittest.TestCase):
         x = next(e for e in v["events"] if e["object"] == "x")
         self.assertEqual((x["index_a"], x["index_b"], x["delta"]), (0, 6, 300.0))
 
+    def test_model_against_phone(self):
+        pc = run([event(0, "S", 100, 2.0), event(1, "S", 50, 2.0, obj="o2")])
+        sc = {"error": None, "frame": 900.0, "shaders": [
+            {"mode": "colour", "shader": "S", "draw_stage": "opaque", "names": {"S": 2}, "exec": 150.0, "noise": 5.0,
+             "pipes": {"A": 200.0}},
+            {"mode": "draw", "shader": "S", "draw_stage": "opaque", "names": {"S": 1, "T": 1}, "exec": 400.0,
+             "noise": 5.0, "pipes": {"A": 1.0}}]}
+        phone = run([event(0, "S", 100, 1.0)], frame_dir="P", hardware={"core": CORE, "shader_cost": sc})
+        m = compare.compare(pc, phone)["model_vs_phone"]
+        self.assertEqual((m["phone"], m["frame"]), ("b", {"model": 300.0, "phone": 900.0}))
+        self.assertEqual([(r["mode"], r["model"], r["exec"]) for r in m["rows"]], [("colour", 300.0, 150.0)])
+        self.assertEqual(compare.compare(phone, pc)["model_vs_phone"]["phone"], "a")
+        other = run([event(0, "S", 100, 1.0)], cores=[{"name": "Mali-G52"}])
+        self.assertEqual(compare.compare(other, phone)["model_vs_phone"]["error"], "core_missing")
+
     def test_archive_and_render(self):
         with tempfile.TemporaryDirectory() as d:
             c = run([event(0, "Lit", 1000, 10.0)], computed_at=1.0)

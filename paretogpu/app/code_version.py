@@ -7,10 +7,11 @@ import os
 
 PACKAGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILES = ("core/frame_cost.py", "core/pricing.py", "core/loops.py", "core/pixels.py", "core/events.py",
-         "core/memory.py", "core/variants.py", "core/device.py", "model/measurement.py", "model/cores.py",
-         "model/variant.py", "app/cost.py", "app/variants.py", "app/rules.py", "app/frame_loops.py",
+         "core/memory.py", "core/ubo.py", "core/variants.py", "core/device.py", "model/measurement.py", "model/cores.py",
+         "model/variant.py", "app/cost.py", "app/variants.py", "app/rules.py", "app/frame_draws.py", "core/quads.py",
          "app/frame_memory.py", "app/device.py", "adapters/malioc.py", "adapters/gpu.py",
-         "adapters/renderdoc/rd_loops.py", "adapters/renderdoc/rd_memory.py")
+         "adapters/renderdoc/rd_draws.py", "adapters/renderdoc/rd_vulkan.py",
+         "adapters/renderdoc/rd_memory.py")
 
 
 def _strip_docstrings(tree):

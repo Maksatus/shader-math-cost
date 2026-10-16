@@ -28,12 +28,24 @@ class Reporter:
             sys.stdout.flush()
 
     def phase(self, pid, total=None, note=None):
+        self._lap(pid)
         self._emit(event="phase", id=pid, total=total, note=note)
+
+    def _lap(self, pid=None):
+        """Logs the seconds of the phase that ends."""
+        now, last = time.time(), getattr(self, "_current", None)
+        if last:
+            self.log(f"  [{last[0]}: {now - last[1]:.1f} s]")
+        self._current = (pid, now) if pid else None
+
+    def done(self):
+        self._lap()
 
     def step(self, done, total=None, note=None):
         self._emit(event="step", done=done, total=total, note=note)
 
     def skip(self, pid, note=None):
+        self._lap()
         self._emit(event="skip", id=pid, note=note)
 
     def error(self, code, details=None):

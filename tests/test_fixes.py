@@ -67,6 +67,20 @@ class RenderDocMatchTest(unittest.TestCase):
         self.assertIsNone(evs[0]["rd"])
         self.assertEqual(evs[1]["rd"]["events"], [10])
 
+    def test_draws_under_a_marker_closed_early_take_the_calls_between(self):
+        evs = [draw(0, "Cam/Transparent", 6), draw(1, "Cam/Transparent", 12), draw(2, "Cam/Transparent", 9, 2),
+               draw(3, "Cam/TAA", 3)]
+        acts = [action(10, "Cam/Transparent", 6), action(11, "Cam/RenderLoop.Draw", 12),
+                action(12, "Cam/RenderLoop.Draw", 3), action(13, "Cam/RenderLoop.Draw", 6), action(20, "Cam/TAA", 3)]
+        self.assertEqual(renderdoc.match(evs, acts, []), (4, 0, 0))
+        self.assertEqual([e["rd"]["events"] for e in evs], [[10], [11], [12, 13], [20]])
+
+    def test_calls_between_that_do_not_fit_are_not_taken(self):
+        evs = [draw(0, "Cam/Transparent", 6), draw(1, "Cam/Transparent", 12), draw(2, "Cam/TAA", 3)]
+        acts = [action(10, "Cam/Transparent", 6), action(11, "Cam/RenderLoop.Draw", 15), action(20, "Cam/TAA", 3)]
+        self.assertEqual(renderdoc.match(evs, acts, []), (2, 1, 0))
+        self.assertIsNone(evs[1]["rd"])
+
     def test_paths_match_whole_segments(self):
         evs = [draw(0, "Blit", 3), draw(1, "", 3)]
         acts = [action(10, "Cam/FinalBlit", 3), action(11, "Cam/Blit", 3), action(12, "", 3)]

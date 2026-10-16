@@ -1,8 +1,8 @@
 """The capture replayed by every rd_*.py that replays (inside qrenderdoc's python): on the desktop, or with a serial on
-that Android device by RenderDoc for Arm (an Android capture does not replay on a desktop GPU: ASTC, AHardwareBuffer).
-The device's replay server leaks up to ~4 MB per SetFrameEvent and lmkd kills it: the capture is reopened every REOPEN
-moves, a shader swap set again after it."""
-import base64
+that Android device by RenderDoc for Arm (an Android capture does not replay on a desktop GPU: ETC2, AHardwareBuffer).
+The device's replay server grows with every SetFrameEvent (~0.2 MB alone, MBs with pipeline state or MSAA texture
+reads; 600 moves got it killed by lmkd at move ~590 of rd_draws) until lmkd kills it: the capture is reopened every
+REOPEN moves, the shader swaps set again after it."""
 import os
 import time
 
@@ -33,30 +33,32 @@ def connect(serial, start=True):
     raise RuntimeError(f"no connection to the RenderDoc server on the device: {r}")
 
 
-def block_bytes(controller, pipe, stage, refl, cache):
-    """-> {"@set.binding": base64} of the uniform blocks a stage reads (loop bounds for core/loops.spirv_bounds)."""
-    out = {}
-    for i, cb in enumerate(refl.constantBlocks):
-        if not cb.bufferBacked:
-            continue
-        used = pipe.GetConstantBlock(stage, i, 0)
-        desc = getattr(used, "descriptor", used)
-        res = getattr(desc, "resource", None) or getattr(desc, "resourceId", rd.ResourceId.Null())
-        if res == rd.ResourceId.Null():
-            continue
-        size = cb.byteSize or min(desc.byteSize, 65536)
-        key = (int(res), desc.byteOffset, size)
-        if key not in cache:
-            cache[key] = base64.b64encode(bytes(controller.GetBufferData(res, desc.byteOffset, size))).decode()
-        out[f"@{cb.fixedBindSetOrSpace}.{cb.fixedBindNumber}"] = cache[key]
-    return out
+def state(controller, rdc):
+    """-> rd_vulkan.Frame of the capture: every call's state from its structured data (read from the local file), in
+    the replay's event order."""
+    import rd_vulkan
+    events = []
+
+    def walk(items):
+        for a in items:
+            events.extend((e.eventId, e.chunkIndex) for e in a.events)
+            walk(a.children)
+    walk(controller.GetRootActions())
+    cap = rd.OpenCaptureFile()
+    if not ok(cap.OpenFile(rdc, "", None)):
+        raise RuntimeError("cannot open capture")
+    try:
+        return rd_vulkan.frame(cap.GetStructuredData(), events)
+    finally:
+        cap.Shutdown()
 
 
 class Replay:
 
     def __init__(self, rdc, serial=None, remote=None, step=None):
         """serial: replayed on that device (remote: an open connection to its server); step(text): progress."""
-        self.moved, self.swap, self.remote, self.step = 0, None, None, step or (lambda text: None)
+        self.moved, self.swaps, self.remote, self.step = 0, {}, None, step or (lambda text: None)
+        self._output, self._pinged = None, time.time()
         if not serial:
             cap = rd.OpenCaptureFile()
             if not ok(cap.OpenFile(rdc, "", None)):
@@ -81,36 +83,59 @@ class Replay:
     def alive(self):
         return self.remote is None or ok(self.remote.Ping())
 
+    def keepalive(self):
+        """Pings the device's server during local work: it drops a client silent for 15 s."""
+        if self.remote is not None and time.time() - self._pinged > 3:
+            self.remote.Ping()
+            self._pinged = time.time()
+
     def go(self, eid, full=False):
-        """Moves to eid; a reopening replays from the start with the swap set again."""
+        """Moves to eid; a reopening replays from the start with the swaps set again."""
         if self.remote is not None and self.moved >= REOPEN:
             if not self.alive():
                 raise RuntimeError("RenderDoc's server on the device is gone (out of memory or crashed)")
             self.step("reopening the capture")
-            swap = self.swap
+            swaps = {k: v[:2] for k, v in self.swaps.items()}
             self.unswap()
+            self._drop_output()
             self.remote.CloseCapture(self.c)
             self.c, self.moved, full = self._open(), 0, True
-            if swap:
-                self.set_swap(*swap)
+            self.swap(swaps)
         self.c.SetFrameEvent(eid, full)
         self.moved += 1
 
-    def set_swap(self, original, entry, spirv):
-        sid, errors = self.c.BuildTargetShader(entry, rd.ShaderEncoding.SPIRV, spirv, rd.ShaderCompileFlags(),
-                                               rd.ShaderStage.Pixel)
-        if sid == rd.ResourceId.Null():
-            raise ValueError(f"the counting shader did not build: {errors}")
-        self.c.ReplaceResource(original, sid)
-        self.swap, self.sid = (original, entry, spirv), sid
+    def output(self):
+        """-> a texture output of the open replay (for overlays); a reopening makes a new one."""
+        if self._output is None:
+            self._output = self.c.CreateOutput(rd.CreateHeadlessWindowingData(64, 64), rd.ReplayOutputType.Texture)
+        return self._output
+
+    def _drop_output(self):
+        if self._output is not None:
+            self._output.Shutdown()
+            self._output = None
+
+    def swap(self, swaps):
+        """swaps {fragment shader ResourceId: (entry, SPIR-V)} -> {that id: error} of the ones that did not build."""
+        failed = {}
+        for original, (entry, spirv) in swaps.items():
+            sid, errors = self.c.BuildTargetShader(entry, rd.ShaderEncoding.SPIRV, spirv, rd.ShaderCompileFlags(),
+                                                   rd.ShaderStage.Pixel)
+            if sid == rd.ResourceId.Null():
+                failed[original] = f"the counting shader did not build: {errors}"
+                continue
+            self.c.ReplaceResource(original, sid)
+            self.swaps[original] = (entry, spirv, sid)
+        return failed
 
     def unswap(self):
-        if self.swap:
-            self.c.RemoveReplacement(self.swap[0])
-            self.c.FreeTargetResource(self.sid)
-            self.swap = None
+        for original, (_, _, sid) in self.swaps.items():
+            self.c.RemoveReplacement(original)
+            self.c.FreeTargetResource(sid)
+        self.swaps = {}
 
     def close(self):
+        self._drop_output()
         if self.remote is None:
             self.c.Shutdown()
             self._cap.Shutdown()

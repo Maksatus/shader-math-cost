@@ -1,13 +1,13 @@
-"""Fragment SPIR-V that writes loop trip counts instead of its colour (rd_loops.py); imported inside RenderDoc's python
+"""Fragment SPIR-V that writes loop trip counts instead of its colour (rd_draws.py); imported inside RenderDoc's python
 (stdlib and core/loops only). counting(raw, continues, scale) -> SPIR-V whose output at Location 0 is
-((n_a + 1) * scale, (n_b + 1) * scale, MARKER, 1) (alpha 1 keeps alpha blending exact): n = runs of a loop's continue
-block, the only way back to its header. Pixels the draw wrote = changed and holding MARKER."""
+((n_a + 1) * scale, (n_b + 1) * scale, (n_c + 1) * scale, 1) (alpha 1 keeps blending onto a cleared target exact): n =
+runs of a loop's continue block, the only way back to its header. Pixels the draw wrote = non-zero on a cleared
+target."""
 import struct
 
 from paretogpu.core import loops as model
 
 MAGIC = 0x07230203
-MARKER = 0.375  # exact in every float and 8-bit UNORM target
 OP_ENTRY_POINT, OP_TYPE_FLOAT, OP_TYPE_VECTOR, OP_TYPE_POINTER, OP_CONSTANT = 15, 22, 23, 32, 43
 OP_FUNCTION, OP_FUNCTION_END, OP_VARIABLE, OP_LOAD, OP_STORE, OP_DECORATE = 54, 56, 59, 61, 62, 71
 OP_COMPOSITE_CONSTRUCT, OP_FADD, OP_FMUL, OP_PHI, OP_LABEL, OP_RETURN = 80, 129, 133, 245, 248, 253
@@ -49,7 +49,7 @@ def _parse(raw):
 
 
 def counting(raw, continues, scale=1.0):
-    """continues: one or two continue-block label ids. -> SPIR-V bytes; ValueError if the output is not float."""
+    """continues: one to three continue-block label ids. -> SPIR-V bytes; ValueError if the output is not float."""
     header, insts = _parse(raw)
     bound = header[3]
 
@@ -73,12 +73,11 @@ def counting(raw, continues, scale=1.0):
         raise ValueError("the colour output is not a 32-bit float vector")
     width, f32 = vec[3], vec[2]
 
-    pf, c0, c1, cm, cs = new(), new(), new(), new(), new()
+    pf, c0, c1, cs = new(), new(), new(), new()
     counters = [new() for _ in continues]
     fl = lambda v: struct.unpack("<I", struct.pack("<f", v))[0]
     decl = [_inst(OP_TYPE_POINTER, pf, STORAGE_PRIVATE, f32), _inst(OP_CONSTANT, f32, c0, fl(0.0)),
-            _inst(OP_CONSTANT, f32, c1, fl(1.0)), _inst(OP_CONSTANT, f32, cm, fl(MARKER)),
-            _inst(OP_CONSTANT, f32, cs, fl(scale))]
+            _inst(OP_CONSTANT, f32, c1, fl(1.0)), _inst(OP_CONSTANT, f32, cs, fl(scale))]
     decl += [_inst(OP_VARIABLE, pf, c, STORAGE_PRIVATE, c1) for c in counters]  # n + 1 from the start
 
     body, fn, labels = [], None, {}
@@ -90,14 +89,14 @@ def counting(raw, continues, scale=1.0):
             fn = x[2]
         if op == OP_RETURN and fn == main:
             parts = []
-            for c in counters + [None] * (2 - len(counters)):
+            for c in counters + [None] * (3 - len(counters)):
                 if c is None:
                     parts.append(c1)
                     continue
                 v, s = new(), new()
                 body += [_inst(OP_LOAD, f32, v, c), _inst(OP_FMUL, f32, s, v, cs)]
                 parts.append(s)
-            comps = (parts + [cm, c1])[:width]
+            comps = (parts + [c1])[:width]
             res = new()
             body += [_inst(OP_COMPOSITE_CONSTRUCT, out_type, res, *comps), _inst(OP_STORE, out[2], res)]
         body.append(x)

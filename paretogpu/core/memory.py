@@ -9,10 +9,11 @@ pass target is a tile read); without the marker, a run with the same colour + de
   copies    source + destination whole; a resolve of the current pass's target right after it is on tile (destination
             written with the pass, source not read / stored); a resolve of a cleared-only target clears its
             destination (editor D3D11 resolves); a copy touching the current pass's targets ends the pass
-Sizes: D32S8 = 5 B / texel (D3D11 pads to 8); targets x AFBC; editor RGBA8 non-target assets count as ASTC
+Sizes: editor textures at most their format's bytes (desktop drivers pad: D32S8 to 8, MSAA); targets x AFBC; editor RGBA8 non-target assets count as ASTC
 (ASSET_BITS); device-frame ("native") textures as captured. Vertex and index buffers are not counted.
 Pass cycles: its events' cycles split by each call's share of the event's invocations, so passes sum to the frame;
-a target's tile preload gets no shader cycles. Frame time = sum over passes of max(alu_ms, mem_ms).
+Mali's own tile threads (tile_threads) are frame_cost rows of kind "tile", not in these pass cycles.
+Frame time = sum over passes of max(alu_ms, mem_ms).
 """
 import re
 from collections import defaultdict
@@ -21,7 +22,7 @@ from paretogpu.model.cores import DEVICES
 
 AFBC = 0.5          # assumed AFBC ratio of render targets (~0.5 for game frames, not verified on device)
 ASSET_BITS = 3.56   # ASTC 6x6, Unity's default for Android textures
-DEPTH_BYTES = {"D32S8": 5}  # Direct3D 11 pads 32-bit depth + stencil to 8 bytes; Mali keeps 4 + 1
+_CHANNEL_BITS = re.compile(r"[RGBAXDSE](\d+)")
 UNCOMPRESSED_8BIT = ("R8G8B8A8", "B8G8R8A8", "R8G8B8X8", "B8G8R8X8")
 READS = {"PS_Resource": "ps", "VS_Resource": "vs", "CS_Resource": "cs", "All_Resource": "ps",
          "GS_Resource": "vs", "HS_Resource": "vs", "DS_Resource": "vs", "TS_Resource": "vs", "MS_Resource": "vs"}
@@ -42,11 +43,19 @@ def is_target(t):
     return bool(t.get("color_target") or t.get("depth_target"))
 
 
+def format_bytes(fmt):
+    """-> bytes per texel of an uncompressed format by its channel bits ("R11G11B10_FLOAT" 4, "D32S8" 5), else None."""
+    bits = sum(int(b) for b in _CHANNEL_BITS.findall(fmt.split("_")[0]))
+    return bits / 8 if bits else None
+
+
 def device_size(t):
-    """-> (device bytes per texel of top mip, device bytes of whole texture, "afbc" | "astc" | "capture")."""
+    """-> (device bytes per texel of top mip, device bytes of whole texture, "afbc" | "astc" | "capture").
+    An editor texture's byteSize is the desktop driver's allocation (D32S8 padded to 8 B, NVIDIA MSAA 4x 16 B per
+    4 B sample): it counts at most its format's size."""
     bpt = t["bytes"] / max(1, texels(t))
     fmt = t.get("format") or ""
-    real = None if t.get("native") else next((b for k, b in DEPTH_BYTES.items() if fmt.startswith(k)), None)
+    real = None if t.get("native") else format_bytes(fmt)
     if real and real < bpt:
         bpt, t = real, {**t, "bytes": real * texels(t)}
     if is_target(t):
@@ -257,6 +266,76 @@ def passes(textures, usage, actions, events, rows, cores):
             "assumptions": {"afbc": AFBC, "asset_bits": ASSET_BITS,
                             "native": any(t.get("native") for t in textures),
                             "devices": {c: DEVICES[c] for c in cores if c in DEVICES}}}
+
+
+TILE_PRICE = 2.1  # cycles per Mali tile thread on G78 (K3.1): 2.12 in a clear + resolve pass without draws, 2.07 in the
+# transparent pass that loads MSAA colour + depth
+_BEGIN, _END = "vkCmdBeginRenderPass", "vkCmdEndRenderPass"
+_OPS = re.compile(r"\b(C|DS)=([A-Za-z' ]+?)[,)]")
+_ONE_OP = re.compile(r"\((Load|Clear|Don't Care)\)")
+
+
+def _frame_span(actions, events):
+    """(first, last) event of the frame: its calls, back over the passes and clears right before the first one."""
+    eids = sorted(e for ev in events for e in ((ev.get("rd") or {}).get("events") or []))
+    if not eids:
+        return None
+    order = sorted(actions, key=lambda a: a["event"])
+    first = next((i for i, a in enumerate(order) if a["event"] >= eids[0]), len(order))
+    while first > 0 and not ({"draw", "dispatch"} & set(order[first - 1]["kinds"])):
+        first -= 1
+    return (order[first]["event"] if first < len(order) else eids[0]), eids[-1]
+
+
+def tile_threads(textures, usage, actions, events=None):
+    """Fragment threads Mali's driver runs in each Vulkan render pass (G78 fragment-thread counters, K3.1): one per
+    sample of a multisampled colour target (cleared or loaded), one per pixel of its resolve on tile, one per sample of a
+    loaded depth / stencil target; a loaded single-sample colour target needs none. events: only the passes of the
+    frame, not the editor's around it.
+    -> [{"event", "path", "threads", "parts": [[what, texture, threads]]}] for passes with threads."""
+    span = _frame_span(actions, events) if events else None
+    tex = {int(t["id"]): t for t in textures}
+    at = defaultdict(lambda: defaultdict(set))
+    for tid, us in usage.items():
+        for eid, u in us:
+            at[int(eid)][u].add(int(tid))
+    order = sorted(actions, key=lambda a: a["event"])
+    out, begin = [], None
+    for a in order:
+        name = a.get("name") or ""
+        if name.startswith(_BEGIN):
+            begin = a if not span or span[0] <= a["event"] <= span[1] else None
+        elif name.startswith(_END) and begin is not None:
+            b, e = begin["event"], a["event"]
+            use = defaultdict(set)
+            for eid in range(b, e + 1):
+                for u, ids in at.get(eid, {}).items():
+                    use[u] |= ids
+            ops = dict(_OPS.findall(begin["name"]))
+            one = _ONE_OP.search(begin["name"])
+            depth_load = (ops.get("DS") or (one.group(1) if one else "")) == "Load"
+            depth = {i for i in use["DepthStencilTarget"] | use["Clear"] if (tex.get(i) or {}).get("depth_target")
+                     or (tex.get(i) or {}).get("format", "").startswith(("D16", "D24", "D32", "S8"))}
+            color = (use["ColorTarget"] | use["Clear"] | use["ResolveSrc"]) - depth
+            parts = []
+            for i in sorted(color):
+                t = tex.get(i)
+                if t and (t.get("samples") or 1) > 1:
+                    parts.append(["msaa", t["name"], t["samples"] * t["width"] * t["height"]])
+            for i in sorted(use["ResolveDst"] & at.get(e, {}).get("ResolveDst", set())):
+                t = tex.get(i)
+                if t:
+                    parts.append(["resolve", t["name"], t["width"] * t["height"]])
+            if depth_load:
+                for i in sorted(depth):
+                    t = tex.get(i)
+                    if t:
+                        parts.append(["depth_load", t["name"], (t.get("samples") or 1) * t["width"] * t["height"]])
+            if parts:
+                out.append({"event": b, "path": begin.get("path") or a.get("path") or "",
+                            "threads": sum(p[2] for p in parts), "parts": parts})
+            begin = None
+    return out
 
 
 def roofline(cycles, nbytes, core):
