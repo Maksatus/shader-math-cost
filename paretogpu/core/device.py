@@ -171,10 +171,11 @@ def hardware(dev, actions, events, rows, core):
     mali = (dev or {}).get("mali")
     if not mali:
         return None
-    if mali.get("error") or not mali.get("passes"):
-        return {"core": core, "error": mali.get("error") or "empty", "names": [], "passes": []}
     begins = sorted(a["event"] for a in actions if a["name"].startswith("vkCmdBeginRenderPass"))
     first = {ev["index"]: (ev.get("rd") or {}).get("events", [None])[0] for ev in events}
+    if mali.get("error") or not mali.get("passes"):
+        return {"core": core, "error": mali.get("error") or "empty", "names": [], "passes": [],
+                "shader_cost": shader_cost(dev.get("knockout"), events, begins, [], rows, first, core)}
     path = {a["event"]: a.get("path") or "" for a in actions}
     out = {b: {"event": b, "name": None, "draws": 0, "model": 0.0, "tile": 0.0} for b in begins}
     for r in rows:
@@ -238,7 +239,8 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
     "file", "draws", "pixels", "vertices", "model", "exec", "noise", "pipes", "passes", "error"}]} by measured cycles:
     base minus the replay with the shader swapped for its stub, over the passes it draws in (later passes reading its
     output are not its cost; issue cycles are exact, Execution core active moves by "noise" between replays). model:
-    the same part of its draws priced by the model on `core`."""
+    the same part of its draws priced by the model on `core`. A knockout of core/sweep.py (Streamline) has one pass,
+    "frame", and ranks by the busiest unit."""
     if not ko:
         return None
     if ko.get("error"):
@@ -246,7 +248,7 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
     names, base, spread = ko["names"], ko["base"], ko["spread"]
     ex = names.index(EXEC)
     pipe = {k: names.index(n) for k, n in PIPES.items() if n in names}
-    pname = {str(p["event"]): p["name"] for p in passes}
+    pname = {"frame": "весь кадр", **{str(p["event"]): p["name"] for p in passes}}
     by_call = {e: ev.get("shader") or "—" for ev in events for e in (ev.get("rd") or {}).get("events") or []}
     priced = {first.get(r["index"]): r for r in rows if r["kind"] != "tile"}
     frame = sum((v[ex] or 0) for v in base.values())
@@ -271,8 +273,8 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
                "draw_stage": max(stages, key=stages.get) if stages else None,
                "error": sh.get("error"), "exec": 0.0, "noise": 0.0, "pipes": {k: 0.0 for k in pipe}, "passes": []}
         out.append(row)
-        own = sorted({str(begins[bisect.bisect_right(begins, e) - 1]) for e in sh["events"] if begins and e >= begins[0]},
-                     key=int)
+        own = ["frame"] if "frame" in base else sorted(
+            {str(begins[bisect.bisect_right(begins, e) - 1]) for e in sh["events"] if begins and e >= begins[0]}, key=int)
         for p in own:
             b, k = base.get(p), (sh.get("passes") or {}).get(p)
             if not b or not k or b[ex] is None or k[ex] is None:
@@ -283,8 +285,11 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
             row["noise"] += spread.get(p) or 0
             for n in pipe:
                 row["pipes"][n] += d_pipe[n]
-            row["passes"].append({"event": int(p), "name": pname.get(p, p), "exec": d, "base": b[ex]})
+            row["passes"].append({"event": None if p == "frame" else int(p), "name": pname.get(p, p), "exec": d,
+                                  "base": b[ex]})
         if not seen and row["passes"]:
             row["shader"] = f"{row['passes'][0]['name']}: {sh['file']}"
-    out.sort(key=lambda r: -r["exec"])
-    return {"error": None, "frame": frame, "shaders": out}
+    streamline = ko.get("source") == "streamline"  # its exec moves with the replay's own copies: rank by the units
+    out.sort(key=lambda r: -(max(r["pipes"].values(), default=0) if streamline else r["exec"]))
+    unit = max((sum((v[i] or 0) for v in base.values()) for i in pipe.values()), default=0)
+    return {"error": None, "frame": frame, "frame_unit": unit, "shaders": out, "source": ko.get("source") or "renderdoc"}

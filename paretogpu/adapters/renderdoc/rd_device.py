@@ -114,18 +114,8 @@ def samples_passed(controller):
     return {r.eventId: r.value.u64 for r in controller.FetchCounters([rd.GPUCounter.SamplesPassed])}
 
 
-def shaders_of(f, stage):
-    """-> {module id: (entry, SPIR-V, [draw events])} of the frame's draws' "frag" / "vert" shaders."""
-    out = {}
-    for e, st in sorted(f.calls.items()):
-        if stage in st["stages"] and "comp" not in st["stages"]:
-            module, entry = st["stages"][stage]
-            out.setdefault(module, (entry, f.modules[module], []))[2].append(e)
-    return out
-
-
 def discarding_of(f):
-    return {m: v for m, v in shaders_of(f, "frag").items() if rd_spirv.discards(v[1])}
+    return {m: v for m, v in rd_vulkan.shaders_of(f, "frag").items() if rd_spirv.discards(v[1])}
 
 
 def read_frame(leaves, f, job, names, textures, samples, discarding, tick=lambda: None):
@@ -227,10 +217,6 @@ def mali_counters(controller):
     return {"names": [n for n, _ in counters], "passes": passes, "error": None if passes else "empty"}
 
 
-# no "varyings zeroed" knockout: the driver folds constant varyings into the fragment shader, which then costs less too
-KNOCKOUTS = (("frag", "colour", rd_spirv.zero_outputs), ("vert", "draw", rd_spirv.off_screen))
-
-
 def knockout(rp, f, step):
     """Mali counters per pass with each shader swapped in turn for a stub (rd_spirv): "colour" = the fragment shader's
     colour zeroed, "draw" = the vertex shader's position off screen (its draws cost nothing); median of KNOCKOUT_REPEATS replays. -> {"names", "base", "spread": {pass: exec max - min of the base
@@ -238,8 +224,7 @@ def knockout(rp, f, step):
     c = rp.c
     counters = _mali(c)
     ids = {int(x.resourceId): x.resourceId for x in c.GetResources()}
-    jobs = [(stage, mode, make, module, v) for stage, mode, make in KNOCKOUTS
-            for module, v in sorted(shaders_of(f, stage).items())]
+    jobs = rd_vulkan.knockouts(f)
     step(f"shader cost: 0/{len(jobs)}")
     base, spread = _median(c, counters)
     out = []

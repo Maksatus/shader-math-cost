@@ -95,7 +95,7 @@ class Replay:
             if not self.alive():
                 raise RuntimeError("RenderDoc's server on the device is gone (out of memory or crashed)")
             self.step("reopening the capture")
-            swaps = {k: v[:2] for k, v in self.swaps.items()}
+            swaps = {k: v[:3] for k, v in self.swaps.items()}
             self.unswap()
             self._drop_output()
             self.remote.CloseCapture(self.c)
@@ -116,20 +116,21 @@ class Replay:
             self._output = None
 
     def swap(self, swaps):
-        """swaps {fragment shader ResourceId: (entry, SPIR-V)} -> {that id: error} of the ones that did not build."""
+        """swaps {shader ResourceId: (entry, SPIR-V[, rd.ShaderStage, Pixel if left out])} -> {that id: error} of the
+        ones that did not build."""
         failed = {}
-        for original, (entry, spirv) in swaps.items():
-            sid, errors = self.c.BuildTargetShader(entry, rd.ShaderEncoding.SPIRV, spirv, rd.ShaderCompileFlags(),
-                                                   rd.ShaderStage.Pixel)
+        for original, (entry, spirv, *stage) in swaps.items():
+            stage = stage[0] if stage else rd.ShaderStage.Pixel
+            sid, errors = self.c.BuildTargetShader(entry, rd.ShaderEncoding.SPIRV, spirv, rd.ShaderCompileFlags(), stage)
             if sid == rd.ResourceId.Null():
-                failed[original] = f"the counting shader did not build: {errors}"
+                failed[original] = f"the shader did not build: {errors}"
                 continue
             self.c.ReplaceResource(original, sid)
-            self.swaps[original] = (entry, spirv, sid)
+            self.swaps[original] = (entry, spirv, stage, sid)
         return failed
 
     def unswap(self):
-        for original, (_, _, sid) in self.swaps.items():
+        for original, (_, _, _, sid) in self.swaps.items():
             self.c.RemoveReplacement(original)
             self.c.FreeTargetResource(sid)
         self.swaps = {}

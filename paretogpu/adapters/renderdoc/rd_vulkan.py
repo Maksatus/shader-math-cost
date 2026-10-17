@@ -303,3 +303,23 @@ def describe(state, names, textures, write):
         "blend": state["blend"], "write_mask": state["write_mask"], "ztest": state["ztest"], "zwrite": state["zwrite"],
         "cull": state["cull"], "meshes": list(dict.fromkeys(m for m in (names.get(b) or "" for b in state["vbs"]) if m)),
         "unique_vertices": state["unique_vertices"], "indexed": state["indexed"]}
+
+
+def shaders_of(f, stage):
+    """-> {module id: (entry, SPIR-V, [draw events])} of the frame's draws' "frag" / "vert" shaders."""
+    out = {}
+    for e, st in sorted(f.calls.items()):
+        if stage in st["stages"] and "comp" not in st["stages"]:
+            module, entry = st["stages"][stage]
+            out.setdefault(module, (entry, f.modules[module], []))[2].append(e)
+    return out
+
+
+# no "varyings zeroed" knockout: the driver folds constant varyings into the fragment shader, which then costs less too
+KNOCKOUTS = (("frag", "colour", rd_spirv.zero_outputs), ("vert", "draw", rd_spirv.off_screen))
+
+
+def knockouts(f):
+    """-> [(stage, mode, stub maker, module id, (entry, SPIR-V, [draw events]))] of every shader to swap in turn."""
+    return [(stage, mode, make, module, v) for stage, mode, make in KNOCKOUTS
+            for module, v in sorted(shaders_of(f, stage).items())]

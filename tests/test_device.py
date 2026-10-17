@@ -166,6 +166,24 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(device.hardware({**dev, "knockout": {"error": "crashed"}}, FRAME["actions"], self.ev, rows,
                                          "Mali-G78")["shader_cost"], {"error": "crashed", "shaders": []})
 
+    def test_shader_cost_of_the_whole_frame(self):
+        lit = self.ev[1]["rd"]["events"][0]
+        names = [device.EXEC, "Arithmetic unit issue cycles", "Texture unit issue cycles"]
+        ko = {"names": names, "base": {"frame": [1000, 300, 80]}, "spread": {"frame": 30}, "source": "streamline",
+              "shaders": [{"stage": "frag", "mode": "colour", "file": "b2.frag.spv", "events": [lit],
+                           "passes": {"frame": [995, 200, 80]}},
+                          {"stage": "frag", "mode": "colour", "file": "c3.frag.spv", "events": [],
+                           "passes": {"frame": [960, 290, 75]}}]}
+        dev = {"mali": {"names": [], "passes": {}, "error": "crashed"}, "knockout": ko}
+        rows = [{"index": e["index"], "kind": "draw", "stage": e["stage"], "path": e["path"], "shader": e["shader"],
+                 "cost": {}} for e in self.ev]
+        h = device.hardware(dev, FRAME["actions"], self.ev, rows, "Mali-G78")
+        sc = h["shader_cost"]
+        self.assertEqual((h["error"], sc["source"], sc["frame"]), ("crashed", "streamline", 1000))
+        top = sc["shaders"][0]  # ranked by its busiest unit (A 100), not its noisy exec (5 vs 40)
+        self.assertEqual((top["file"], top["exec"], top["pipes"], top["noise"]), ("b2.frag.spv", 5, {"A": 100, "T": 0}, 30))
+        self.assertEqual([(p["event"], p["name"]) for p in top["passes"]], [(None, "весь кадр")])
+
     def test_actions_and_memory(self):
         by = {a["event"]: a for a in self.actions["actions"]}
         self.assertIn("clear", by[20]["kinds"])  # a render pass clearing on load clears its targets

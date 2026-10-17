@@ -57,8 +57,8 @@ def capture(frame_dir, app, serial=None, wait=None, knockout=True, rep=CONSOLE):
         if phases and ORDER.index(phase) > ORDER.index(phases[-1]):
             phases.append(phase)
             rep.phase(phase)
-        if phase == "rd_knockout":
-            done, total = text.split()[-1].split("/")
+        done, _, total = text.split()[-1].partition("/")
+        if phase == "rd_knockout" and done.isdigit() and total.isdigit():
             rep.step(int(done), int(total))
         rep.log(f"  {text}")
     answer = rdoc.device_frame({"serial": serial, "app": activity, "wait": wait, "trigger": os.path.abspath(now),
@@ -66,6 +66,8 @@ def capture(frame_dir, app, serial=None, wait=None, knockout=True, rep=CONSOLE):
                                 "shaders": os.path.abspath(os.path.join(frame_dir, device.SHADERS)),
                                 "knockout": knockout},
                                out, on_progress=progress)
+    if knockout and not (answer.get("mali") or {}).get("passes") and answer.get("draws"):
+        answer["knockout"] = _sweep(serial, answer["capture"], gpu, out, progress)
     rep.done()
     if not answer["draws"]:
         raise rdoc.RenderDocError("the device frame has no draws (is the app showing its scene?)", code="device")
@@ -73,10 +75,23 @@ def capture(frame_dir, app, serial=None, wait=None, knockout=True, rep=CONSOLE):
                    "seconds": round(time.time() - t0, 1)})
     with open(out, "w", encoding="utf-8") as f:
         json.dump(answer, f)
-    for x in (out + ".in", out + ".progress", out + ".partial", now):
+    for x in (out + ".in", out + ".progress", out + ".partial", out + ".sweep.in", out + ".sweep.progress",
+              out + ".sweep.go", now):
         if os.path.exists(x):
             os.remove(x)
     return out
+
+
+def _sweep(serial, capture, gpu, out, progress):
+    """Shader cost through Streamline when RenderDoc for Arm gives no Mali counters for the frame (core/sweep.py)."""
+    from paretogpu.adapters import streamline
+    from paretogpu.core import sweep
+    progress("shader cost: through Streamline (RenderDoc gave no Mali counters for this frame)")
+    try:
+        answer, text = rdoc.device_sweep(serial, capture, gpu or "Mali-G78", out + ".sweep", on_progress=progress)
+        return sweep.knockout(answer, *streamline.timeline(text))
+    except (rdoc.RenderDocError, streamline.StreamlineError, OSError) as e:
+        return {"error": f"Streamline: {e}"[:300]}
 
 
 def _enter(path):

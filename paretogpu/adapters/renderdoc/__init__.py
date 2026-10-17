@@ -24,6 +24,7 @@ COUNTERS = os.path.join(HERE, "rd_counters.py")
 DRAWS = os.path.join(HERE, "rd_draws.py")
 MEMORY = os.path.join(HERE, "rd_memory.py")
 DEVICE = os.path.join(HERE, "rd_device.py")
+SWEEP = os.path.join(HERE, "rd_sweep.py")
 THUMB = os.path.join(HERE, "rd_thumb.py")
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 DEVICE_WAITING = "the app is running: waiting for the capture"
@@ -179,6 +180,43 @@ def device_frame(job, out_json, timeout=2400, on_progress=None):
         if os.path.exists(out_json + ".partial"):
             os.replace(out_json + ".partial", out_json)
     return _finish(run, timeout, on_progress, waiting=DEVICE_WAITING, stall=(*DEVICE_STALL, stalled))
+
+
+SWEEP_REPLAY = 6.0  # seconds a shader takes in rd_sweep.py (swap, 3 replays with gaps, unswap)
+
+
+def device_sweep(serial, capture, gpu, out_json, repeats=3, on_progress=None):
+    """Shader cost by Streamline while rd_sweep.py replays the capture on the device -> (its answer, the timeline
+    table text of adapters/streamline.finish)."""
+    from paretogpu.adapters import streamline
+    go = out_json + ".go"
+    if os.path.exists(go):
+        os.remove(go)
+    run = _start(SWEEP, out_json, serial=serial, job={"serial": serial, "capture": capture, "repeats": repeats, "go": go})
+    proc = run[0]
+    t0, ready = time.time(), None
+    while proc.poll() is None and time.time() - t0 < 300 and ready is None:
+        try:
+            with open(out_json + ".progress", encoding="utf-8") as f:
+                text = f.read()
+            ready = int(text.split()[1]) if text.startswith("ready ") else None
+        except (OSError, ValueError, IndexError):
+            pass
+        time.sleep(0.5)
+    if ready is None:
+        proc.kill()
+        _finish(run, 1)  # raises the script's own error when it left one
+        raise RenderDocError("the shader sweep did not start on the device", code="device")
+    seconds = 120 + (ready + 2) * SWEEP_REPLAY * 1.5
+    gator = streamline.start(adb(), serial, "org.renderdoc.renderdoccmd.arm64", gpu, seconds, os.path.dirname(out_json))
+    time.sleep(4)
+    open(go, "w").close()
+    try:
+        answer = _finish(run, seconds, on_progress)
+    except RenderDocError:
+        subprocess.run([adb(), "-s", serial, "shell", "pkill", "-INT", "gatord"], capture_output=True)
+        raise
+    return answer, streamline.finish(adb(), serial, gator, out_json + ".apc", timeout=seconds + 120)
 
 
 def _start(script, out_json, capture=None, serial=None, job=None):
