@@ -180,10 +180,17 @@ function renderCost() {
     const m = new Map();
     for (const r of G) {
       const k = r.stage + "|" + shaderName(r);
-      if (!m.has(k)) m.set(k, {stage: r.stage, shader: shaderName(r), draws: 0, vertices: 0, triangles: 0, objects: new Set()});
+      if (!m.has(k)) m.set(k, {stage: r.stage, shader: shaderName(r), draws: 0, vertices: 0, triangles: 0, cycles: 0, objects: new Set()});
       const a = m.get(k); a.draws++; a.vertices += r.vertices; a.triangles += r.triangles || 0; a.objects.add(objName(r.object));
+      a.cycles += (r.cost[D.main_core] || {}).total || 0;
     }
     const rows = [...m.values()].sort((a, b) => b.vertices - a.vertices);
+    if (PHONE) return `<h2>Shadows and depth <small>замер телефона · не входят в итог, как и на ПК</small></h2>`
+      + `<div class="wrap ev"><table><thead><tr><th class="l">Pass</th><th class="l">Shader</th><th class="num">Draw</th>`
+      + `<th class="num">Vertices</th><th class="num">M cycles</th></tr></thead><tbody>`
+      + rows.map(a => `<tr><td class="l">${esc(STAGE_NAMES[a.stage] || a.stage)}</td><td class="l"><span class="shn">${esc(a.shader)}</span></td>`
+        + `<td class="num">${a.draws}</td><td class="num">${num(a.vertices)}</td><td class="num">${mc(a.cycles)}</td></tr>`).join("")
+      + `</tbody></table></div>`;
     return `<h2>Not priced on PC <small>shadows and depth · ${plural(G.length, "draw", "draw", "draw")}</small></h2>`
       + `<p class="sub">Эти passes на Mali упираются в обработку треугольников (tiler), а не в шейдер: расчёт занижал их в 3–4 раза, `
       + `поэтому их нет в итоге frame и в процентах выше. Настоящая нагрузка — в snapshot с телефона.</p>`
@@ -273,6 +280,8 @@ function renderCost() {
     const bad = flags.some(x => BAD_FLAGS.has(x));
     return ` <span class="fc ${bad ? "bad" : ""}">${bad ? "⚠ " : ""}${flags.length}</span>`;
   }
+  const WHY = {noise: "ниже шума", not_swapped: "не подменён", no_output: "нет вывода"};
+  const unmeasured = c => Object.entries(c.unmeasured || {}).map(([p, w]) => `${p === "fragment" ? "пиксели" : "vertices"} — ${WHY[w] || w}`).join(", ");
   function detailRow(r, c) {
     const item = (label, value) => `<div><span>${label}</span>${value}</div>`;
     const items = r.kind === "compute"
@@ -296,6 +305,7 @@ function renderCost() {
     return `<tr class="det"><td colspan="6"><div class="dg num">${items.join("")}</div>`
       + (loopParts(r, c) ? `<div class="dl">↻ ${esc(loopParts(r, c))}</div>` : "")
       + (r.pixel_note ? `<div class="dl note">${esc(r.pixel_note)}</div>` : "")
+      + (unmeasured(c) ? `<div class="dl note">цена модели, не замер: ${esc(unmeasured(c))}</div>` : "")
       + (c.flags.length ? `<div class="dl">${c.flags.map(flagTag).join(" ")}</div>` : "")
       + `<div class="dl">${tags.map(t => `<span class="kw">${esc(t)}</span>`).join("")}${kws}</div></td></tr>`;
   }
@@ -319,7 +329,7 @@ function renderCost() {
       const c = cost(r);
       const open = st.open.has(r.index), compute = r.kind === "compute", names = objName(r.object).split(", ");
       const loop = String(c.px_path || "").startsWith("loop") ? ` <span class="lp">↻</span>` : "";
-      const warn = r.pixel_method === "none" || r.pixel_note ? ` <span class="pw">!</span>` : "";
+      const warn = r.pixel_method === "none" || r.pixel_note || unmeasured(c) ? ` <span class="pw">!</span>` : "";
       h += `<tr class="r ${open ? "open" : ""}" data-i="${r.index}">`
          + `<td class="l"><div class="pct"><span>${pc(c.share)}</span><i style="width:${Math.max(1, 100 * c.share / (max || 1))}%"></i></div></td>`
          + `<td class="l"><span class="dot" style="background:${STAGE_COLORS[r.stage] || STAGE_COLORS.other}"></span>`

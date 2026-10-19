@@ -32,12 +32,12 @@ def stage_of(ev):
         return "other"
     if any(m in path for m in UI_MARKS) or shader.startswith("UI/"):
         return "ui"
-    if lm == "shadowcaster" or "shadow" in rt:
+    if lm == "shadowcaster" or ("shadow" in rt and not _fullscreen(ev)):
         return "shadow"
     if lm in ("depthonly", "depthnormals", "depthnormalsonly", "motionvectors") or "prepass" in path:
         return "prepass"
     if any(m in path for m in DEPTH_COPY) or "copydepth" in shader.lower():
-        return "prepass"
+        return "post"
     if "skybox" in path or shader.startswith("Skybox/"):
         return "opaque"
     if any(p in path for p in POST_MARKS) or _fullscreen(ev):
@@ -178,9 +178,14 @@ def match(events: list[Event], actions, counters=None):
 
     def assign(ev, sel):
         ps, vs, cs = total(sel, "ps_invocations"), total(sel, "vs_invocations"), total(sel, "cs_invocations")
+        unique = [a.get("unique_vertices") for a in sel]
+        if vs is not None and any(u is not None for u in unique):  # as a device frame: IDVS shades each index once
+            vs = sum(u * max(1, a.get("instances") or 1) if u is not None else a.get("vs_invocations") or 0
+                     for u, a in zip(unique, sel))
         gpu = total(sel, "gpu_duration")
         ev["rd"] = {"calls": len(sel), "events": [a["event"] for a in sel], "ps": ps, "vs": vs,
                     "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
+                    **({"vertex_method": "indices"} if any(u is not None for u in unique) else {}),
                     "samples": total(sel, "samples_passed"),
                     "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
         if sel[0].get("blocks"):  # the call's uniform bytes: SPIR-V loop bounds (core/loops.spirv_bounds)

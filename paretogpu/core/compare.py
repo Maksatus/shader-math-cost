@@ -250,7 +250,9 @@ def _measured(c):
 def model_vs_phone(pc, phone):
     """The PC snapshot's model against the phone's measured shader cost (core/device.shader_cost), per shader and draw
     stage on the phone's core: "colour" rows against the model's fragment cycles, whole-draw rows (one shader name only)
-    against the model's total. -> {"core", "frame": {"model", "phone"}, "rows"} or {"core", "error"}."""
+    against the model's total; a row's phone cycles = its unit deltas summed, as the model sums pipes. Frame: both
+    snapshots' totals by the same rules (shadows and depth apart, in "geometry").
+    -> {"core", "frame": {"model", "phone", "model_geometry", "phone_geometry"}, "rows"} or {"core", "error"}."""
     sc, core = _measured(phone), phone["hardware"]["core"]
     if core not in [x["name"] for x in pc.get("cores") or []]:
         return {"core": core, "error": "core_missing"}
@@ -265,15 +267,22 @@ def model_vs_phone(pc, phone):
         if s.get("error") or s["mode"] not in ("colour", "draw") or (s["mode"] == "draw" and len(s["names"]) != 1):
             continue
         k = (s["mode"], s["shader"], s.get("draw_stage"))
-        r = rows.setdefault(k, {"mode": k[0], "shader": k[1], "stage": k[2], "model": model.get(k), "exec": 0.0,
-                                "noise": 0.0, "pipes": 0.0})
+        have = [(k[0], k[1], st) for st in (k[2] or "").split("+") if (k[0], k[1], st) in model]
+        r = rows.setdefault(k, {"mode": k[0], "shader": k[1], "stage": k[2],
+                                "model": sum(model[x] for x in have) if have else None, "exec": 0.0,
+                                "noise": 0.0, "cycles": 0.0})
         r["exec"] += s["exec"]
         r["noise"] += s["noise"]
-        r["pipes"] += sum(s["pipes"].values())
+        r["cycles"] += frame_cost.knockout_cycles(s)
     rows = list(rows.values())
-    priced = sum(((r.get("cost") or {}).get(core) or {}).get("total") or 0.0
-                 for r in (pc.get("events") or []) + (pc.get("geometry") or []))
-    return {"core": core, "error": None, "frame": {"model": priced, "phone": sc["frame"]}, "rows": rows}
+
+    def total(c, part):
+        if part == "events":
+            return ((c.get("totals") or {}).get(core) or {}).get("total")
+        return sum(((r.get("cost") or {}).get(core) or {}).get("total") or 0.0 for r in c.get(part) or [])
+    return {"core": core, "error": None, "rows": rows,
+            "frame": {"model": total(pc, "events"), "phone": total(phone, "events"),
+                      "model_geometry": total(pc, "geometry"), "phone_geometry": total(phone, "geometry")}}
 
 
 def brief(cmp, n=3):

@@ -95,16 +95,25 @@ def depth_bytes(c, tid):
     return data
 
 
+def depth_layout(data, n):
+    """-> (bytes per texel, bytes of the depth texels) of GetTextureData's depth: D24S8 comes as a plane of 4-byte
+    depths then a plane of stencil bytes, D32S8 as 8 bytes a texel (float32 first), D16 / D32 packed."""
+    if len(data) == 5 * n:
+        return 4, 4 * n
+    return len(data) // n, len(data)
+
+
 def written(before, after, tex):
     """-> a bit per texel (little-endian bit order), 1 where the call changed the stored depth (sample 0); None if the
     layout is unknown."""
     n = tex.width * tex.height
-    if not n or len(after) != len(before) or len(after) % n:
+    if not n or len(after) != len(before):
         return None
-    size, name = len(after) // n, tex.format.Name()
-    depth = 4 if size >= 4 and name.startswith("D32") else size if size in (2, 4) else None
-    if depth is None:
+    size, plane = depth_layout(after, n)
+    if size not in (2, 4, 8):
         return None
+    depth = min(size, 4)
+    before, after = before[:plane], after[:plane]
     if before == after:
         return bytes((n + 7) // 8)
     t = time.time()
@@ -202,7 +211,9 @@ def changed_sums(before, after, plan, n, keepalive):
     if len(c0) != len(c1) or len(d0) != len(d1):
         return "the target changed size"
     texels = plan["texels"]
-    cs, ds = len(c1) // texels, len(d1) // texels
+    cs = len(c1) // texels
+    ds, plane = depth_layout(d1, texels) if d1 else (0, 0)
+    d0, d1 = d0[:plane], d1[:plane]
     values = Counter()
 
     def same(a, b):

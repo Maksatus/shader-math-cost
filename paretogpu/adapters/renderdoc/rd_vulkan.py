@@ -1,7 +1,8 @@
 """Pipeline state of every draw and dispatch of a Vulkan capture from its structured data, with no replay moves (a move
 costs ~0.2 s on a device). Imported inside qrenderdoc's python (stdlib, rd_spirv). Buffer contents = the memory's
-Initial Contents + the host writes (coherent map writes, flushes) and descriptor updates as events replay them; GPU
-writes to uniform or index memory inside the frame are not followed (none in Unity frames)."""
+Initial Contents + the host writes (coherent map writes, flushes), vkCmdUpdateBuffer / vkCmdCopyBuffer and descriptor
+updates as events replay them; shader writes to uniform or index memory are not followed (none in Unity frames).
+Indirect draws take their state here and their counts from the replay's action (no unique indices)."""
 import base64
 import hashlib
 from array import array
@@ -19,11 +20,15 @@ DYN_VIEWPORT, DYN_SCISSOR, DYN_DEPTH_BIAS = 0, 1, 3
 SETUP = {"vkCreateBuffer", "vkAllocateMemory", "vkBindBufferMemory", "vkCreateImageView", "vkCreateShaderModule",
          "vkCreateDescriptorSetLayout", "vkAllocateDescriptorSets", "vkCreateRenderPass", "vkCreateRenderPass2",
          "vkCreateFramebuffer", "vkCreateGraphicsPipelines", "vkCreateComputePipelines", "Internal::Initial Contents"}
+DRAWS = {"vkCmdDraw", "vkCmdDrawIndexed", "vkCmdDrawIndirect", "vkCmdDrawIndexedIndirect", "vkCmdDrawIndirectCount",
+         "vkCmdDrawIndexedIndirectCount", "vkCmdDrawIndirectCountKHR", "vkCmdDrawIndexedIndirectCountKHR"}
+DISPATCHES = {"vkCmdDispatch", "vkCmdDispatchIndirect"}
 EVENTS = {"vkUpdateDescriptorSetWithTemplate", "vkUpdateDescriptorSets", "Internal::Coherent Mapped Memory Write",
           "vkFlushMappedMemoryRanges", "vkBeginCommandBuffer", "vkCmdBeginRenderPass", "vkCmdBeginRenderPass2",
           "vkCmdNextSubpass", "vkCmdNextSubpass2", "vkCmdEndRenderPass", "vkCmdEndRenderPass2", "vkCmdBindPipeline",
           "vkCmdBindDescriptorSets", "vkCmdBindVertexBuffers", "vkCmdBindIndexBuffer", "vkCmdSetViewport",
-          "vkCmdSetScissor", "vkCmdSetDepthBias", "vkCmdDraw", "vkCmdDrawIndexed", "vkCmdDispatch"}
+          "vkCmdSetScissor", "vkCmdSetDepthBias", "vkCmdUpdateBuffer", "vkCmdCopyBuffer", "vkCmdBeginRendering",
+          "vkCmdBeginRenderingKHR", "vkCmdEndRendering", "vkCmdEndRenderingKHR"} | DRAWS | DISPATCHES
 INDEX = {0: ("H", 0xFFFF), 1: ("I", 0xFFFFFFFF), 1000265000: ("B", 0xFF)}
 
 
@@ -52,7 +57,7 @@ class Frame:
     def __init__(self):
         self.buffers, self.memory, self.views, self.modules, self.layouts = {}, {}, {}, {}, {}
         self.set_layout, self.sets, self.passes, self.framebuffers, self.pipelines = {}, {}, {}, {}, {}
-        self.calls, self.render, self.reflected = {}, None, {}
+        self.calls, self.render, self.target, self.reflected = {}, None, None, {}
         self.reset()
 
     def reset(self):
@@ -136,10 +141,22 @@ class Frame:
         elif name in ("vkCmdBeginRenderPass", "vkCmdBeginRenderPass2"):
             b = c["RenderPassBegin"]
             self.render = [b["renderPass"], b["framebuffer"], 0]
+            self._subpass()
         elif name in ("vkCmdNextSubpass", "vkCmdNextSubpass2"):
             self.render[2] += 1
-        elif name in ("vkCmdEndRenderPass", "vkCmdEndRenderPass2"):
-            self.render = None
+            self._subpass()
+        elif name in ("vkCmdBeginRendering", "vkCmdBeginRenderingKHR"):
+            ri = c["pRenderingInfo"]
+            views = [a["imageView"] for a in ri["pColorAttachments"] or []] +                     [a["resolveImageView"] for a in ri["pColorAttachments"] or []]
+            depth = (ri.get("pDepthAttachment") or {}).get("imageView")
+            self.target = ([self.views[v] for v in views if v], self.views.get(depth) if depth else None)
+        elif name in ("vkCmdEndRenderPass", "vkCmdEndRenderPass2", "vkCmdEndRendering", "vkCmdEndRenderingKHR"):
+            self.render = self.target = None
+        elif name == "vkCmdUpdateBuffer":
+            self.write(c["destBuffer"], c["destOffset"], c["pData"])
+        elif name == "vkCmdCopyBuffer" and self.buffers[c["srcBuffer"]]["memory"] in self.memory:
+            for r in c["pRegions"]:
+                self.write(c["destBuffer"], r["dstOffset"], self.read(c["srcBuffer"], r["srcOffset"], r["size"]))
         elif name == "vkCmdBindPipeline":
             self.bound[c["pipelineBindPoint"]] = c["pipeline"]
         elif name == "vkCmdBindDescriptorSets":
@@ -162,10 +179,23 @@ class Frame:
             self.scissor = c["pScissors"][0]
         elif name == "vkCmdSetDepthBias":
             self.bias = [c["depthBias"], c["depthBiasClamp"], c["slopeScaledDepthBias"]]
-        elif name in ("vkCmdDraw", "vkCmdDrawIndexed"):
+        elif name in DRAWS:
             self.calls[eid] = self._draw(name, c)
-        elif name == "vkCmdDispatch":
+        elif name in DISPATCHES:
             self.calls[eid] = self._dispatch(c)
+
+    def _subpass(self):
+        rp, fb, sub = self.render
+        colors, resolves, depth_ref = self.passes[rp][sub]
+        images = self.framebuffers[fb]
+        self.target = ([images[a] for a in colors + resolves if a != UNUSED],  # as RenderDoc's output targets
+                       images[depth_ref] if depth_ref != UNUSED else None)
+
+    def write(self, buf, offset, data):
+        b = self.buffers[buf]
+        if b["memory"] in self.memory:
+            at = b["offset"] + offset
+            self.memory[b["memory"]][at:at + len(data)] = data
 
     def read(self, buf, offset, size):
         """-> bytes of a buffer at the current point, cut at its end (as GetBufferData)."""
@@ -205,11 +235,7 @@ class Frame:
         pipe = self.bound[0]
         ci = self.pipelines[pipe]
         stages = self._stages(pipe)
-        rp, fb, sub = self.render
-        colors, resolves, depth_ref = self.passes[rp][sub]
-        images = self.framebuffers[fb]
-        outs = [images[a] for a in colors + resolves if a != UNUSED]  # as RenderDoc's output targets
-        depth = images[depth_ref] if depth_ref != UNUSED else None
+        outs, depth = self.target
         cb = ci.get("pColorBlendState") or {}
         att = (cb.get("pAttachments") or [None])[0]
         ds = ci.get("pDepthStencilState") or {}
@@ -222,7 +248,7 @@ class Frame:
             bias = self.bias if DYN_DEPTH_BIAS in dyn else [rs["depthBiasConstantFactor"], rs["depthBiasClamp"],
                                                             rs["depthBiasSlopeFactor"]]
         bindings = sorted(self.vbs)
-        indexed = name == "vkCmdDrawIndexed"
+        indexed = "Indexed" in name
         state = {
             "pipeline": pipe, "stages": stages, "blocks": self._blocks(0, stages), "outs": outs, "depth": depth,
             "blend": (f"{BLEND[att['srcColorBlendFactor']] if att['srcColorBlendFactor'] < len(BLEND) else 'One'} "
@@ -241,7 +267,7 @@ class Frame:
                        "zwrite": bool(ds.get("depthWriteEnable")),
                        "topology": ci["pInputAssemblyState"]["topology"]},
             "unique_vertices": None}
-        if indexed and c["indexCount"] and self.ib and self.ib[2] in INDEX:
+        if indexed and c.get("indexCount") and self.ib and self.ib[2] in INDEX:
             code, restart = INDEX[self.ib[2]]
             idx = array(code)
             raw = self.read(self.ib[0], self.ib[1] + c["firstIndex"] * idx.itemsize, c["indexCount"] * idx.itemsize)
@@ -256,7 +282,7 @@ class Frame:
         stages = self._stages(pipe)
         module, entry = stages["comp"]
         return {"pipeline": pipe, "stages": stages, "blocks": self._blocks(1, stages),
-                "groups": [c["x"], c["y"], c["z"]],
+                "groups": [c["x"], c["y"], c["z"]] if "x" in c else [None, None, None],
                 "group_size": self.interface(module, entry)["local_size"]}
 
 

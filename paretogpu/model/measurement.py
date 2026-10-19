@@ -6,8 +6,8 @@ PIPES = ("arith", "fma", "cvt", "sfu", "ls", "v", "t")  # short names of malioc'
 
 @dataclass(frozen=True)
 class PipeModel:
-    """Price = busiest pipe on the path; `arith` may split into arith_sub pipes that name the bound; all IDVS vertex
-    variants (position, varying) run per vertex."""
+    """Price = sum of the pipes on the path (core/pricing.pipe_cycles), the busiest one names the bound; `arith` may
+    split into arith_sub pipes; all IDVS vertex variants (position, varying) run per vertex."""
     pipes: tuple          # in the order bounds are named
     arith: str = None
     arith_sub: tuple = ()

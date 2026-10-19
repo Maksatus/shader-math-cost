@@ -90,18 +90,18 @@ function modelVsPhone(m) {
   if (m.error) return `<div class="card"><h2>Модель ПК и замер телефона</h2><p class="muted">Snapshot ${pcSide} (ПК) посчитан без ядра ${esc(m.core)} телефона: пересчитайте его с этим ядром.</p></div>`;
   const ratio = (a, b) => a != null && b > 0 ? `×${(a / b).toFixed(2)}` : "—";
   const MODE = {colour: "цвет пиксельного шейдера", draw: "draw целиком"};
-  const rows = [...m.rows].sort((a, b) => b.exec - a.exec);
-  const off = r => r.model != null && r.exec > r.noise && (r.model / r.exec > 1.5 || r.model / r.exec < 0.67);
+  const rows = [...m.rows].sort((a, b) => b.cycles - a.cycles);
+  const off = r => r.model != null && r.cycles > 0 && (r.model / r.cycles > 1.5 || r.model / r.cycles < 0.67);
   return `<div class="card"><h2>Модель ПК и замер телефона <small>${esc(m.core)}</small></h2>
     <p>Snapshot ${pcSide} — расчёт на ПК, snapshot ${phSide} — замер на телефоне подменой шейдеров. Так проверяется модель: те же шейдеры, расчёт против железа.
     Сцены должны совпадать (ракурс, толпа), иначе разница — ещё и объём работы.</p>
-    <div class="kpis"><div class="kpi"><div class="k">Модель ПК, frame</div><div class="v">${M(m.frame.model)}</div><div class="s">млн циклов, с тенями</div></div>
-      <div class="kpi"><div class="k">Телефон, frame</div><div class="v">${M(m.frame.phone)}</div><div class="s">млн циклов ядер</div></div>
+    <div class="kpis"><div class="kpi"><div class="k">Модель ПК, frame</div><div class="v">${M(m.frame.model)}</div><div class="s">млн циклов, без теней и depth (${M(m.frame.model_geometry)})</div></div>
+      <div class="kpi"><div class="k">Телефон, frame</div><div class="v">${M(m.frame.phone)}</div><div class="s">замер по тем же правилам, тени и depth ${M(m.frame.phone_geometry)}</div></div>
       <div class="kpi"><div class="k">Модель / телефон</div><div class="v">${ratio(m.frame.model, m.frame.phone)}</div><div class="s">&nbsp;</div></div></div>
     <table style="margin-top:12px"><tr><th>Shader</th><th>Что</th><th>Стадия</th><th class="n">Модель ПК</th><th class="n">Phone</th><th class="n">± замера</th><th class="n">Модель / телефон</th></tr>
-    ${rows.map(r => `<tr><td><b>${esc(r.shader)}</b></td><td class="muted">${MODE[r.mode] || r.mode}</td><td>${esc(STAGE[r.stage] || r.stage || "")}</td>
-      <td class="n">${r.model == null ? "нет в ПК" : M(r.model)}</td><td class="n"><b>${M(r.exec)}</b></td><td class="n muted">${M(r.noise)}</td>
-      <td class="n ${off(r) ? "bad" : ""}">${r.exec > r.noise ? ratio(r.model, r.exec) : "шум"}</td></tr>`).join("")}</table>
-    <p class="small muted" style="margin-top:8px">млн циклов на ядре телефона. Красным — модель ошибается больше чем в 1.5 раза. «Draw целиком» — только vertex шейдеры одного шейдера Unity; общий полноэкранный vertex шейдер post-process не сравнивается.</p></div>`;
+    ${rows.map(r => `<tr><td><b>${esc(r.shader)}</b></td><td class="muted">${MODE[r.mode] || r.mode}</td><td>${esc(String(r.stage || "").split("+").map(x => STAGE[x] || x).join(" + "))}</td>
+      <td class="n">${r.model == null ? "нет в ПК" : M(r.model)}</td><td class="n"><b>${M(r.cycles)}</b></td><td class="n muted">${M(r.noise)}</td>
+      <td class="n ${off(r) ? "bad" : ""}">${r.cycles > 0 ? ratio(r.model, r.cycles) : "шум"}</td></tr>`).join("")}</table>
+    <p class="small muted" style="margin-top:8px">млн циклов на ядре телефона: сумма units (арифметика, LS, текстуры, varying), как в модели; «± замера» — разброс Execution core active. Красным — модель ошибается больше чем в 1.5 раза. «Draw целиком» — только vertex шейдеры одного шейдера Unity; общий полноэкранный vertex шейдер post-process не сравнивается.</p></div>`;
 }
 VIEWS.compare = renderCompare;

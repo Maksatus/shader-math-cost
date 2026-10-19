@@ -140,8 +140,9 @@ def _position_only(recs, core):
     return {**recs, core: {**rec, "variants": {"position": rec["variants"]["position"]}}}
 
 
-def _price_draw(row, recs, counts, loop_data):
-    """recs with "vertex" alone (device depth-only draw): pixel price 0."""
+def _price_draw(row, recs, counts, loop_data, shaded):
+    """recs with "vertex" alone (device depth-only draw): pixel price 0. shaded: the draw ran fragment threads at all
+    (before Forward Pixel Kill, which leaves the varying shading in place)."""
     row["files"] = {s: next(iter(r.values()))["file"] for s, r in recs.items()}
     ff, fv = row["files"].get("fragment"), row["files"]["vertex"]
     n = {"fragment": counts.at(ff) if ff else 0, "vertex": counts.at(fv)}
@@ -151,7 +152,7 @@ def _price_draw(row, recs, counts, loop_data):
             continue
         if ff:
             d = price_draw(recs, row["files"], c, n, loop_data)
-            if not row["pixels"]:  # a PC frame's depth-only draw keeps the variant's empty fragment shader
+            if not shaded:  # a PC frame's depth-only draw keeps the variant's empty fragment shader
                 d["vtx"] = price(_position_only(recs["vertex"], c), fv, c, n["vertex"], loop_data)
         else:
             v = price(_position_only(recs["vertex"], c), fv, c, n["vertex"], loop_data)
@@ -232,7 +233,8 @@ def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
         if recs and "compute" in recs:
             found_cores.update(_price_compute(row, recs, counts, loop_data))
         elif recs and (len(recs) == 2 or (set(recs) == {"vertex"} and not why)):
-            found_cores.update(_price_draw(row, recs, counts, loop_data))
+            ps = (ev.get("rd") or {}).get("ps_invocations")
+            found_cores.update(_price_draw(row, recs, counts, loop_data, bool(row["pixels"] if ps is None else ps)))
         else:
             missing.append({"index": ev["index"], "kind": ev["kind"], "stage": ev["stage"], "object": row["object"],
                             "shader": row["shader"], "pass": row["pass"], "reason": why or "not measured"})
@@ -341,11 +343,17 @@ def summary(c: CostRun) -> CostSummary:
 BOUND = {"A": "arith", "LS": "ls", "T": "t", "V": "v"}
 
 
+def knockout_cycles(s):
+    """A knocked-out shader's cycles: the sum of its unit deltas, as the model sums pipes; a unit below 0 is noise."""
+    return sum(max(0.0, v or 0.0) for v in s["pipes"].values())
+
+
 def measured(c, sc, events, core):
     """Phone snapshot: the cost of each event on `core` from the shader knockout (sc, shader_cost) in place of the
-    model. A shader's cycles (busiest unit) go to its draws by pixels; a vertex shader's whole-draw cycles beyond the
-    fragment part of those draws go to them by vertices, or to their pixels when a draw has more pixels than vertices. Unmeasured events -> "missing"; Mali tile rows dropped.
-    -> False when nothing was measured."""
+    model, by the model's rules (pipe sum, geometry apart, Mali tile rows as modelled). A shader's cycles go to its
+    draws by pixels; a vertex shader's whole-draw cycles beyond the fragment part of those draws go to them by vertices,
+    or to their pixels when a draw has more pixels than vertices. A part the knockout did not measure above 0 keeps
+    the model's price, cost["unmeasured"] says which and why. -> False when nothing was measured."""
     if not sc or sc.get("error") or not any(not s.get("error") for s in sc.get("shaders") or []):
         return False
     rows = [r for r in c["events"] + c["geometry"] if r["kind"] != "tile"]
@@ -361,39 +369,70 @@ def measured(c, sc, events, core):
         k = max(s["pipes"], key=s["pipes"].get, default=None)
         return [BOUND.get(k, k)] if k and s["pipes"][k] > 0 else []
 
-    frag, vert, fb, vb = {}, {}, {}, {}
+    def model(i, part):
+        return ((by[i]["cost"].get(core) or {}).get(part)) or 0.0
+
+    frag, vert, fb, vb, why = {}, {}, {}, {}, {}
     for mode, acc, bound in (("colour", frag, fb), ("draw", vert, vb)):
+        part = "fragment" if mode == "colour" else "vertex"
         for s in sc["shaders"]:
             idx = sorted({calls[e] for e in s["events"] if e in calls})
-            if s.get("error") or s["mode"] != mode or not idx:
+            if s["mode"] != mode or not idx:
                 continue
-            v = max(s["pipes"].values(), default=0.0) if sum(s["pipes"].values()) > 0 else 0.0  # below 0: noise
+            if s.get("error"):
+                for i in idx:
+                    why.setdefault((i, part), s["error"])
+                continue
+            v = knockout_cycles(s)
             if mode == "draw":
-                v = max(0.0, v - sum(frag.get(i, 0.0) for i in idx))
+                v -= sum(frag[i] if i in frag else model(i, "fragment") for i in idx)
+            if v <= 0:
+                for i in idx:
+                    why.setdefault((i, part), "noise")
+                continue
             for i, x in share(v, idx, "pixels" if mode == "colour" else "vertices").items():
                 acc[i] = acc.get(i, 0.0) + x
                 bound[i] = busiest(s)
-    priced, missing = [], []
+    priced, missing, fallback = [], [], 0.0
     for r in rows:
         i = r["index"]
-        if i not in frag and i not in vert:
-            missing.append({"index": i, "kind": r["kind"], "stage": r["stage"], "object": r["object"],
-                            "shader": r["shader"], "pass": r["pass"], "reason": "не замерен на телефоне"})
+        m = r["cost"].get(core)
+        if i not in frag and i not in vert and not m:
+            r["cost"] = {}
+            priced.append(r)
             continue
-        f, v = frag.get(i, 0.0), vert.get(i, 0.0)
-        if r["pixels"] >= r["vertices"]:  # a fullscreen draw: the rest of its draw is raster work, not its vertices
-            f, v = f + v, 0.0
-        r.pop("geometry", None)
-        r["cost"] = {core: {"px_price": f / r["pixels"] if r["pixels"] else None,
-                            "vtx_price": v / r["vertices"] if r["vertices"] else None,
-                            "px_bound": fb.get(i, []), "vtx_bound": vb.get(i, []), "px_path": None, "vtx_path": None,
-                            "fragment": f, "vertex": v, "compute": 0.0, "total": f + v, "flags": [],
-                            "px_regs": None, "vtx_regs": None, "px_fp16": None}}
-        r["loop"] = None
+        x = dict(m or {"px_price": None, "vtx_price": None, "px_bound": [], "vtx_bound": [], "px_path": None,
+                       "vtx_path": None, "fragment": 0.0, "vertex": 0.0, "compute": 0.0, "flags": [],
+                       "px_regs": None, "vtx_regs": None, "px_fp16": None})
+        if i in frag:
+            x.update(fragment=frag[i], px_bound=fb[i])
+        if i in vert:
+            x.update(vertex=vert[i], vtx_bound=vb[i])
+            if r["pixels"] >= r["vertices"]:  # a fullscreen draw: the rest of its draw is raster work, not vertices
+                x.update(fragment=x["fragment"] + vert[i], vertex=0.0)
+        x["px_price"] = x["fragment"] / r["pixels"] if r["pixels"] else None
+        x["vtx_price"] = x["vertex"] / r["vertices"] if r["vertices"] else None
+        x["total"] = x["fragment"] + x["vertex"]
+        x["unmeasured"] = {p: why.get((i, p), "not_swapped") for p, done in
+                           (("fragment", i in frag or not r["pixels"]), ("vertex", i in vert or i in frag
+                                                                          and r["pixels"] >= r["vertices"]))
+                           if not done and (m or {}).get(p)}
+        if not r.get("geometry"):
+            fallback += sum((m or {}).get(p) or 0.0 for p in x["unmeasured"])
+        r["cost"] = {core: x}
         priced.append(r)
-    priced.sort(key=lambda r: -r["cost"][core]["total"])
-    c.update({"events": priced, "geometry": [], "missing": missing, "main_core": core,
+    done = {r["index"] for r in priced}
+    missing = [x for x in c["missing"] if x["index"] not in done]
+    events_ = [r for r in priced if not r.get("geometry")] + [r for r in c["events"] if r["kind"] == "tile"]
+    for r in events_:
+        if r["kind"] == "tile":
+            r["cost"] = {core: r["cost"][core]} if core in r["cost"] else {}
+    geometry = [r for r in priced if r.get("geometry")]
+    events_.sort(key=lambda r: -(r["cost"].get(core) or {}).get("total", 0.0))
+    c.update({"events": events_, "geometry": geometry, "missing": missing, "main_core": core,
               "cores": [x for x in c["cores"] if x["name"] == core] or [{"name": core, "arch": None}],
-              "totals": _totals(priced, [core]), "groups": {core: groups(priced, core)},
-              "measured": sc.get("source") or "renderdoc"})
+              "totals": _totals(events_, [core]), "groups": {core: groups(events_, core)},
+              "measured": sc.get("source") or "renderdoc",
+              "measured_fallback": {"events": sum(1 for r in events_ if (r["cost"].get(core) or {}).get("unmeasured")),
+                                    "cycles": fallback}})
     return True

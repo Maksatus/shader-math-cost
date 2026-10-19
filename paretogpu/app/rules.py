@@ -156,7 +156,7 @@ class CompileRule(Rule):
 
 
 class _Hashes:
-    """sha1 per file, read once (a file is measured on several cores)."""
+    """sha1 of the code malioc measures (_source) per file, read once (a file is measured on several cores)."""
 
     def __init__(self, root):
         self.root, self.done, self.lock = root, {}, threading.Lock()
@@ -165,8 +165,8 @@ class _Hashes:
         with self.lock:
             h = self.done.get(rel)
         if h is None:
-            with open(os.path.join(self.root, rel), "rb") as f:
-                h = hashlib.sha1(f.read()).hexdigest()
+            src = _source(os.path.join(self.root, rel))
+            h = hashlib.sha1(src if isinstance(src, bytes) else src.encode()).hexdigest()
             with self.lock:
                 self.done[rel] = h
         return h

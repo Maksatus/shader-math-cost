@@ -34,6 +34,13 @@ class RenderDocMatchTest(unittest.TestCase):
         self.assertIsNone(rd["vs_invocations"])
         self.assertIsNone(rd["cs_invocations"])
 
+    def test_vertices_are_unique_indices(self):
+        evs = [draw(0, "Cam/Opaque", 12, calls=2)]
+        acts = [{**action(10, "Cam/Opaque", 6, instances=3), "vs_invocations": 20, "unique_vertices": 4},
+                {**action(11, "Cam/Opaque", 6), "vs_invocations": 6}]
+        renderdoc.match(evs, acts, ["vs_invocations"])
+        self.assertEqual((evs[0]["rd"]["vs_invocations"], evs[0]["rd"]["vertex_method"]), (18, "indices"))
+
     def test_without_counter_list_old_behaviour(self):
         evs = [draw(0, "Cam/Opaque", 6)]
         renderdoc.match(evs, [action(10, "Cam/Opaque", 6, ps=100)])
@@ -101,9 +108,11 @@ class StageTest(unittest.TestCase):
                self.ev("(RP 3:0) Draw Fog", "Hidden/FogOpaque"),
                self.ev("(RP 4:0) Bloom", "Hidden/Bloom"),
                self.ev("DrawScreenSpaceUI/GUI.Repaint", "Hidden/TextCore/Distance Field SSD", 148,
-                       blend="SrcAlpha OneMinusSrcAlpha")]
+                       blend="SrcAlpha OneMinusSrcAlpha"),
+               self.ev("(RP 5:0) Resolve Shadows", "Hidden/ScreenSpaceShadows", rt="_ScreenSpaceShadowmapTexture"),
+               self.ev("(RP 6:0) Main Light Shadow", "Lit", 900, rt="_MainLightShadowmapTexture")]
         self.assertEqual([e["stage"] for e in renderdoc.assign_stages(evs)],
-                         ["opaque", "opaque", "opaque", "prepass", "post", "post", "ui"])
+                         ["opaque", "opaque", "opaque", "post", "post", "post", "ui", "post", "shadow"])
 
 
 class MaliocTest(unittest.TestCase):

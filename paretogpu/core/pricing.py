@@ -40,12 +40,13 @@ def combined(rec: Measurement, model: PipeModel = MALI):
 
 def pipe_cycles(c, model: PipeModel = MALI):
     """-> (sum of the pipes' cycles, [busiest pipes]). Bifrost reports only 'arith'; on Valhall+ 'arith' is the total and
-    fma / cvt / sfu its breakdown, named as the busiest when equal to it."""
+    fma / cvt / sfu its breakdown, named as the busiest when equal to it. malioc's arith is never below its busiest
+    part; per-pipe loop interpolation (core/loops.cycles_at) can put it there, so it is raised to it."""
     arith = model.arith
     vals = {p: c[p] for p in model.pipes if c.get(p) is not None}
     sub = {p: vals.pop(p) for p in model.arith_sub if p in vals}
-    if arith not in vals and sub:
-        vals[arith] = max(sub.values())
+    if sub:
+        vals[arith] = max(vals.get(arith, 0.0), *sub.values())
     if not vals:
         return 0.0, []
     top = max(vals.values())

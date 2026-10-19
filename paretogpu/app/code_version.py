@@ -1,17 +1,18 @@
-"""frame_cost.json "code_version": hash of the pricing files' ASTs without docstrings (comments don't change it,
-formulas do); runs of different versions are not comparable."""
+"""frame_cost.json "code_version": hash of the ASTs of every module the price depends on (DIRS), without docstrings
+(comments don't change it, formulas do); runs of different versions are not comparable."""
 import ast
 import functools
 import hashlib
 import os
 
 PACKAGE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FILES = ("core/frame_cost.py", "core/pricing.py", "core/loops.py", "core/pixels.py", "core/events.py",
-         "core/memory.py", "core/ubo.py", "core/variants.py", "core/device.py", "model/measurement.py", "model/cores.py",
-         "model/variant.py", "app/cost.py", "app/variants.py", "app/rules.py", "app/frame_draws.py", "core/quads.py",
-         "app/frame_memory.py", "app/device.py", "adapters/malioc.py", "adapters/gpu.py",
-         "adapters/renderdoc/rd_draws.py", "adapters/renderdoc/rd_vulkan.py",
-         "adapters/renderdoc/rd_memory.py")
+DIRS = ("core", "model", "app", "adapters")
+
+
+def files(root=PACKAGE):
+    return sorted(os.path.relpath(os.path.join(d, f), root).replace(os.sep, "/")
+                  for top in DIRS for d, _, names in os.walk(os.path.join(root, top)) for f in names
+                  if f.endswith(".py"))
 
 
 def _strip_docstrings(tree):
@@ -23,9 +24,9 @@ def _strip_docstrings(tree):
     return tree
 
 
-def of(files=FILES, root=PACKAGE):
+def of(rels=None, root=PACKAGE):
     h = hashlib.sha1()
-    for rel in files:
+    for rel in rels if rels is not None else files(root):
         with open(os.path.join(root, rel), encoding="utf-8") as f:
             tree = _strip_docstrings(ast.parse(f.read()))
         h.update(rel.encode() + b"\0" + ast.dump(tree).encode() + b"\0")

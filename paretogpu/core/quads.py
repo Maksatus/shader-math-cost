@@ -5,9 +5,9 @@ triangles; validated against
 Mali's own counters (quads past early ZS within 0.3%, Samples Passed within 0.01% on VATyakov K31_Heavy, MSAA and not).
 Samples per draw are returned to check against the capture's Samples Passed (stencil is not modelled; a discarding
 draw stores depth only where the capture's depth changed, its "written" mask from rd_draws).
-Opaque draws (count(visible=...)): Mali's Forward Pixel Kill drops queued fragments a later opaque draw covers, so their
-quads count only where the fragment is the one left at the end of the render pass (its depth = the pass's final depth);
-Pixel 7 shader knockouts: vat crowd model / phone 2.26 -> 1.11."""
+Every quad past the depth test at its draw counts, Forward Pixel Kill is not modelled (the worst case): on a Galaxy S21
+it drops nearly all the overdraw of large triangles but under half of a crowd of small ones (2026-10-19 test scenes:
+VATyakov opaque pass model 5.39 M vs Fragment threads 5.25 M; with every hidden quad killed the model gave 3.08 M)."""
 import bisect
 import re
 
@@ -130,10 +130,9 @@ def _unordered(u):
     return np.where(u >> 31, u & np.uint32(0x7FFFFFFF), ~u).astype(np.uint32).view(np.float32)
 
 
-def _raster(batch, x, y, depth, tl, box, w, h, ns, z, func, sign, steps, zclip, zwrite, written=None, final=None):
+def _raster(batch, x, y, depth, tl, box, w, h, ns, z, func, sign, steps, zclip, zwrite, written=None):
     """One batch of triangles in draw order -> (pixels, quads, samples); writes z. A sample's depth test sees the
-    float32 depth every earlier triangle of the batch stored there (a running maximum: larger = closer). final: only
-    samples whose float32 depth reaches this buffer count."""
+    float32 depth every earlier triangle of the batch stored there (a running maximum: larger = closer)."""
     import numpy as np
     x0, x1, y0, y1 = (b[batch] for b in box)
     bw = x1 - x0
@@ -167,7 +166,7 @@ def _raster(batch, x, y, depth, tl, box, w, h, ns, z, func, sign, steps, zclip, 
             keep = (zz * sign >= 0) & (zz * sign <= 1)
             hit, zz = hit[keep], zz[keep]
         passed = np.ones(len(hit), dtype=bool)
-        if steps and (z is not None or final is not None):
+        if steps and z is not None:
             zz = sign * np.round(np.clip(zz * sign, 0, 1) * steps) / steps
         if func == "Never":
             passed[:] = False
@@ -202,8 +201,6 @@ def _raster(batch, x, y, depth, tl, box, w, h, ns, z, func, sign, steps, zclip, 
                     z[s, kp[last]] = zp[last]
                 else:
                     np.maximum.at(z[s], kp, zp)
-        if final is not None:
-            passed &= zz.astype(np.float32) >= final[s, k[hit]]
         samples_n += int(passed.sum())
         shaded[hit[passed]] = True
     ks, ts = k[shaded], tri[shaded]
@@ -242,13 +239,11 @@ def triangles(meta, blob):
     return out, np.concatenate(parts) if parts else np.zeros((0, 3, 4), np.float32)
 
 
-def count(meta, tris, actions, visible=()):
-    """meta: triangles()' {eid: info}, tris: float32 [n, 3, 4], actions: the capture's [{"event", "name"}], visible:
-    eids of opaque draws (see the module doc). -> {eid: {"pixels", "quads", "samples"}} in frame order, a visible
-    draw's "quads" those left at the end of its pass ("drawn": past the depth test); errors pass through."""
+def count(meta, tris, actions):
+    """meta: triangles()' {eid: info}, tris: float32 [n, 3, 4], actions: the capture's [{"event", "name"}]
+    -> {eid: {"pixels", "quads", "samples"}} in frame order; errors pass through."""
     import numpy as np  # only this step needs it (pyproject: numpy)
     zbufs, out, done = {}, {}, set()
-    later, finals, cur = {}, {}, None
     begins, clears = passes(actions)
     for eid in sorted(meta, key=int):
         m = meta[eid]
@@ -259,9 +254,6 @@ def count(meta, tris, actions, visible=()):
         ns = m["samples"] if m["samples"] in PATTERN else 1
         # a clear of this draw's pass (its load op, or a clear inside it before the draw) resets its depth target
         b = begins[bisect.bisect_right(begins, int(eid)) - 1] if begins and begins[0] <= int(eid) else 0
-        if b != cur:
-            _keep_finals(later, finals, cur, zbufs)
-            cur = b
         for c in clears[bisect.bisect_left(clears, b):bisect.bisect_left(clears, int(eid))]:
             if c not in done:
                 done.add(c)
@@ -310,22 +302,4 @@ def count(meta, tris, actions, visible=()):
                               m["zwrite"], written)
             px_n, quads_n, samples_n = px_n + p, quads_n + q, samples_n + n
         out[eid] = {"pixels": px_n, "quads": quads_n, "samples": samples_n}
-        if eid in visible and z is not None and not one:
-            later.setdefault(cur, []).append((eid, m["depth"], (x, y, depth, tl, (x0, x1, y0, y1), w, h, ns), live, size,
-                                              (sign, steps, zclip)))
-    _keep_finals(later, finals, cur, zbufs)
-    for eid, final, (x, y, depth, tl, box, w, h, ns), live, size, (sign, steps, zclip) in finals.values():
-        q = sum(_raster(batch, x, y, depth, tl, box, w, h, ns, None, "AlwaysTrue", sign, steps, zclip, False,
-                        final=final)[1] for batch in _batches(live, size, BATCH))
-        out[eid] = {**out[eid], "quads": q, "drawn": out[eid]["quads"]}
     return out
-
-
-def _keep_finals(later, finals, b, zbufs):
-    """At the end of render pass b: its visible draws get a copy of their depth target as it is now."""
-    copies = {}
-    for eid, d, *rest in later.pop(b, []):
-        if d not in copies:
-            copies[d] = zbufs[d].copy() if d in zbufs else None
-        if copies[d] is not None:
-            finals[eid] = (eid, copies[d], *rest)

@@ -134,6 +134,8 @@ class Snapshot(unittest.TestCase):
                           (30, "Uber PP", 1, 60.0, 0.0, 50)])
         self.assertEqual((h["model"], h["exec"]), (880.0, 1350))
         self.assertEqual(h["passes"][1]["shaders"], {"S1": 1, "S0": 1})
+        geo = device.hardware(dev, FRAME["actions"], self.ev, [dict(rows[0], geometry=True)] + rows[1:], "Mali-G78")
+        self.assertEqual((geo["model"], geo["exec"], geo["exec_geometry"]), (780.0, 950, 400))
         crashed = device.hardware({"mali": {"names": [], "passes": {}, "error": "crashed"}}, FRAME["actions"],
                                   self.ev, rows, "Mali-G78")
         self.assertEqual((crashed["error"], crashed["passes"]), ("crashed", []))

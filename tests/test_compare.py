@@ -132,8 +132,9 @@ class Compare(unittest.TestCase):
              "noise": 5.0, "pipes": {"A": 1.0}}]}
         phone = run([event(0, "S", 100, 1.0)], frame_dir="P", hardware={"core": CORE, "shader_cost": sc})
         m = compare.compare(pc, phone)["model_vs_phone"]
-        self.assertEqual((m["phone"], m["frame"]), ("b", {"model": 300.0, "phone": 900.0}))
-        self.assertEqual([(r["mode"], r["model"], r["exec"]) for r in m["rows"]], [("colour", 300.0, 150.0)])
+        self.assertEqual((m["phone"], m["frame"]["model"], m["frame"]["phone"]), ("b", 300.0, 100.0))
+        self.assertEqual([(r["mode"], r["model"], r["exec"], r["cycles"]) for r in m["rows"]],
+                         [("colour", 300.0, 150.0, 200.0)])
         self.assertEqual(compare.compare(phone, pc)["model_vs_phone"]["phone"], "a")
         other = run([event(0, "S", 100, 1.0)], cores=[{"name": "Mali-G52"}])
         self.assertEqual(compare.compare(other, phone)["model_vs_phone"]["error"], "core_missing")

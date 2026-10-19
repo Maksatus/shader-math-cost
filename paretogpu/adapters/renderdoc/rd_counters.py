@@ -58,7 +58,8 @@ def main():
                 actions.append({"event": a.eventId, "name": name, "path": "/".join(path), "kinds": kinds,
                                 "indices": a.numIndices, "instances": a.numInstances,
                                 **counters.get(a.eventId, {}),
-                                **({"blocks": calls[a.eventId]["blocks"]} if {"draw", "dispatch"} & set(kinds) else {})})
+                                **({"blocks": calls[a.eventId]["blocks"]} if {"draw", "dispatch"} & set(kinds) else {}),
+                                **({"unique_vertices": calls[a.eventId]["unique_vertices"]} if "draw" in kinds else {})})
 
     walk(controller.GetRootActions(), [])
     with open(out_path, "w", encoding="utf-8") as f:

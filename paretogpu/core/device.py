@@ -167,7 +167,8 @@ PIPES = {"A": "Arithmetic unit issue cycles", "LS": "Load/store unit issue cycle
 def hardware(dev, actions, events, rows, core):
     """The phone's Mali counters per render pass (dev["mali"], rd_device.py) beside the model's cycles of the same pass
     on the phone's core: draws by their first call, Mali tile rows by their pass. No correction either way.
-    -> {"core", "names", "passes": [{"event", "name", "draws", "model", "tile", "hw"}], "model", "exec"} or None."""
+    -> {"core", "names", "passes": [{"event", "name", "draws", "model", "tile", "hw"}], "model", "exec",
+    "exec_geometry"} or None; exec leaves out the geometry-only passes, exec_geometry is theirs."""
     mali = (dev or {}).get("mali")
     if not mali:
         return None
@@ -209,9 +210,11 @@ def hardware(dev, actions, events, rows, core):
         p["name"] = " + ".join(sorted(what, key=lambda k: -what[k])) or (markers(path.get(b)) or ["—"])[-1]
         p["hw"] = dict(zip(names, hw)) if hw else None
         res.append(p)
-    total = sum((p["hw"] or {}).get(EXEC) or 0 for p in res)
+    geo = [p.get("geometry") and not p["model"] for p in res]  # shadow/prepass passes: the model prices none of them
+    ex = [(p["hw"] or {}).get(EXEC) or 0 for p in res]
     return {"core": core, "error": None, "names": names, "passes": res, "model": sum(p["model"] for p in res),
-            "exec": total, "shader_cost": shader_cost(dev.get("knockout"), events, begins, res, rows, first, core)}
+            "exec": sum(e for e, g in zip(ex, geo) if not g), "exec_geometry": sum(e for e, g in zip(ex, geo) if g),
+            "shader_cost": shader_cost(dev.get("knockout"), events, begins, res, rows, first, core)}
 
 
 MODEL_PART = {"colour": "fragment", "draw": "total"}
@@ -270,7 +273,7 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
                "vertices": sum(r.get("vertices") or 0 for r in mine),
                "model": sum(model) if model and None not in model else None,
                "malioc": _malioc(mine, core, sh.get("stage", "frag")),
-               "draw_stage": max(stages, key=stages.get) if stages else None,
+               "draw_stage": "+".join(sorted(stages)) or None,
                "error": sh.get("error"), "exec": 0.0, "noise": 0.0, "pipes": {k: 0.0 for k in pipe}, "passes": []}
         out.append(row)
         own = ["frame"] if "frame" in base else sorted(

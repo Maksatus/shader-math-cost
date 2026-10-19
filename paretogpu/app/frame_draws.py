@@ -1,7 +1,8 @@
 """Shader threads and loop trip counts of a frame's draws from the snapshot's rd_draws.json (+ .bin), measured when the
 snapshot was taken by one replay walk over the capture's draws (adapters/renderdoc/rd_draws.py, on its device):
 - shader threads of every draw that ran a fragment shader (ps_invocations not 0): its post-VS triangles rasterized by
-  core/quads, the same on a PC and a device frame -> ev["rd"]["threads"] (priced, core/pixels), ["samples_model"];
+  core/quads -> ev["rd"]["threads"] (priced, core/pixels), ["samples_model"]; PC frames only (app/cost: a device frame
+  has no rd_draws.json, its pixels are Samples Passed);
 - trip counts of dynamic loops whose bound is no shader parameter (cluster-mask scans, ray steps): n = mean over the
   pixels the draw's calls wrote."""
 import json
@@ -15,7 +16,7 @@ from paretogpu.store import memo as memo_store
 from paretogpu.views.reporter import CONSOLE
 
 FILE = "rd_draws.json"
-QUADS = "quads/10"
+QUADS = "quads/11"
 ACTIONS = "rd_actions.json"
 MISMATCH = 0.02  # share of a draw's samples; and at least MISMATCH_MIN samples
 MISMATCH_MIN = 1000
@@ -56,9 +57,8 @@ def run(frame_dir, events, state, rep=CONSOLE, memo=None, root=None):
         measured = json.load(f)
     calls = sorted({e for ev in draws for e in ev["rd"]["events"]})
     discarding = _discarding(draws, state, root)
-    visible = sorted({str(e) for ev in draws if _opaque(ev, discarding) for e in ev["rd"]["events"]}, key=int)
     memo = memo or memo_store.default()
-    qkey = f"{rdoc.signature(path + '.bin')}|{','.join(map(str, calls))}|{','.join(visible)}"
+    qkey = f"{rdoc.signature(path + '.bin')}|{','.join(map(str, calls))}"
     counted = memo.get(QUADS, qkey) if calls else {}
     if counted is None:
         rep.phase("quads")
@@ -70,17 +70,12 @@ def run(frame_dir, events, state, rep=CONSOLE, memo=None, root=None):
             meta, tris = quads.triangles({str(e): measured["geometry"].get(str(e)) or {"error": "not read"}
                                           for e in every}, f.read())
         rep.log(f"rasterizing {len(tris)} triangles of {len(every)} draw calls ...")
-        counted = quads.count(meta, tris, actions, set(visible))
+        counted = quads.count(meta, tris, actions)
         memo.put_many(QUADS, [(qkey, counted)])
     else:
         rep.skip("quads")
     return (_iterations(looped, measured["loops"], state, rep),
             _threads(draws, counted, rep, discarding))
-
-
-def _opaque(ev, discarding):
-    """Opaque for Mali's Forward Pixel Kill: no blending, writes and tests depth, no discard (core/quads)."""
-    return ev.get("blend") == "One Zero" and ev.get("zwrite") and ev.get("ztest") and ev["index"] not in discarding
 
 
 def _iterations(looped, counts, state, rep):

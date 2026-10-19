@@ -26,6 +26,10 @@ class PipeCyclesTest(unittest.TestCase):
         self.assertEqual((c["arith"], c["fma"], c["sfu"]), (10.0, 8.0, 8.0))
         self.assertEqual(score.pipe_cycles(c), (12.25, ["arith"]))
 
+    def test_interpolated_arith_not_below_its_part(self):
+        c = {"arith": 20.5, "fma": 35.5, "cvt": 24.1, "sfu": 26.5, "ls": 4.0, "v": 1.0, "t": 2.0}
+        self.assertEqual(score.pipe_cycles(c), (42.5, ["fma"]))
+
     def test_bifrost_arith_only(self):
         cyc, bound = score.pipe_cycles(load("frag_g52_vulkan_branch")["variants"]["main"]["longest"])
         self.assertAlmostEqual(cyc, 6.1667, places=4)
