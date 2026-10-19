@@ -1,8 +1,8 @@
 """id -> (UI name, progress unit or None); every phase id the code reports must be declared (tests/test_phases.py)."""
 
 PHASES = {
-    "rd_capture": ("Захват кадра в RenderDoc", None),
-    "snapshot": ("Снимок кадра (Frame Debugger)", "событий"),
+    "rd_capture": ("Захват frame в RenderDoc", None),
+    "snapshot": ("Snapshot frame (Frame Debugger)", "events"),
     "rd_counters": ("Подсчёт пикселей (RenderDoc)", None),
     "materials": ("Материалы проекта", None),
     "fingerprints": ("Проверка изменений шейдеров", None),
@@ -13,10 +13,10 @@ PHASES = {
     "rd_draws": ("Геометрия и повторы циклов (RenderDoc)", None),
     "rd_knockout": ("Цена шейдеров на телефоне (подмена)", "шейдеров"),
     "quads": ("Квады по геометрии", None),
-    "rd_memory": ("Память по проходам (RenderDoc)", None),
+    "rd_memory": ("Память по passes (RenderDoc)", None),
     "rd_start": ("Запуск игры на телефоне", None),
-    "rd_wait": ("Игра на телефоне: ждёт «Снять кадр»", None),
-    "rd_device": ("Кадр на устройстве (RenderDoc for Arm)", None),
+    "rd_wait": ("Игра на телефоне: ждёт «Снять frame»", None),
+    "rd_device": ("Frame на устройстве (RenderDoc for Arm)", None),
     "report": ("Расчёт и отчёт", None),
     "bench_compile": ("Замеры malioc", "шейдеров"),
     "site": ("Сборка сайта", None),

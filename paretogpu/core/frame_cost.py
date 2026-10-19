@@ -336,3 +336,64 @@ def summary(c: CostRun) -> CostSummary:
             "shaders": [{"key": g.get("key"), "share": g.get("share"), "total": g.get("total")} for g in top],
             "unpriced_draws": len(failed), "unpriced_compute": len(missing) - len(failed),
             "failed_reasons": sorted({(m.get("reason") or "")[:200] for m in failed})[:5]}
+
+
+BOUND = {"A": "arith", "LS": "ls", "T": "t", "V": "v"}
+
+
+def measured(c, sc, events, core):
+    """Phone snapshot: the cost of each event on `core` from the shader knockout (sc, shader_cost) in place of the
+    model. A shader's cycles (busiest unit) go to its draws by pixels; a vertex shader's whole-draw cycles beyond the
+    fragment part of those draws go to them by vertices, or to their pixels when a draw has more pixels than vertices. Unmeasured events -> "missing"; Mali tile rows dropped.
+    -> False when nothing was measured."""
+    if not sc or sc.get("error") or not any(not s.get("error") for s in sc.get("shaders") or []):
+        return False
+    rows = [r for r in c["events"] + c["geometry"] if r["kind"] != "tile"]
+    by = {r["index"]: r for r in rows}
+    calls = {e: ev["index"] for ev in events for e in (ev.get("rd") or {}).get("events") or [] if ev["index"] in by}
+
+    def share(v, idx, key):
+        w = [by[i][key] or 0 for i in idx]
+        t = sum(w)
+        return {i: v * (x / t if t else 1 / len(idx)) for i, x in zip(idx, w)}
+
+    def busiest(s):
+        k = max(s["pipes"], key=s["pipes"].get, default=None)
+        return [BOUND.get(k, k)] if k and s["pipes"][k] > 0 else []
+
+    frag, vert, fb, vb = {}, {}, {}, {}
+    for mode, acc, bound in (("colour", frag, fb), ("draw", vert, vb)):
+        for s in sc["shaders"]:
+            idx = sorted({calls[e] for e in s["events"] if e in calls})
+            if s.get("error") or s["mode"] != mode or not idx:
+                continue
+            v = max(s["pipes"].values(), default=0.0) if sum(s["pipes"].values()) > 0 else 0.0  # below 0: noise
+            if mode == "draw":
+                v = max(0.0, v - sum(frag.get(i, 0.0) for i in idx))
+            for i, x in share(v, idx, "pixels" if mode == "colour" else "vertices").items():
+                acc[i] = acc.get(i, 0.0) + x
+                bound[i] = busiest(s)
+    priced, missing = [], []
+    for r in rows:
+        i = r["index"]
+        if i not in frag and i not in vert:
+            missing.append({"index": i, "kind": r["kind"], "stage": r["stage"], "object": r["object"],
+                            "shader": r["shader"], "pass": r["pass"], "reason": "не замерен на телефоне"})
+            continue
+        f, v = frag.get(i, 0.0), vert.get(i, 0.0)
+        if r["pixels"] >= r["vertices"]:  # a fullscreen draw: the rest of its draw is raster work, not its vertices
+            f, v = f + v, 0.0
+        r.pop("geometry", None)
+        r["cost"] = {core: {"px_price": f / r["pixels"] if r["pixels"] else None,
+                            "vtx_price": v / r["vertices"] if r["vertices"] else None,
+                            "px_bound": fb.get(i, []), "vtx_bound": vb.get(i, []), "px_path": None, "vtx_path": None,
+                            "fragment": f, "vertex": v, "compute": 0.0, "total": f + v, "flags": [],
+                            "px_regs": None, "vtx_regs": None, "px_fp16": None}}
+        r["loop"] = None
+        priced.append(r)
+    priced.sort(key=lambda r: -r["cost"][core]["total"])
+    c.update({"events": priced, "geometry": [], "missing": missing, "main_core": core,
+              "cores": [x for x in c["cores"] if x["name"] == core] or [{"name": core, "arch": None}],
+              "totals": _totals(priced, [core]), "groups": {core: groups(priced, core)},
+              "measured": sc.get("source") or "renderdoc"})
+    return True

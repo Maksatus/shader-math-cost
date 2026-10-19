@@ -43,11 +43,11 @@ function resultHtml(j) {
   const t = s.total || 0, f = t ? s.fragment / t : 0, v = t ? s.vertex / t : 0, c = t ? s.compute / t : 0;
   const top = s.shaders.map(x => `<tr><td>${esc(x.key)}</td><td style="width:35%"><div class="sb" style="width:${(100 * x.share / (s.shaders[0].share || 1)).toFixed(1)}%"></div></td><td class="n">${pct(x.share)}</td></tr>`).join("");
   return `<div class="result">${prevHtml(s.prev)}
-    <div class="muted small" style="margin-top:12px">Цена кадра на ${esc(s.main_core)}</div>
+    <div class="muted small" style="margin-top:12px">Цена frame на ${esc(s.main_core)}</div>
     <div class="total">${M(t, 1)} млн циклов</div>
     <div class="split"><i style="width:${100 * f}%;background:var(--part-px)"></i><i style="width:${100 * v}%;background:var(--part-vx)"></i><i style="width:${100 * c}%;background:var(--part-cs)"></i></div>
-    <div class="legend"><span><i style="background:var(--part-px)"></i>пиксели ${pct(f)}</span><span><i style="background:var(--part-vx)"></i>вершины ${pct(v)}</span><span><i style="background:var(--part-cs)"></i>compute ${pct(c)}</span></div>
-    <div class="muted small" style="margin-top:12px">Самые дорогие шейдеры (доля кадра)</div>
+    <div class="legend"><span><i style="background:var(--part-px)"></i>пиксели ${pct(f)}</span><span><i style="background:var(--part-vx)"></i>vertices ${pct(v)}</span><span><i style="background:var(--part-cs)"></i>compute ${pct(c)}</span></div>
+    <div class="muted small" style="margin-top:12px">Самые дорогие шейдеры (доля frame)</div>
     <table class="top5">${top}</table>
     ${(s.warnings || []).map(w => `<div class="warnline">⚠ ${esc(w)}</div>`).join("")}
     ${s.unpriced_draws ? `<div class="warnline">⚠ Draw без цены: ${s.unpriced_draws}. Шейдер не скомпилировался или замер упал. Их стоимость не входит в итог.</div>` : ""}
@@ -65,7 +65,7 @@ function prevHtml(p) {
   const d = z(p.delta), c = d < 0 ? "good" : d > 0 ? "bad" : "";
   const sg = x => (x = z(x), (x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x), 1));
   const pc = p.pct == null ? "" : ` (${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d ? 100 * p.pct : 0).toFixed(1)}%)`;
-  return `<div class="prev"><div class="muted small">К прошлому расчёту этого снимка (${when(p.a_time)}), ${esc(p.core)}</div>
+  return `<div class="prev"><div class="muted small">К прошлому расчёту этого snapshot (${when(p.a_time)}), ${esc(p.core)}</div>
     <div class="d ${c}">${sg(p.delta)} млн${pc}</div>
     <div class="small">цена шейдеров <b>${sg(p.price)}</b>${z(p.loops) ? ` · повторы циклов <b>${sg(p.loops)}</b>` : ""} · объём <b>${sg(p.work)}</b> · состав вариантов <b>${sg(p.mix)}</b></div>
     ${(p.warnings || []).map(w => `<div class="small warnline">⚠ ${esc(w)}</div>`).join("")}

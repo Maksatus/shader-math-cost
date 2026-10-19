@@ -182,7 +182,7 @@ class Snapshot(unittest.TestCase):
         self.assertEqual((h["error"], sc["source"], sc["frame"]), ("crashed", "streamline", 1000))
         top = sc["shaders"][0]  # ranked by its busiest unit (A 100), not its noisy exec (5 vs 40)
         self.assertEqual((top["file"], top["exec"], top["pipes"], top["noise"]), ("b2.frag.spv", 5, {"A": 100, "T": 0}, 30))
-        self.assertEqual([(p["event"], p["name"]) for p in top["passes"]], [(None, "весь кадр")])
+        self.assertEqual([(p["event"], p["name"]) for p in top["passes"]], [(None, "весь frame")])
 
     def test_actions_and_memory(self):
         by = {a["event"]: a for a in self.actions["actions"]}

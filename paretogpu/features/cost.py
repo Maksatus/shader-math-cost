@@ -104,13 +104,13 @@ def _totals(c):
     return {k: s[k] for k in TOTALS}
 
 
-RESULT = ResultKind("cost", lambda c: f"Стоимость кадра {os.path.basename(os.path.normpath(c.get('frame_dir') or '.'))}",
+RESULT = ResultKind("cost", lambda c: f"Стоимость frame {os.path.basename(os.path.normpath(c.get('frame_dir') or '.'))}",
                     _totals, data=workspace.COST_FILE, page=workspace.REPORT_PAGE, own_page=True)
 
 COST = Command(
     "cost", "cost of a frame snapshot: every event's shader variant measured with malioc, pixels x pixel price + "
             "vertices x vertex price, frame_report.html",
-    [Arg("frame", help="snapshot folder with frame_events.json (from `frame`)", label="Снимок"),
+    [Arg("frame", help="snapshot folder with frame_events.json (from `frame`)", label="Snapshot"),
      Arg("--project", help="Unity project to compile missing variants in (default: the snapshot's; its editor must be "
                            "open)", label="Проект"),
      Arg("--variants", help="folder of the compiled and measured variants (default: the project's, "
@@ -123,7 +123,7 @@ COST = Command(
          help="also price the shader variants of every material of the project (the \"project shaders\" tab): passes "
               "and global keywords from the project's snapshots, other shaders' passes from the open editor"),
      Arg("--out", help="output folder (default: the snapshot folder)", label="Папка результата")],
-    run_command, title="Цена кадра",
+    run_command, title="Цена frame",
     phases=lambda v: (["materials"] if v.get("materials") else []) + ["fingerprints", "compile", "measure", "loops",
                                                                          "bounds", "quads", "rd_memory",
                                                                          "report"],

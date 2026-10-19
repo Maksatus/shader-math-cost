@@ -32,7 +32,7 @@ function showCompare() {
   for (const id of ["#cmpSave", "#cmpOpen"]) $(id).style.visibility = ok ? "" : "hidden";
   if (!ok) {
     $("#cmpEmpty").innerHTML = `<div class="card empty" style="max-width:800px;margin:0 auto">${RUNS.length < 2
-      ? "Для сравнения нужно хотя бы два расчёта.<br><br>Поправили шейдер — откройте «Отчёты» и нажмите «Пересчитать» у снимка: тот же кадр посчитается с новыми ценами, и разница будет только от шейдеров.<br>Или снимите новый кадр во вкладке «Проверка кадра»."
+      ? "Для сравнения нужно хотя бы два расчёта.<br><br>Поправили шейдер — откройте «Отчёты» и нажмите «Пересчитать» у snapshot: тот же frame посчитается с новыми ценами, и разница будет только от шейдеров.<br>Или снимите новый frame во вкладке «Проверка frame»."
       : "Выберите расчёты A (было) и B (стало) вверху."}</div>`;
     $("#cmpFrame").src = "about:blank";
     return;
@@ -171,7 +171,7 @@ function matProgress() {
     const {pct: p} = j ? overall(j, j.now || Date.now() / 1000) : {pct: 0};
     matMsg(`<h2>Сравниваю материалы <span class="spin"></span></h2>
       <div class="now">${ph ? esc(phaseText(ph.id)) + ` <span class="muted">· ${esc(phaseInfo(ph, j.now || Date.now() / 1000))}</span>` : "Подготовка…"}</div>
-      <div class="bar"><i style="width:${p.toFixed(1)}%"></i></div><div class="small muted">Подробный ход и лог — во вкладке «Проверка кадра».</div>`);
+      <div class="bar"><i style="width:${p.toFixed(1)}%"></i></div><div class="small muted">Подробный ход и лог — во вкладке «Проверка frame».</div>`);
     matStatus();
     matTimer = setTimeout(matProgress, 700);
     return;
@@ -181,7 +181,7 @@ function matProgress() {
   if (j.status === "ok") return loadMatHist(j.report);
   const tail = (j.log || []).slice(-12).join("\n");
   matMsg(`<h2 class="bad">Сравнение не получилось</h2>${j.hint ? `<div class="hint">${esc(j.hint.text || j.hint)}</div>` : ""}
-    <pre class="log">${esc(tail)}</pre><div class="small muted">Весь лог — во вкладке «Проверка кадра».</div>`);
+    <pre class="log">${esc(tail)}</pre><div class="small muted">Весь лог — во вкладке «Проверка frame».</div>`);
 }
 
 const MATS_OF = new Map();

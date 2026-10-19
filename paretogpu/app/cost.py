@@ -59,6 +59,8 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
         dev = frame.get("device") or {}
         core = dev.get("gpu") if dev.get("gpu") in [x["name"] for x in c["cores"]] else c["main_core"]
         c["hardware"] = device.hardware(dev, capture["actions"], events, c["events"] + c["geometry"], core)
+        if frame.get("device"):
+            frame_cost.measured(c, (c["hardware"] or {}).get("shader_cost"), events, core)
     c["variants_checked"] = state["checked"]
     prof = profile.describe(frame, profile.frame_size(c["events"]))
     c["profile"] = {**prof, "warnings": profile.warnings(prof),

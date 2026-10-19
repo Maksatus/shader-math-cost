@@ -233,13 +233,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if p == "/api/delete":
                 path = workspace.snapshot_dir(body.get("name"))
                 if not path:
-                    return self._json({"error": "нет такого снимка"}, 404)
+                    return self._json({"error": "нет такого snapshot"}, 404)
                 with RUNNER.lock:
                     busy = RUNNER.job and RUNNER.job["status"] == "running" and any(
                         isinstance(x, str) and os.path.abspath(x) == path
                         for s in RUNNER.job["steps"] for x in s["values"].values())
                 if busy:
-                    return self._json({"error": "снимок используется идущим запуском"}, 409)
+                    return self._json({"error": "snapshot используется идущим запуском"}, 409)
                 shutil.rmtree(path)
                 return self._json({"ok": True})
         except ValueError as e:

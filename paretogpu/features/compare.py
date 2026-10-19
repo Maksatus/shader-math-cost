@@ -39,7 +39,7 @@ def _brief(cmp):
             "a_total": x.get("a"), "b_total": x.get("b"), "delta": x.get("delta")}
 
 
-RESULT = ResultKind("compare", lambda c: "Сравнение кадров", _brief)
+RESULT = ResultKind("compare", lambda c: "Сравнение frames", _brief)
 
 COMPARE = Command(
     "compare", "compare two cost runs: the frame, its stages and shaders, every change split into price (the shaders), "

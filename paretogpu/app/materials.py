@@ -65,7 +65,7 @@ def prepare(project, paths, root, cores, jobs=None, compile_missing=True, recomp
     for m in mats:
         keys, skipped = plan_.plan([m], info, editor)
         if not keys:
-            raise MaterialError(f"{m['path']}: " + (skipped[0]["reason"] if skipped else "ни одного прохода"))
+            raise MaterialError(f"{m['path']}: " + (skipped[0]["reason"] if skipped else "ни одного pass"))
         all_keys.update(keys)
         sides.append(sorted(keys, key=lambda k: (k.subshader, k.pass_index)))
     rep.log(f"materials: {len(all_keys)} variants, {len(snaps)} snapshots of the project for global keywords")

@@ -1,8 +1,9 @@
 """Shader cost from a Streamline timeline (adapters/streamline.py) recorded while rd_sweep.py replayed the frame once
-per mark: GPU bursts matched to the replays by time, the median burst of each shader's replays against the frame as
+per mark: GPU bursts matched to the replays by time, the least burst of each shader's replays against the frame as
 captured. -> the knockout of core/device.shader_cost, one pseudo pass "frame" (Streamline sees the whole GPU). Execution
 core active includes the replay's own copies of the capture's initial contents (±2-3 M a replay); the unit counters
-(instructions, texture filtering, load/store, interpolation) repeat to the unit."""
+(instructions, texture filtering, load/store, interpolation) repeat to the unit but for other GPU work in a third of the
+replays (_floor)."""
 import statistics
 
 IDLE = 0.15    # seconds without GPU activity that end a burst
@@ -37,8 +38,9 @@ def bursts(head, rows):
     return [tuple(b) for b in out]
 
 
-def _median(values):
-    return [statistics.median(v[k] for v in values) for k in range(len(NAMES))]
+def _floor(values):
+    # other GPU work (~1/3 of the replays, S21: +0.94 M arithmetic, +0.63 M texture) only adds: the least is the frame
+    return [min(v[k] for v in values) for k in range(len(NAMES))]
 
 
 def knockout(answer, head, rows):
@@ -70,8 +72,8 @@ def knockout(answer, head, rows):
         elif k not in seen:
             row["error"] = "not_seen"
         else:
-            row["passes"] = {"frame": _median(seen[k])}
+            row["passes"] = {"frame": _floor(seen[k])}
         shaders.append(row)
     ex = [v[0] for v in base]
-    return {"names": list(NAMES), "base": {"frame": _median(base)}, "spread": {"frame": max(ex) - min(ex)},
+    return {"names": list(NAMES), "base": {"frame": _floor(base)}, "spread": {"frame": max(ex) - min(ex)},
             "shaders": shaders, "source": "streamline"}

@@ -10,9 +10,9 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 
 # one button = steps run in order; `hide`: args the server fills in (the chain's own folders)
 PRESETS = [
-    {"id": "frame_cost", "title": "Проверка кадра",
+    {"id": "frame_cost", "title": "Проверка frame",
      "steps": [{"cmd": "frame", "hide": ["out"]}, {"cmd": "cost", "hide": ["frame", "out", "project"]}]},
-    {"id": "cost", "title": "Пересчёт снимка", "steps": [{"cmd": "cost"}]},
+    {"id": "cost", "title": "Пересчёт snapshot", "steps": [{"cmd": "cost"}]},
     {"id": "site", "title": "Обновление данных сайта", "steps": [{"cmd": "bench"}]},
     {"id": "matcompare", "title": "Сравнение материалов", "steps": [{"cmd": "matcompare"}]},
 ]

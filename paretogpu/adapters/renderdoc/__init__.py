@@ -185,7 +185,7 @@ def device_frame(job, out_json, timeout=2400, on_progress=None):
 SWEEP_REPLAY = 6.0  # seconds a shader takes in rd_sweep.py (swap, 3 replays with gaps, unswap)
 
 
-def device_sweep(serial, capture, gpu, out_json, repeats=3, on_progress=None):
+def device_sweep(serial, capture, gpu, out_json, repeats=4, on_progress=None):
     """Shader cost by Streamline while rd_sweep.py replays the capture on the device -> (its answer, the timeline
     table text of adapters/streamline.finish)."""
     from paretogpu.adapters import streamline

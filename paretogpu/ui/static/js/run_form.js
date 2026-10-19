@@ -2,9 +2,9 @@
 function projects() {
   const open = OPT.unity_projects.filter(p => p.open && !p.device), rest = OPT.unity_projects.filter(p => !p.open);
   const o = p => p.device ? `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.package)}</option>`
-    : `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · снимков: ${p.snapshots}` : ""}</option>`;
+    : `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · snapshots: ${p.snapshots}` : ""}</option>`;
   const phones = OPT.unity_projects.filter(p => p.device);
-  $("#project").innerHTML = (phones.length ? `<optgroup label="Телефон (USB): кадр с телефона">${phones.map(o).join("")}</optgroup>` : "") +
+  $("#project").innerHTML = (phones.length ? `<optgroup label="Телефон (USB): frame с телефона">${phones.map(o).join("")}</optgroup>` : "") +
     (open.length ? `<optgroup label="Открыты в Unity">${open.map(o).join("")}</optgroup>` : "") +
     (rest.length ? `<optgroup label="Остальные проекты (Unity Hub)">${rest.map(o).join("")}</optgroup>` : "") +
     `<option value="__other">Другая папка…</option>`;
@@ -17,8 +17,8 @@ function projects() {
 const projectValue = () => recalc ? recalc.project : ($("#project").value === "__other" ? $("#projectPath").value.trim() : $("#project").value);
 const isPhone = () => !recalc && projectValue().startsWith("device:");
 const HOWTO = {
-  editor: "Откройте проект в Unity на Vulkan, включите Play Mode, выставьте нужный кадр в окне Game, выберите проект и нажмите «Проверить кадр».",
-  phone: "Подключите телефон по USB со сборкой проекта (development build), разблокируйте его и нажмите «Проверить кадр»: игра запустится на телефоне, а кадр снимется по кнопке «Снять кадр».",
+  editor: "Откройте проект в Unity на Vulkan, включите Play Mode, выставьте нужный frame в окне Game, выберите проект и нажмите «Проверить frame».",
+  phone: "Подключите телефон по USB со сборкой проекта (development build), разблокируйте его и нажмите «Проверить frame»: игра запустится на телефоне, а frame снимется по кнопке «Снять frame».",
 };
 function projectMode() {
   $("#howtoText").textContent = HOWTO[isPhone() ? "phone" : "editor"];
@@ -44,12 +44,12 @@ async function checkEditor(quiet) {
   edReady = !!s.ready;
   if (s.device) {
     el.className = "status " + (s.ready ? "ok" : "bad");
-    el.textContent = s.ready ? "✓ Телефон подключён, сборка стоит. «Проверить кадр» запустит игру на телефоне; откройте нужную сцену и нажмите «Снять кадр». После съёмки ~2 минуты не трогайте телефон."
+    el.textContent = s.ready ? "✓ Телефон подключён, сборка стоит. «Проверить frame» запустит игру на телефоне; откройте нужную сцену и нажмите «Снять frame». После съёмки ~2 минуты не трогайте телефон."
       : !s.connected ? "Телефон не виден по USB (adb)." : !s.installed ? "На телефоне нет сборки этого проекта." : "Телефон заблокирован: разблокируйте и не гасите экран.";
   }
   else if (!s.project) { el.className = "status bad"; el.textContent = "В этой папке нет Unity-проекта."; }
   else if (s.ready) { el.className = "status ok"; el.textContent = `✓ Unity ${s.version || ""} открыт и готов`; }
-  else if (!s.open) { el.className = "status bad"; el.textContent = `Проект не открыт. Откройте его в Unity ${s.version || ""} — кадр снимается из открытого редактора.`; }
+  else if (!s.open) { el.className = "status bad"; el.textContent = `Проект не открыт. Откройте его в Unity ${s.version || ""} — frame снимается из открытого редактора.`; }
   else if (!s.cli) { el.className = "status bad"; el.textContent = "Не найден Unity CLI (команда unity): запустите start.bat, он покажет, что поставить."; }
   else { el.className = "status bad"; el.textContent = "Unity открыт, но занят (компиляция, импорт) или Unity CLI не отвечает. Подождите — статус обновится сам."; }
   updateRun();
@@ -71,13 +71,13 @@ function loadSimple() {
 }
 
 const HELP = {
-  timeout: "Сколько ждать снимок, секунд.",
-  max_events: "Снять только первые N событий кадра (0 — все).",
-  wait: "Снять кадр через столько секунд после запуска игры, без кнопки «Снять кадр».",
-  variants: "Скомпилированные варианты; по умолчанию своя папка проекта: вариант компилируется один раз на все кадры.",
+  timeout: "Сколько ждать snapshot, секунд.",
+  max_events: "Снять только первые N events frame (0 — все).",
+  wait: "Снять frame через столько секунд после запуска игры, без кнопки «Снять frame».",
+  variants: "Скомпилированные варианты; по умолчанию своя папка проекта: вариант компилируется один раз на все frames.",
   api: "Цены какого API: по умолчанию Vulkan, API сборки под Android.",
   no_compile: "Только уже скомпилированные варианты, без сверки с шейдерами.",
-  out: "Куда писать отчёт; по умолчанию папка снимка.",
+  out: "Куда писать отчёт; по умолчанию папка snapshot.",
 };
 const PHONE_FIXED = new Set(["app", "serial"]);  // the server fills them from the chosen phone
 function advFields() {
@@ -90,7 +90,7 @@ function advFields() {
   return out;
 }
 function renderAdv() {
-  $("#adv").innerHTML = `<p class="muted small">Обычно не нужны: значения по умолчанию подобраны под проверку кадра.</p>` + advFields().map(a => {
+  $("#adv").innerHTML = `<p class="muted small">Обычно не нужны: значения по умолчанию подобраны под проверку frame.</p>` + advFields().map(a => {
     const id = "a-" + a.dest, lbl = esc(a.label || a.flag);
     if (a.kind === "flag") return `<div class="row2"><label class="chk"><input type="checkbox" id="${id}"> ${lbl}<code>${esc(a.flag)}</code></label><div class="help">${esc(HELP[a.dest] || "")}</div></div>`;
     const ph = a.dest === "variants" ? "своя папка на проект (paretogpu/out/variants_<проект>)" : a.default != null && a.default !== "" ? `по умолчанию: ${a.default}` : "";
@@ -121,8 +121,8 @@ function values() {
 
 function updateRun() {
   const b = $("#runBtn"), why = $("#runWhy");
-  b.textContent = recalc ? "▶ Пересчитать снимок" : "▶ Проверить кадр";
-  if (running() && job.waiting) { b.disabled = false; b.textContent = "📸 Снять кадр"; why.textContent = "Игра запущена на телефоне: откройте нужную сцену и нажмите."; return; }
+  b.textContent = recalc ? "▶ Пересчитать snapshot" : "▶ Проверить frame";
+  if (running() && job.waiting) { b.disabled = false; b.textContent = "📸 Снять frame"; why.textContent = "Игра запущена на телефоне: откройте нужную сцену и нажмите."; return; }
   if (running()) { b.disabled = true; why.textContent = "Идёт проверка — новую можно начать после неё."; return; }
   if (!recalc && !projectValue()) { b.disabled = true; why.textContent = "Выберите проект."; return; }
   if (!recalc && edReady === false) { b.disabled = true; why.textContent = isPhone() ? "Кнопка станет активной, когда телефон будет подключён и разблокирован." : "Кнопка станет активной, когда Unity с проектом откроется и будет готов."; return; }
@@ -150,9 +150,9 @@ $("#runBtn").onclick = async () => {
 function setRecalc(x) {
   recalc = x;
   $("#recalcBanner").style.display = x ? "" : "none";
-  if (x) $("#recalcBanner").innerHTML = `<div style="flex:1">Пересчёт снимка <b>${esc(x.name)}</b>${x.project ? ` (${esc(x.project)})` : ""}: кадр не снимается заново, только цена. Поправили шейдер — пересчитайте и сразу увидите разницу с прошлым расчётом.</div><button class="btn sm" id="recalcCancel">Отмена</button>`;
+  if (x) $("#recalcBanner").innerHTML = `<div style="flex:1">Пересчёт snapshot <b>${esc(x.name)}</b>${x.project ? ` (${esc(x.project)})` : ""}: frame не снимается заново, только цена. Поправили шейдер — пересчитайте и сразу увидите разницу с прошлым расчётом.</div><button class="btn sm" id="recalcCancel">Отмена</button>`;
   if (x) $("#recalcCancel").onclick = () => setRecalc(null);
-  $("#formTitle").textContent = x ? "Пересчёт снимка" : "Новая проверка";
+  $("#formTitle").textContent = x ? "Пересчёт snapshot" : "Новая проверка";
   for (const id of ["#howto", "#projField", "#suffixField"]) $(id).style.display = x ? "none" : "";
   projectMode(); checkEditor(); updateRun();
 }

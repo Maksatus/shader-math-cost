@@ -28,7 +28,7 @@ const presetText = id => ((SCH.presets || []).find(p => p.id === id) || {}).titl
 const stepText = cmd => (SCHEMA[cmd] || {}).title || cmd;
 const phaseText = id => (SCH.phases[id] || {}).label || id;
 const phaseUnit = id => (SCH.phases[id] || {}).unit || "";
-const NOTE_TEXT = {"capturing": "захват кадра…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
+const NOTE_TEXT = {"capturing": "захват frame…", "done": "готово", "nothing to compile": "всё уже скомпилировано",
   "the editor does not answer": "редактор не отвечает", "--no-compile": "по уже скомпилированным"};
 const SIMPLE = new Set(["project", "frame", "out", "renderdoc", "cores", "core", "materials", "suffix"]);
 let SCH = {phases: {}}, SCHEMA, OPT, recalc = null, edReady = null;

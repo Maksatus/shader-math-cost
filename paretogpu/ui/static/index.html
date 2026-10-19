@@ -14,7 +14,7 @@
 <div class="top">
   <div class="brand">Pareto<b>GPU</b><span>профилировщик шейдеров Mali</span></div>
   <nav id="tabs">
-    <button data-tab="run">Проверка кадра<span id="tabPill"></span></button>
+    <button data-tab="run">Проверка frame<span id="tabPill"></span></button>
     <button data-tab="reports">Отчёты</button>
     <button data-tab="compare">Сравнение</button>
     <button data-tab="site">Цена функций</button>
@@ -36,7 +36,7 @@
         <div class="status wait" id="edStatus"></div>
       </div>
       <div class="field" id="suffixField">
-        <span class="lbl">Суффикс снимка <span class="muted small">(необязательно)</span></span>
+        <span class="lbl">Суффикс snapshot <span class="muted small">(необязательно)</span></span>
         <input type="text" id="suffix" placeholder="например: city_night или after_fix">
       </div>
       <div class="field">
@@ -51,18 +51,18 @@
       <div class="field">
         <span class="lbl">Что считать</span>
         <div class="opts">
-          <label class="opt"><input type="radio" name="scope" value="frame" checked><div><b>Только этот кадр</b><span>Шейдеры, которые есть в кадре.</span></div></label>
-          <label class="opt"><input type="radio" name="scope" value="materials"><div><b>Кадр и все материалы проекта</b><span>Ещё и цена шейдеров всех материалов проекта, даже тех, что не попали в кадр. Дольше.</span></div></label>
+          <label class="opt"><input type="radio" name="scope" value="frame" checked><div><b>Только этот frame</b><span>Шейдеры, которые есть в frame.</span></div></label>
+          <label class="opt"><input type="radio" name="scope" value="materials"><div><b>Frame и все материалы проекта</b><span>Ещё и цена шейдеров всех материалов проекта, даже тех, что не попали в frame. Дольше.</span></div></label>
         </div>
       </div>
-      <button class="btn primary big" id="runBtn">▶ Проверить кадр</button>
+      <button class="btn primary big" id="runBtn">▶ Проверить frame</button>
       <div class="why" id="runWhy"></div>
       <div class="err" id="formErr"></div>
       <details class="more" id="advBox"><summary>Дополнительно (для опытных)</summary><div class="adv" id="adv"></div></details>
     </div>
   </div>
   <div>
-    <div class="card" id="jobCard"><div class="empty">Здесь будет ход проверки: какой шаг идёт, сколько осталось, а в конце — цена кадра и самые дорогие шейдеры.</div></div>
+    <div class="card" id="jobCard"><div class="empty">Здесь будет ход проверки: какой шаг идёт, сколько осталось, а в конце — цена frame и самые дорогие шейдеры.</div></div>
     <div class="card">
       <h2>Прошлые запуски</h2>
       <table class="hist" id="hist"></table>
@@ -87,7 +87,7 @@
 
 <section id="tab-compare">
   <div class="bar2 cmpbar">
-    <div class="seg" id="cmpMode"><button data-m="frames">Кадры</button><button data-m="materials">Материалы</button></div>
+    <div class="seg" id="cmpMode"><button data-m="frames">Frames</button><button data-m="materials">Материалы</button></div>
     <span class="ab fr">A</span><select id="cmpA" class="fr"></select>
     <button class="btn sm fr" id="cmpSwap">⇄</button>
     <span class="ab fr">B</span><select id="cmpB" class="fr"></select>

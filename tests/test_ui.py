@@ -103,7 +103,7 @@ class HintTest(unittest.TestCase):
         for part in ("Assets/K31.asset", "Assets/PC.asset", "Play Mode", "пересчитайте", "6"):
             self.assertIn(part, text)
         job["steps"][0]["error_details"]["changed"] = True
-        self.assertIn("изменён после снимка", runner.hint_of(job)["text"])
+        self.assertIn("изменён после snapshot", runner.hint_of(job)["text"])
         self.assertIn("лог", runner.hint_of(self.job(["pipeline asset"]))["text"])  # no details: no names to give
 
     def test_renderdoc_failing_on_the_phone_gets_the_phone_hint(self):

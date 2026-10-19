@@ -2,11 +2,11 @@
 let curRep = null;
 async function loadReports() {
   const reps = (await api("/api/reports")).reports;
-  if (!reps.length) { $("#repList").innerHTML = `<div class="card empty">Снимков ещё нет. Откройте «Проверка кадра» и нажмите «Проверить кадр».</div>`; return; }
-  $("#repList").innerHTML = `<div class="card" style="max-width:1500px;margin:0 auto"><h2>Проверенные кадры</h2>
-    <p class="muted small">Хранятся только на этом компьютере (${esc(OPT.out)}), в git и на сайт не попадают. Отметьте два снимка, чтобы сравнить их.</p>
+  if (!reps.length) { $("#repList").innerHTML = `<div class="card empty">Snapshots ещё нет. Откройте «Проверка frame» и нажмите «Проверить frame».</div>`; return; }
+  $("#repList").innerHTML = `<div class="card" style="max-width:1500px;margin:0 auto"><h2>Проверенные frames</h2>
+    <p class="muted small">Хранятся только на этом компьютере (${esc(OPT.out)}), в git и на сайт не попадают. Отметьте два snapshot, чтобы сравнить их.</p>
     <div class="selbar" id="selBar"></div>
-    <table class="rep"><tr><th></th><th>Когда</th><th>Проект</th><th class="n" title="ПК: события Frame Debugger (батч Unity = один draw); телефон: вызовы vkCmdDraw" style="cursor:help">Draw</th><th class="n">Кадр, млн циклов</th><th>Пиксели / вершины</th><th></th></tr>` +
+    <table class="rep"><tr><th></th><th>Когда</th><th>Проект</th><th class="n" title="ПК: events Frame Debugger (батч Unity = один draw); телефон: вызовы vkCmdDraw" style="cursor:help">Draw</th><th class="n">Frame, млн циклов</th><th>Пиксели / vertices</th><th></th></tr>` +
     reps.map((x, i) => {
       const t = x.total || 0, f = t ? x.fragment / t : 0, v = t ? x.vertex / t : 0;
       return `<tr><td>${x.runs.length ? `<input type="checkbox" class="pick" data-i="${i}">` : ""}</td><td><div class="repwhen">${x.thumb ? `<img class="repthumb" src="${esc(x.thumb)}" alt="" loading="lazy">` : `<span class="repthumb"></span>`}<div><b>${when(x.time)}</b><div class="muted small">${esc(x.name)}${x.phone ? " · " + esc(x.phone) : x.renderdoc ? " · RenderDoc" : ""}${x.runs.length > 1 ? ` · расчётов: ${x.runs.length}` : ""}</div></div></div></td>
@@ -25,7 +25,7 @@ async function loadReports() {
     if (b.dataset.a === "recalc") { setRecalc(x); tab("run"); }
     if (b.dataset.a === "cmp") compareSnapshot(x, reps);
     if (b.dataset.a === "folder") api("/api/reveal", {name: x.name});
-    if (b.dataset.a === "del" && confirm(`Удалить снимок ${x.name} со всеми файлами (отчёт, захват RenderDoc)?`)) {
+    if (b.dataset.a === "del" && confirm(`Удалить snapshot ${x.name} со всеми файлами (отчёт, захват RenderDoc)?`)) {
       const d = await api("/api/delete", {name: x.name});
       if (d.error) alert(d.error);
       OPT = await api("/api/options"); loadReports();
@@ -35,8 +35,8 @@ async function loadReports() {
   const sel = () => {
     const p = picks();
     $("#selBar").innerHTML = p.length === 2
-      ? `<button class="btn primary sm" id="cmpPicked">Сравнить выбранные</button><span class="muted">A — более ранний снимок, B — более поздний (последние расчёты)</span>`
-      : p.length ? `<span class="muted">Отметьте ещё один снимок.</span>` : "";
+      ? `<button class="btn primary sm" id="cmpPicked">Сравнить выбранные</button><span class="muted">A — более ранний snapshot, B — более поздний (последние расчёты)</span>`
+      : p.length ? `<span class="muted">Отметьте ещё один snapshot.</span>` : "";
     if (p.length === 2) $("#cmpPicked").onclick = () => {
       const [a, b] = p.sort((u, v) => u.time - v.time);
       openCompare(`${a.name}/${a.runs.at(-1)}`, `${b.name}/${b.runs.at(-1)}`);

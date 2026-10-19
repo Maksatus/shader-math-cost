@@ -31,7 +31,7 @@ class SweepTest(unittest.TestCase):
                 {"stage": "frag", "mode": "colour", "file": "b.frag.spv", "events": [8], "error": "no_output"}]
         k = sweep.knockout({"jobs": jobs, "marks": marks}, HEAD, rows)
         self.assertEqual(k["source"], "streamline")
-        self.assertEqual(k["base"]["frame"][:2], [1050.0, 150.0])  # median of 1000, 1100, 1050
+        self.assertEqual(k["base"]["frame"][:2], [1000.0, 150.0])  # least of 1000, 1100, 1050: other GPU work only adds
         self.assertEqual(k["spread"]["frame"], 100.0)
         self.assertEqual(k["shaders"][0]["passes"]["frame"][:2], [950.0, 50.0])
         self.assertEqual(k["shaders"][1], {"stage": "frag", "mode": "colour", "file": "b.frag.spv", "events": [8],

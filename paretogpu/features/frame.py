@@ -68,9 +68,9 @@ FRAME = Command(
     "frame", "snapshot the frame of the open Unity editor: RenderDoc (loaded in the editor: Game tab -> Load RenderDoc) "
              "for the pixels and vertices, the Frame Debugger for the shader variant of every event",
     [Arg("--project", required=True, help="Unity project folder (its editor must be open)", label="Проект"),
-     Arg("--out", label="Папка снимка", help="output folder (default: paretogpu/out/frame_<project>_<time>, not in git)"),
+     Arg("--out", label="Папка snapshot", help="output folder (default: paretogpu/out/frame_<project>_<time>, not in git)"),
      Arg("--suffix", help="appended to the snapshot folder name: frame_<project>_<time>_<suffix>",
-         label="Суффикс снимка"),
-     Arg("--timeout", type=int, default=1800, help="seconds", label="Таймаут снимка, с"),
-     Arg("--max-events", type=int, default=0, help="stop after N events (0 = all)", label="Не больше событий")],
-    run_command, phases=lambda v: ["rd_capture", "snapshot", "rd_counters", "rd_draws"], title="Снимок кадра")
+         label="Суффикс snapshot"),
+     Arg("--timeout", type=int, default=1800, help="seconds", label="Таймаут snapshot, с"),
+     Arg("--max-events", type=int, default=0, help="stop after N events (0 = all)", label="Не больше events")],
+    run_command, phases=lambda v: ["rd_capture", "snapshot", "rd_counters", "rd_draws"], title="Snapshot frame")

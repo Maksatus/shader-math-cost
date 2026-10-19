@@ -248,7 +248,7 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
     names, base, spread = ko["names"], ko["base"], ko["spread"]
     ex = names.index(EXEC)
     pipe = {k: names.index(n) for k, n in PIPES.items() if n in names}
-    pname = {"frame": "весь кадр", **{str(p["event"]): p["name"] for p in passes}}
+    pname = {"frame": "весь frame", **{str(p["event"]): p["name"] for p in passes}}
     by_call = {e: ev.get("shader") or "—" for ev in events for e in (ev.get("rd") or {}).get("events") or []}
     priced = {first.get(r["index"]): r for r in rows if r["kind"] != "tile"}
     frame = sum((v[ex] or 0) for v in base.values())
@@ -266,7 +266,7 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
         model = [((r.get("cost") or {}).get(core) or {}).get(part) for r in mine] if part else []
         row = {"stage": sh.get("stage", "frag"), "mode": sh.get("mode", "colour"),
                "shader": max(seen, key=seen.get) if seen else sh["file"], "names": seen, "file": sh["file"],
-               "draws": len(sh["events"]), "pixels": sum(r.get("pixels") or 0 for r in mine),
+               "events": sh["events"], "draws": len(sh["events"]), "pixels": sum(r.get("pixels") or 0 for r in mine),
                "vertices": sum(r.get("vertices") or 0 for r in mine),
                "model": sum(model) if model and None not in model else None,
                "malioc": _malioc(mine, core, sh.get("stage", "frag")),
@@ -293,3 +293,4 @@ def shader_cost(ko, events, begins, passes, rows, first, core):
     out.sort(key=lambda r: -(max(r["pipes"].values(), default=0) if streamline else r["exec"]))
     unit = max((sum((v[i] or 0) for v in base.values()) for i in pipe.values()), default=0)
     return {"error": None, "frame": frame, "frame_unit": unit, "shaders": out, "source": ko.get("source") or "renderdoc"}
+

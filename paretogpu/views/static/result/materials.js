@@ -1,5 +1,5 @@
 let selN = D && D.default_n;
-const kws = k => k.length ? k.map(x => `<span class="kwc">${esc(x)}</span>`).join(" ") : `<span class="muted">без keywords</span>`;
+const kws = k => k.length ? k.map(x => `<span class="kwc">${esc(x)}</span>`).join(" ") : `<span class="muted">no keywords</span>`;
 const c1 = x => x == null ? "—" : (+x).toFixed(x >= 100 ? 0 : 1);
 
 function matSide(m, tag) {
@@ -37,13 +37,13 @@ function pipesTable(xa, xb, k, n) {
   const rows = PIPES.filter(([key]) => has(key)).map(([key, label, sub]) => `<tr${sub ? ` class="subp"` : ""}><td>${sub ? "&nbsp;&nbsp;&nbsp;" : ""}${label}</td>
     ${v(la, key, ta)}${v(lb, key, tb)}${d(la && la[key], lb && lb[key])}
     ${v(ga && ga.shortest, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.shortest, key)}${v(ga && ga.total, key).replace('<td class="n">', '<td class="n gl">')}${v(gb && gb.total, key)}</tr>`).join("");
-  return `<h3>По конвейерам <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}</span></h3>
-    <table class="cmp">${cols(7)}<tr><th rowspan="2">Конвейер</th><th class="n grp" colspan="3" title="Самый дорогой путь через шейдер: каждый if идёт по более дорогой ветке. По нему считается цена — сумма блоков; ● — самый загруженный блок">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
+  return `<h3>По pipes <span class="muted small">циклов на ${PARTS[k][1]}, ${esc(core)}</span></h3>
+    <table class="cmp">${cols(7)}<tr><th rowspan="2">Pipe</th><th class="n grp" colspan="3" title="Самый дорогой путь через шейдер: каждый if идёт по более дорогой ветке. По нему считается цена — сумма units; ● — самый загруженный unit">Длинный путь${dep ? ` (n = ${n})` : ""} — цена</th>
       <th class="n grp gl" colspan="2" title="Все if идут по дешёвой ветке">Короткий путь</th><th class="n grp gl" colspan="2" title="Каждая инструкция один раз: обе ветки if, тело цикла один раз. Объём кода, а не время">Всего (весь код)</th></tr>
       <tr><th class="n">A</th><th class="n">B</th><th class="n">B − A</th><th class="n gl">A</th><th class="n">B</th><th class="n gl">A</th><th class="n">B</th></tr>${rows}</table>
     <div class="small" style="margin-top:6px">${notes.length ? `<span class="muted">${notes.join(" ")}</span> ` : ""}${refLink("pipes", "блоки ядра и пути")}</div>`;
 }
-const PARTS = {px: ["Пиксель", "пиксель"], vtx: ["Вершина", "вершину"]};
+const PARTS = {px: ["Пиксель", "пиксель"], vtx: ["Vertex", "vertex"]};
 const cheaper = (a, b) => a == null || b == null || a === b ? null : {who: b < a ? "B" : "A", by: Math.abs(a - b) / Math.max(a, b)};
 const byNs = (x, k) => !!x && new Set(D.ns.map(m => x[k][String(m)])).size > 1;
 const p0 = x => (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
@@ -51,7 +51,7 @@ const p0 = x => (100 * x).toFixed(x < 0.1 ? 1 : 0) + "%";
 function verdict(pa, pb, k) {
   const xa = pa && PR(pa)[core], xb = pb && PR(pb)[core];
   const n = String(selN), A = esc(D.a.material), B = esc(D.b.material);
-  if (!xa || !xb) return `<div class="verdict"><div class="vh">Сравнить нечего: ${xa ? "у B" : "у A"} нет этого прохода на ${esc(core)}.</div></div>`;
+  if (!xa || !xb) return `<div class="verdict"><div class="vh">Сравнить нечего: ${xa ? "у B" : "у A"} нет этого pass на ${esc(core)}.</div></div>`;
   const c = cheaper(xa[k][n], xb[k][n]);
   const head = !c ? `<b>${A}</b> и <b>${B}</b> стоят одинаково`
     : `<span class="good">${c.who === "B" ? B : A}</span> <span class="muted">(${c.who})</span> дешевле <span class="bad">${c.who === "B" ? A : B}</span> <span class="muted">(${c.who === "B" ? "A" : "B"})</span> на <b>${p0(c.by)}</b>`;
@@ -95,7 +95,7 @@ function renderMaterials() {
   const cores = D.cores.length > 1 ? `<div class="seg" id="cores">${D.cores.map(c => `<button data-c="${esc(c)}" class="${c === core ? "on" : ""}">${esc(c)}${c === D.main_core ? " ★" : ""}</button>`).join("")}</div>` : `<b>${esc(core)}</b>`;
   const parts = `<div class="seg" id="parts">${Object.entries(PARTS).map(([k, [t]]) => `<button data-k="${k}" class="${k === selPart ? "on" : ""}">${t}</button>`).join("")}</div>`;
   const nsel = looped ? `<span class="small muted">n циклов</span><div class="seg" id="ns">${D.ns.map(n => `<button data-n="${n}" class="${n === selN ? "on" : ""}">${n}</button>`).join("")}</div>` : "";
-  const tools = `<div class="card" style="padding:10px 16px"><div class="tools" style="margin:0">${parts}<span class="small muted" style="margin-left:8px">Ядро</span>${cores}<span style="flex:1"></span>${nsel}</div></div>`;
+  const tools = `<div class="card" style="padding:10px 16px"><div class="tools" style="margin:0">${parts}<span class="small muted" style="margin-left:8px">Core</span>${cores}<span style="flex:1"></span>${nsel}</div></div>`;
   const n = String(selN), k = selPart;
   const cell = (v, other) => `<td class="n ${v != null && other != null && v < other ? "good" : ""}">${v != null && other != null && v < other ? `<b>${c1(v)}</b>` : c1(v)}</td>`;
   const th = `<th class="n" title="${A}">A</th><th class="n" title="${B}">B</th><th class="n">B − A</th>`;
@@ -107,7 +107,7 @@ function renderMaterials() {
       ${D.ns.map(m => { const u = xa && xa[k][String(m)], w = xb && xb[k][String(m)];
         return `<tr${m === selN ? ` class="sel"` : ""}><td><b>${m}</b></td>${cell(u, w)}${cell(w, u)}${dPct(u, w)}</tr>`; }).join("")}</table>` : "";
     const allCores = D.cores.length > 1 ? `<h3>${PARTS[k][0]} на всех ядрах <span class="muted small">${byNs(xa, k) || byNs(xb, k) ? `n = ${n}, ` : ""}циклов на ${PARTS[k][1]}</span></h3>
-      <table class="cmp">${cols(3)}<tr><th>Ядро</th>${th}</tr>
+      <table class="cmp">${cols(3)}<tr><th>Core</th>${th}</tr>
       ${D.cores.map(c => { const u = pa && PR(pa)[c] && PR(pa)[c][k][n], w = pb && PR(pb)[c] && PR(pb)[c][k][n];
         return `<tr${c === core ? ` class="sel"` : ""}><td>${esc(c)}</td>${cell(u, w)}${cell(w, u)}${dPct(u, w)}</tr>`; }).join("")}</table>` : "";
     const a = xa || {}, b = xb || {};
@@ -118,16 +118,16 @@ function renderMaterials() {
     };
     const bound = boundTag;
     const flags = fs => (fs || []).map(f => `<span class="badge flagbad">${esc(FLAG[f] || f)}</span>`).join(" ") || "—";
-    const pxRows = `${line("Регистры", "px_regs", undefined, true)}${line("fp16, %", "px_fp16", undefined, false)}${line("Упор (самый загруженный блок)", "px_bound", bound)}
+    const pxRows = `${line("Registers", "px_regs", undefined, true)}${line("fp16, %", "px_fp16", undefined, false)}${line("Bottleneck (самый загруженный unit)", "px_bound", bound)}
       ${line("Динамические циклы", "looped", v => v == null ? "—" : v ? "есть: цена зависит от n" : "нет")}
       <tr><td>Флаги</td><td>${xa ? flags(a.flags) : "—"}</td><td>${xb ? flags(b.flags) : "—"}</td></tr>`;
-    const vtxRows = `${line("Регистры", "vtx_regs", undefined, true)}${line("Упор (самый загруженный блок)", "vtx_bound", bound)}`;
-    const chars = `<h3>Характеристики шейдера ${k === "px" ? "пикселя" : "вершины"} <span class="muted small">зелёным — у кого лучше</span></h3>
+    const vtxRows = `${line("Registers", "vtx_regs", undefined, true)}${line("Bottleneck (самый загруженный unit)", "vtx_bound", bound)}`;
+    const chars = `<h3>Характеристики шейдера ${k === "px" ? "пикселя" : "vertex"} <span class="muted small">зелёным — у кого лучше</span></h3>
       <table class="chars"><colgroup><col style="width:${LABEL_W}px"><col><col></colgroup><tr><th></th><th>A · ${A}</th><th>B · ${B}</th></tr>
       <tr><td>Keywords варианта</td><td>${pa ? kws(pa.keywords) : "—"}</td><td>${pb ? kws(pb.keywords) : "—"}</td></tr>
       ${k === "px" ? pxRows : vtxRows}
       ${(pa && pa.error) || (pb && pb.error) ? `<tr><td>Нет цены</td><td class="bad">${esc(pa && pa.error || "")}</td><td class="bad">${esc(pb && pb.error || "")}</td></tr>` : ""}</table>`;
-    return `<div class="card"><h2>Проход ${name}</h2>${verdict(pa, pb, k)}${byN}${pipesTable(xa, xb, k, n)}${allCores}${chars}</div>`;
+    return `<div class="card"><h2>Pass ${name}</h2>${verdict(pa, pb, k)}${byN}${pipesTable(xa, xb, k, n)}${allCores}${chars}</div>`;
   }).join("");
   $("#app").innerHTML = head + tools + cards;
   document.querySelectorAll("#cores button").forEach(b => b.onclick = () => { core = b.dataset.c; render(); });

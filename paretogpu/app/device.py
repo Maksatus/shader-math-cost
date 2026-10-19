@@ -42,7 +42,7 @@ def capture(frame_dir, app, serial=None, wait=None, knockout=True, rep=CONSOLE):
     rep.log(f"{activity} on {serial} ({gpu or 'GPU unknown'})")
     if wait is None:
         threading.Thread(target=_enter, args=(now,), daemon=True).start()
-    how = f"the capture is in {wait:g} s" if wait is not None else "press Enter or «Снять кадр»"
+    how = f"the capture is in {wait:g} s" if wait is not None else "press Enter or «Снять frame»"
 
     phases = []
 

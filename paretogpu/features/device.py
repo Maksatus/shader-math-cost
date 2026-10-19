@@ -27,14 +27,14 @@ def run_command(args):
 DEVICE = Command(
     "device", "a frame of an Android device: the development build captured and replayed on the phone (RenderDoc for "
               "Arm GPUs) into a snapshot priced like the editor's",
-    [Arg("frame", help="a new folder for the snapshot (`cost` it then)", label="Снимок"),
+    [Arg("frame", help="a new folder for the snapshot (`cost` it then)", label="Snapshot"),
      Arg("--project", help="the Unity project of the build (the snapshot's project in the lists)", label="Проект"),
      Arg("--app", required=True, help="package of the development build on the device, or package/activity",
          label="Пакет приложения"),
      Arg("--serial", help="adb serial of the device (default: the only one)", label="Устройство (adb serial)"),
      Arg("--wait", type=float, help="capture this many seconds after the start (default: when you press Enter, or the "
-                                    "window's «Снять кадр»)", label="Секунд до захвата"),
+                                    "window's «Снять frame»)", label="Секунд до захвата"),
      Arg("--no-shader-cost", action="store_true", label="Не мерить цену шейдеров на телефоне (подмена, ~1–2 мин)",
          help="skip measuring each fragment shader on the phone by swapping it for one with zero colour")],
-    run_command, title="Кадр с телефона",
+    run_command, title="Frame с телефона",
     phases=lambda v: ["rd_start", "rd_wait", "rd_device"] + ([] if v.get("no_shader_cost") else ["rd_knockout"]))
