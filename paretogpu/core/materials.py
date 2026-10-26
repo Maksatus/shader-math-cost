@@ -161,11 +161,15 @@ def _round(c):
 
 
 def _pipes(rec, file, core, ns, loop_data):
+    """The pipes as the price sums them (core/pricing.score): LS coalesced, arith raised to its busiest part."""
     c =heavy.combined(rec)
     p = (loop_data.get(file) or {}).get(core)
     longest = c["longest"] if c["longest"] is not None else heavy.fallback(c)
-    return {"longest": {str(n): _round(loops.cycles_at(p, n) if p else longest) for n in ns},
-            "longest_na": c["longest"] is None, "shortest": _round(c["shortest"]), "total": _round(c["total"])}
+
+    def shown(x):
+        return x and _round(heavy.raised(heavy.coalesced(x, rec.get("arch"))))
+    return {"longest": {str(n): shown(loops.cycles_at(p, n) if p else longest) for n in ns},
+            "longest_na": c["longest"] is None, "shortest": shown(c["shortest"]), "total": shown(c["total"])}
 
 
 def _price_pass(k, state, cores, loop_data, ns):

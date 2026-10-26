@@ -212,7 +212,7 @@ class DeviceFrame(unittest.TestCase):
         events = [{"index": 0, "path": "Cam/(RP 0:0) UI", "rd": {"events": [11]}}]
         m = memory.passes([sw], usage, [action(11, ["draw"], "Cam/UI", 100)], events, [row(0, 1e3, 0.0)], ["Mali-G78"])
         self.assertAlmostEqual(m["passes"][0]["bytes"]["store"], 40000 * memory.AFBC)
-        self.assertTrue(m["assumptions"]["native"])
+        self.assertEqual(m["assumptions"]["textures"], "native")
         # editor backbuffer: not stored
         m = memory.passes([dict(sw, native=False)], usage, [action(11, ["draw"], "Cam/UI", 100)], events,
                           [row(0, 1e3, 0.0)], ["Mali-G78"])
@@ -228,7 +228,7 @@ class TileThreads(unittest.TestCase):
         texs = [dict(tex(1, "MS", 10, 10, "R11G11B10_FLOAT", 1600, color=True), samples=4),
                 tex(2, "Resolved", 10, 10, "R11G11B10_FLOAT", 400, color=True),
                 dict(tex(3, "MSZ", 10, 10, "D24S8", 1600, depth=True), samples=4),
-                tex(4, "Z", 10, 10, "D24S8", 400, depth=True), tex(5, "Post", 10, 10, "R8G8B8A8_UNORM", 400)]
+                tex(4, "Z", 10, 10, "D32_SFLOAT", 400, depth=True), tex(5, "Post", 10, 10, "R8G8B8A8_UNORM", 400)]
         usage = {"1": [[10, "Clear"], [11, "ResolveSrc"], [21, "ColorTarget"], [22, "ResolveSrc"],
                        [31, "ColorTarget"], [32, "ResolveSrc"]],
                  "2": [[10, "Discard"], [11, "ResolveDst"], [22, "ResolveDst"], [32, "ResolveDst"]],
@@ -239,11 +239,11 @@ class TileThreads(unittest.TestCase):
                 named(22, "vkCmdEndRenderPass(C=Store, DS=Store)"),
                 named(30, "vkCmdBeginRenderPass(C=Load, DS=Load)"), named(31, "vkCmdDrawIndexed()"),
                 named(32, "vkCmdEndRenderPass(C=Store, DS=Don't Care)"),
-                named(40, "vkCmdBeginRenderPass(C=Load, DS=Load)"), named(41, "vkCmdDraw()"),
-                named(42, "vkCmdEndRenderPass(C=Store, DS=Store)"),
+                named(40, "vkCmdBeginRenderPass(C=Load, D=Load)"), named(41, "vkCmdDraw()"),
+                named(42, "vkCmdEndRenderPass(C=Store, D=Store)"),
                 named(50, "vkCmdBeginRenderPass(Load)"), named(51, "vkCmdDraw()"), named(52, "vkCmdEndRenderPass(Store)")]
         got = {t["event"]: t["threads"] for t in memory.tile_threads(texs, usage, acts)}
-        # clear + resolve 4 + 1, load + resolve 4 + 1, + MSAA depth load 4, single-sample depth load 1, colour load 0
+        # clear + resolve 4 + 1, load + resolve 4 + 1, + MSAA depth load 4, depth-only load 1, colour load 0
         self.assertEqual(got, {10: 500, 20: 500, 30: 900, 40: 100})
 
     def test_editor_driver_padding(self):

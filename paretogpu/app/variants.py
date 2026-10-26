@@ -191,23 +191,28 @@ def check_pipeline(frame_pipeline, state: VariantState, keys):
 
 
 def loops_of(state: VariantState, root, cores, jobs=None, rep=CONSOLE) -> dict:
-    """-> {file: {core: LoopProfile}} only on cores where the longest path is N/A ({} if not forceable), so a file's
-    price on one core does not depend on which other cores the run measures."""
+    """-> {file: {core: LoopProfile}} of the files whose SPIR-V has a dynamic loop, on every measured core ({} if not
+    forceable): malioc unrolls a capped loop with a data exit (ray steps) on some cores and prices it at the cap."""
     files = sorted({fn for k in state["keys"] for fn in state["files"].get(k, {}).values()})
-    na = {(fn, c) for fn in files for c, r in state["measurements"].get(fn, {}).items()
-          if c in cores and r.get("ok", True) and heavy.combined(r)["longest"] is None}
-    dyn = sorted({fn for fn, _ in na})
+    dyn = []
+    for fn in files:
+        with open(os.path.join(root, fn), "rb") as f:
+            if loops.outer_loops(f.read()):
+                dyn.append(fn)
     if not dyn:
         rep.skip("loops")
         return {}
+    todo = [(fn, c) for fn in dyn for c, r in state["measurements"].get(fn, {}).items()
+            if c in cores and r.get("ok", True)]
+    na = {(fn, c) for fn, c in todo if heavy.combined(state["measurements"][fn][c])["longest"] is None}
     rep.log(f"pricing dynamic loops of {len(dyn)} files: every outer loop at 0, {loops.SLOPE_M}, "
             f"{2 * loops.SLOPE_M} and {4 * loops.SLOPE_M} iterations, the others at 1 ...")
-    res = Engine(rep, jobs).get(LoopRule(root), sorted(na))
+    res = Engine(rep, jobs).get(LoopRule(root), todo)
     out = {fn: {} for fn in dyn}
     for (fn, core), p in res.items():
         if p:
             out[fn][core] = p
-    bad = [fn for fn in dyn if any((fn, c) in na and c not in out[fn] for c in cores)]
+    bad = sorted({fn for fn, c in na if c not in out[fn]})
     if bad:
         rep.log(f"  loops not forced in {len(bad)} files (priced by total): " + ", ".join(bad[:5])
                 + (" ..." if len(bad) > 5 else ""))

@@ -1,13 +1,16 @@
 "use strict";
+const projectOption = p => p.device ? `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.package)}</option>`
+  : `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · snapshots: ${p.snapshots}` : ""}</option>`;
+function editorGroups() {
+  const open = OPT.unity_projects.filter(p => p.open && !p.device), rest = OPT.unity_projects.filter(p => !p.open && !p.device);
+  return (open.length ? `<optgroup label="Открыты в Unity">${open.map(projectOption).join("")}</optgroup>` : "") +
+    (rest.length ? `<optgroup label="Остальные проекты (Unity Hub)">${rest.map(projectOption).join("")}</optgroup>` : "");
+}
 function projects() {
-  const open = OPT.unity_projects.filter(p => p.open && !p.device), rest = OPT.unity_projects.filter(p => !p.open);
-  const o = p => p.device ? `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.package)}</option>`
-    : `<option value="${esc(p.path)}">${esc(p.title)} — ${esc(p.path)}${p.version ? " · " + esc(p.version) : ""}${p.snapshots ? ` · snapshots: ${p.snapshots}` : ""}</option>`;
+  const open = OPT.unity_projects.filter(p => p.open && !p.device);
   const phones = OPT.unity_projects.filter(p => p.device);
-  $("#project").innerHTML = (phones.length ? `<optgroup label="Телефон (USB): frame с телефона">${phones.map(o).join("")}</optgroup>` : "") +
-    (open.length ? `<optgroup label="Открыты в Unity">${open.map(o).join("")}</optgroup>` : "") +
-    (rest.length ? `<optgroup label="Остальные проекты (Unity Hub)">${rest.map(o).join("")}</optgroup>` : "") +
-    `<option value="__other">Другая папка…</option>`;
+  $("#project").innerHTML = (phones.length ? `<optgroup label="Телефон (USB): frame с телефона">${phones.map(projectOption).join("")}</optgroup>` : "") +
+    editorGroups() + `<option value="__other">Другая папка…</option>`;
   const saved = store.get("project");
   if (saved && OPT.unity_projects.some(p => p.path === saved)) $("#project").value = saved;
   else if (saved) { $("#project").value = "__other"; $("#projectPath").value = saved; }

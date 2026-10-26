@@ -18,7 +18,7 @@ class Measured(unittest.TestCase):
         self.c = {"events": [row(0, 300, 30), row(1, 100, 10), {**row(2, 0, 0, "tile"), "kind": "tile"},
                              row(4, 50, 500, fragment=7.0, vertex=3.0)],
                   "geometry": [{**row(3, 0, 60, "shadow", fragment=0.0), "geometry": True}],
-                  "cores": [{"name": G78}, {"name": "Mali-G52"}], "missing": []}
+                  "cores": [{"name": G78}, {"name": "Mali-G52"}], "missing": [], "loops": {"unknown": 2}}
         self.events = [{"index": i, "rd": {"events": [100 + i]}} for i in (0, 1, 3, 4)]
         self.sc = {"error": None, "source": "streamline", "shaders": [
             {"mode": "colour", "events": [100, 101], "pipes": {"A": 4e6, "T": 1e6}},
@@ -42,12 +42,33 @@ class Measured(unittest.TestCase):
         self.assertEqual([x["name"] for x in c["cores"]], [G78])
         self.assertAlmostEqual(c["totals"][G78]["total"], 6e6 + 1.0 + 10.0)  # + the tile row + the noisy draw's model
 
+    def test_default_loops_only_where_the_model_price_stays(self):
+        default = {"n": 2, "loops": [{"n": 2, "from": "default"}]}
+        for r in self.c["events"]:
+            if r["index"] in (0, 4):
+                r["loop"] = default
+        frame_cost.measured(self.c, self.sc, self.events, G78)
+        self.assertEqual(self.c["loops"]["unknown"], 1)  # draw 0 is measured, draw 4 is below noise
+
     def test_noise_keeps_the_model(self):
         frame_cost.measured(self.c, self.sc, self.events, G78)
         r = next(r["cost"][G78] for r in self.c["events"] if r["index"] == 4)
         self.assertEqual((r["fragment"], r["vertex"]), (7.0, 3.0))
         self.assertEqual(r["unmeasured"], {"fragment": "noise", "vertex": "not_swapped"})
         self.assertEqual(self.c["measured_fallback"], {"events": 1, "cycles": 10.0})
+
+    def test_compute_and_unpriced_draws_stay_counted(self):
+        cs = {**row(5, 0, 0, "compute", fragment=0.0, vertex=0.0), "kind": "compute", "threads": 64}
+        cs["cost"][G78].update(compute=4.0, total=4.0)
+        bare = {**row(6, 10, 3), "cost": {}}
+        self.c["events"] += [cs, bare]
+        self.c["missing"] = [{"index": 6, "reason": "no variant"}]
+        frame_cost.measured(self.c, self.sc, self.events, G78)
+        r = next(r["cost"][G78] for r in self.c["events"] if r["index"] == 5)
+        self.assertEqual((r["total"], r["unmeasured"]), (4.0, {"compute": "not_swapped"}))
+        self.assertEqual(self.c["missing"], [{"index": 6, "reason": "no variant"}])
+        t = self.c["totals"][G78]
+        self.assertAlmostEqual(t["total"], t["fragment"] + t["vertex"] + t["compute"])
 
     def test_nothing_measured(self):
         self.assertFalse(frame_cost.measured({}, {"error": "hung", "shaders": []}, [], G78))

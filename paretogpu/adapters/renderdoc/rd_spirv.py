@@ -141,6 +141,47 @@ def interface(raw, entry):
     return {"blocks": blocks, "local_size": size3}
 
 
+OP_TYPE_IMAGE, OP_TYPE_SAMPLED_IMAGE, OP_LOAD, OP_ACCESS_CHAIN, OP_COPY_OBJECT = 25, 27, 61, 65, 83
+OP_SAMPLED_IMAGE, OP_IMAGE_FETCH, OP_IMAGE_READ = 86, 95, 98
+STORAGE_UNIFORM_CONSTANT = 0
+
+
+def sampled(raw):
+    """-> sorted [((set, binding) of a texture, (set, binding) of its sampler or None)]: the pairs OpSampledImage joins
+    (Unity binds textures and samplers apart), combined image-samplers with their own binding, fetches with None."""
+    w, _ = _words(raw)
+    dec, ptrs, inner, kind, var_type, src, pairs = {}, {}, {}, {}, {}, {}, set()
+    for i, op in _instructions(w):
+        x = w[i:i + (w[i] >> 16)]
+        if op == OP_DECORATE and x[2] in (DEC_SET, DEC_BINDING):
+            dec.setdefault(x[1], {})[x[2]] = x[3]
+        elif op in (OP_TYPE_IMAGE, OP_TYPE_SAMPLED_IMAGE):
+            kind[x[1]] = op
+        elif op in (OP_TYPE_ARRAY, OP_TYPE_RUNTIME_ARRAY):
+            inner[x[1]] = x[2]
+        elif op == OP_TYPE_POINTER:
+            ptrs[x[1]] = x[3]
+        elif op == OP_VARIABLE and x[3] == STORAGE_UNIFORM_CONSTANT:
+            var_type[x[2]] = ptrs[x[1]]
+        elif op in (OP_LOAD, OP_ACCESS_CHAIN, OP_COPY_OBJECT):
+            src[x[2]] = src.get(x[3], x[3])
+        elif op == OP_SAMPLED_IMAGE:
+            pairs.add((src.get(x[3], x[3]), src.get(x[4], x[4])))
+        elif op in (OP_IMAGE_FETCH, OP_IMAGE_READ):
+            pairs.add((src.get(x[3], x[3]), None))
+    for v, t in var_type.items():
+        while t in inner:
+            t = inner[t]
+        if kind.get(t) == OP_TYPE_SAMPLED_IMAGE:
+            pairs.add((v, v))
+
+    def at(v):
+        d = dec.get(v, {})
+        return d.get(DEC_SET, 0), d.get(DEC_BINDING, 0)
+    return sorted({(at(a), at(b) if b is not None else None) for a, b in pairs if a in var_type},
+                  key=lambda p: (p[0], p[1] or (-1, -1)))
+
+
 def discards(raw):
     w, _ = _words(raw)
     return any(op in KILLS or op == OP_DEMOTE for _, op in _instructions(w))
@@ -169,7 +210,7 @@ def without_discard(raw):
     return w.tobytes()
 
 
-OP_STORE, OP_CONSTANT_NULL, OP_ACCESS_CHAIN = 62, 46, 65
+OP_STORE, OP_CONSTANT_NULL = 62, 46
 STORAGE_OUTPUT, BUILTIN_POSITION = 3, 0
 
 

@@ -7,6 +7,7 @@ import time
 from paretogpu.app import code_version
 from paretogpu.app import frame_draws
 from paretogpu.app import frame_memory
+from paretogpu.app import frame_textures
 from paretogpu.app import materials as project_materials
 from paretogpu.app import variants
 from paretogpu.core import device
@@ -14,10 +15,12 @@ from paretogpu.core import frame_cost
 from paretogpu.core import materials as shaders
 from paretogpu.core import memory
 from paretogpu.core import profile
+from paretogpu.core import textures
 from paretogpu.core.events import assign_stages, global_keywords_known
 from paretogpu.model.cores import main_core as main_core_of
 from paretogpu.model.cost import CostRun
 from paretogpu.model.variant import VariantKey, VariantState
+from paretogpu.store import variant_store
 from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
@@ -42,7 +45,8 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
     if variants.identify(events, frame_dir, root, project, rep):
         events = assign_stages(events)  # the identified passes tell the stages
     coded = [e for e in events if e["kind"] == "draw" and (e.get("code") or {}).get("frag")]
-    unmatched = sum(1 for e in coded if not e["code"].get("variant"))
+    known = {k.shader for k in variant_store.load_manifests(root)}  # a built-in shader the editor frame lacks has none
+    unmatched = sum(1 for e in coded if not e["code"].get("variant") and (e.get("shader") is None or e["shader"] in known))
     captured = variants.place_captured(events, frame_dir, root)
     state = variants.run(events + ([k.as_event() for k in mat_keys] if mat_keys else []), project, root, cores,
                          compile_missing=compile_missing, rep=rep, captured=captured)
@@ -58,14 +62,15 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
     capture = frame_memory.read(frame_dir, frame, rep)
     rep.phase("report")
     tiles = memory.tile_threads(capture["textures"], capture["usage"], capture["actions"], events) if capture else []
-    c = frame_cost.compute(frame, events, state, cores, main_core, tiles)
-    c["memory"] = frame_memory.passes(capture, events, c["events"], [x["name"] for x in c["cores"]], rep)
+    calls = {a["event"]: a for a in capture["actions"]} if capture else None
+    c = frame_cost.compute(frame, events, state, cores, main_core, tiles, calls)
+    tex_formats = frame_textures.formats(frame_dir, frame, capture, project, compile_missing, rep) if capture else {}
+    c["memory"] = frame_memory.passes(capture, events, c["events"], [x["name"] for x in c["cores"]], tex_formats, rep)
     if capture:
-        dev = frame.get("device") or {}
-        core = dev.get("gpu") if dev.get("gpu") in [x["name"] for x in c["cores"]] else c["main_core"]
-        c["hardware"] = device.hardware(dev, capture["actions"], events, c["events"] + c["geometry"], core)
-        if frame.get("device"):
-            frame_cost.measured(c, (c["hardware"] or {}).get("shader_cost"), events, core)
+        textures.attach(c["events"] + c["geometry"], events, capture, tex_formats)
+        c["hardware"] = device.hardware(frame.get("device"), capture["actions"], c["main_core"])
+        if c["hardware"]:
+            frame_cost.measured(c, c["hardware"]["shader_cost"], events, c["main_core"])
     c["variants_checked"] = state["checked"]
     prof = profile.describe(frame, profile.frame_size(c["events"]))
     c["profile"] = {**prof, "warnings": profile.warnings(prof),
@@ -82,6 +87,16 @@ def run(frame_dir, root, cores, project=None, materials=False, compile_missing=T
         t = (c["totals"].get(c["main_core"]) or {}).get("total") or 0.0
         c["profile"]["warnings"].append({"code": "measured_fallback", "n": fb["events"],
                                          "share": f"{fb['cycles'] / t:.0%}" if t else "?"})
+    if tex_formats is None:
+        c["profile"]["warnings"].append({"code": "texture_formats_unknown"})
+    if c["loops"]["unknown"]:
+        c["profile"]["warnings"].append({"code": "loops_default", "n": c["loops"]["unknown"], "iters": c["loops"]["n"]})
+    if c["loops"]["unforced"]:
+        c["profile"]["warnings"].append({"code": "loops_unforced", "n": len(c["loops"]["unforced"])})
+    if frame.get("device") and not c.get("measured"):
+        sc = (c.get("hardware") or {}).get("shader_cost")
+        why = "--no-shader-cost" if sc is None else sc.get("error") or "every shader swap failed"
+        c["profile"]["warnings"].append({"code": "device_unmeasured", "error": why})
     if gpu and c["main_core"] != gpu:
         c["profile"]["warnings"].append({"code": "device_core_unpriced", "gpu": gpu, "core": c["main_core"]})
     if dev.get("discard_unshaded"):

@@ -4,12 +4,12 @@ import subprocess
 import tempfile
 import unittest
 
-from paretogpu.core import ubo
+from paretogpu.core import spirv, ubo
 from tests.test_loops import CLUSTER_SPV, LIGHTS_SPV, read, spirv_val
 
 
 def chains(data):
-    header, insts = ubo._parse(data)
+    header, insts = spirv.parse(data)
     op = lambda x: x[0] & 0xFFFF
     consts = {x[2] for x in insts if op(x) == ubo.OP_CONSTANT}
     blocks = {x[1]: x[2] for x in insts if op(x) == ubo.OP_DECORATE and x[2] in (ubo.BLOCK, ubo.BUFFER_BLOCK)}

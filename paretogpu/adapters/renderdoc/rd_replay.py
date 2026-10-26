@@ -100,7 +100,9 @@ class Replay:
             self._drop_output()
             self.remote.CloseCapture(self.c)
             self.c, self.moved, full = self._open(), 0, True
-            self.swap(swaps)
+            failed = self.swap(swaps)
+            if failed:
+                raise RuntimeError(f"shader swaps lost on reopening the capture: {failed}")
         self.c.SetFrameEvent(eid, full)
         self.moved += 1
 

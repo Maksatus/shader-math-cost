@@ -7,7 +7,10 @@ import time
 
 from paretogpu.adapters import renderdoc as rdoc
 from paretogpu.adapters.unity import assets
+from paretogpu.app import frame_memory
+from paretogpu.app.frame import save_thumbnail
 from paretogpu.core import device
+from paretogpu.model.errors import ParetoError
 from paretogpu.store import workspace
 from paretogpu.views.reporter import CONSOLE
 
@@ -87,10 +90,12 @@ def _sweep(serial, capture, gpu, out, progress):
     from paretogpu.adapters import streamline
     from paretogpu.core import sweep
     progress("shader cost: through Streamline (RenderDoc gave no Mali counters for this frame)")
+    if not gpu:
+        return {"error": "Streamline: the phone's GPU is unknown (adb shell dumpsys SurfaceFlinger)"}
     try:
-        answer, text = rdoc.device_sweep(serial, capture, gpu or "Mali-G78", out + ".sweep", on_progress=progress)
+        answer, text = rdoc.device_sweep(serial, capture, gpu, out + ".sweep", on_progress=progress)
         return sweep.knockout(answer, *streamline.timeline(text))
-    except (rdoc.RenderDocError, streamline.StreamlineError, OSError) as e:
+    except (ParetoError, streamline.StreamlineError, OSError) as e:
         return {"error": f"Streamline: {e}"[:300]}
 
 
@@ -105,7 +110,6 @@ def _enter(path):
 
 def build(frame_dir, answer_path, project, rep=CONSOLE):
     """Writes frame_events.json, rd_actions.json, rd_memory.json into frame_dir; -> the snapshot."""
-    from paretogpu.app import frame_memory  # circular: it imports this module
     with open(answer_path, encoding="utf-8") as f:
         answer = json.load(f)
     snap, actions, mem = device.snapshot(answer, {
@@ -117,7 +121,6 @@ def build(frame_dir, answer_path, project, rep=CONSOLE):
         with open(path + ".tmp", "w", encoding="utf-8", newline="\n") as f:
             json.dump(doc, f, indent=1 if name == workspace.SNAPSHOT_FILE else None, ensure_ascii=False)
         os.replace(path + ".tmp", path)
-    from paretogpu.app.frame import save_thumbnail
     save_thumbnail(answer["capture"], frame_dir, rotation=answer["rotation"], rep=rep)
     rep.log(f"  snapshot of the device frame: {len(snap['events'])} calls")
     return snap

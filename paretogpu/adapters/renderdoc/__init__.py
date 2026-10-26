@@ -15,6 +15,7 @@ import time
 import winreg
 import zlib
 
+from paretogpu.adapters import arm
 from paretogpu.adapters.unity import bridge
 from paretogpu.model.errors import ParetoError
 
@@ -68,16 +69,11 @@ def arm_qrenderdoc():
         exe = os.path.join(os.environ["RENDERDOC_ARM_DIR"], "qrenderdoc.exe")
         if os.path.exists(exe):
             return exe
-    found = []
-    for d in glob.glob(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Arm", "Arm Performance Studio *")):
-        exe = os.path.join(d, "renderdoc_for_arm_gpus", "qrenderdoc.exe")
-        m = re.search(r"(\d+(?:\.\d+)*)$", d)
-        if m and os.path.exists(exe):
-            found.append((tuple(int(x) for x in m.group(1).split(".")), exe))
-    if not found:
+    exe = arm.studio_file("renderdoc_for_arm_gpus", "qrenderdoc.exe")
+    if not exe:
         raise RenderDocError("RenderDoc for Arm GPUs not found: install Arm Performance Studio or set RENDERDOC_ARM_DIR",
                              code="device")
-    return max(found)[1]
+    return exe
 
 
 def adb():

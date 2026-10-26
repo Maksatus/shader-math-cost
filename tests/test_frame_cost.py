@@ -54,8 +54,8 @@ class CostTest(unittest.TestCase):
         self.assertEqual(x["fragment"], 10000 * 20)
         self.assertEqual(x["vertex"], 3 * 4)
         self.assertAlmostEqual(sum(r["cost"]["Mali-G78"]["share"] for r in rows), 1.0)
-        for g in cost.GROUPS:
-            self.assertAlmostEqual(sum(a["share"] for a in c["groups"]["Mali-G78"][g]), 1.0)
+        for g in ("stage", "shader", "variant", "object", "rt"):
+            self.assertAlmostEqual(sum(a["share"] for a in cost.group(rows, "Mali-G78", g)), 1.0)
         self.assertEqual(c["coverage"], {"draws": 3, "draws_priced": 3, "events": 3, "events_priced": 3})
 
     def test_loop_bounded_by_a_uniform_runs_as_the_event_says(self):
@@ -89,6 +89,13 @@ class CostTest(unittest.TestCase):
         ev["params"] = {"@0.1": base64.b64encode(struct.pack("<4f", 2.5, 9.0, 0.0, 0.0)).decode()}
         r = cost.compute({}, [ev], st)["events"][0]
         self.assertEqual([x["n"] for x in r["loop"]["loops"]], [1.5, 3])
+        # an SRP batch: each call's own block bytes, weighted by its pixels (300 at 1, 100 at 5)
+        ev["rd"] = {"ps_invocations": 400, "events": [7, 8]}
+        calls = {e: {"event": e, "ps_invocations": ps, "blocks": {
+            "@0.1": base64.b64encode(struct.pack("<4f", v, 0.0, 0.0, 0.0)).decode()}} for e, ps, v in ((7, 300, 1.0),
+                                                                                                    (8, 100, 5.0))}
+        r = cost.compute({}, [ev], st, calls=calls)["events"][0]
+        self.assertEqual((r["loop"]["loops"][1]["n"], r["loop"]["loops"][1]["value"]), (2.0, 2.0))
 
     def test_renderdoc_vertices_and_compute(self):
         draw = event(0, "opaque", "A", 100, vertices=50, rd={"ps_invocations": 100, "vs_invocations": 70})

@@ -6,8 +6,8 @@ target."""
 import struct
 
 from paretogpu.core import loops as model
+from paretogpu.core import spirv
 
-MAGIC = 0x07230203
 OP_ENTRY_POINT, OP_TYPE_FLOAT, OP_TYPE_VECTOR, OP_TYPE_POINTER, OP_CONSTANT = 15, 22, 23, 32, 43
 OP_FUNCTION, OP_FUNCTION_END, OP_VARIABLE, OP_LOAD, OP_STORE, OP_DECORATE = 54, 56, 59, 61, 62, 71
 OP_COMPOSITE_CONSTRUCT, OP_FADD, OP_FMUL, OP_PHI, OP_LABEL, OP_RETURN = 80, 129, 133, 245, 248, 253
@@ -17,7 +17,7 @@ STORAGE_OUTPUT, STORAGE_PRIVATE, DEC_LOCATION, MODEL_FRAGMENT = 3, 6, 30, 4
 
 def outer_loops(raw):
     """-> ([continue label per outer loop], [holds a nested loop]) in core/loops order (the pricing's)."""
-    parsed = model._parse_spirv(raw)
+    parsed = spirv.parse(raw)
     plans = model._loop_plans(parsed[1]) if parsed else None
     if not plans or not plans[1]:
         return [], []
@@ -34,23 +34,12 @@ def _inst(op, *words):
     return [((len(words) + 1) << 16) | op, *words]
 
 
-def _parse(raw):
-    w = list(struct.unpack(f"<{len(raw) // 4}I", raw[:len(raw) - len(raw) % 4]))
-    if not w or w[0] != MAGIC:
-        raise ValueError("not SPIR-V")
-    insts, i = [], 5
-    while i < len(w):
-        n = w[i] >> 16
-        if n == 0:
-            raise ValueError("SPIR-V instruction of no words")
-        insts.append(w[i:i + n])
-        i += n
-    return w[:5], insts
-
-
 def counting(raw, continues, scale=1.0):
     """continues: one to three continue-block label ids. -> SPIR-V bytes; ValueError if the output is not float."""
-    header, insts = _parse(raw)
+    parsed = spirv.parse(bytes(raw))
+    if parsed is None:
+        raise ValueError("not SPIR-V")
+    header, insts = parsed
     bound = header[3]
 
     def new():

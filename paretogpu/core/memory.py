@@ -9,8 +9,9 @@ pass target is a tile read); without the marker, a run with the same colour + de
   copies    source + destination whole; a resolve of the current pass's target right after it is on tile (destination
             written with the pass, source not read / stored); a resolve of a cleared-only target clears its
             destination (editor D3D11 resolves); a copy touching the current pass's targets ends the pass
-Sizes: editor textures at most their format's bytes (desktop drivers pad: D32S8 to 8, MSAA); targets x AFBC; editor RGBA8 non-target assets count as ASTC
-(ASSET_BITS); device-frame ("native") textures as captured. Vertex and index buffers are not counted.
+Sizes: editor textures at most their format's bytes (desktop drivers pad: D32S8 to 8, MSAA); targets x AFBC; a PC
+frame's other textures in their importer's Android format (app/frame_textures), RGBA8 ones as ASTC 6x6 (ASSET_BITS) when
+the editor did not answer; device-frame ("native") textures as captured. Vertex and index buffers are not counted.
 Pass cycles: its events' cycles split by each call's share of the event's invocations, so passes sum to the frame;
 Mali's own tile threads (tile_threads) are frame_cost rows of kind "tile", not in these pass cycles.
 Frame time = sum over passes of max(alu_ms, mem_ms).
@@ -22,6 +23,12 @@ from paretogpu.model.cores import DEVICES
 
 AFBC = 0.5          # assumed AFBC ratio of render targets (~0.5 for game frames, not verified on device)
 ASSET_BITS = 3.56   # ASTC 6x6, Unity's default for Android textures
+_ASTC = re.compile(r"ASTC_(?:HDR_)?(\d+)x(\d+)")
+ANDROID_BYTES = {"ETC_RGB4": 0.5, "ETC2_RGB4": 0.5, "ETC2_RGB4_PUNCHTHROUGH_ALPHA": 0.5, "ETC2_RGBA8": 1, "EAC_R": 0.5,
+                 "EAC_R_SIGNED": 0.5, "EAC_RG": 1, "EAC_RG_SIGNED": 1, "ETC_RGB4Crunched": 0.5, "ETC2_RGBA8Crunched": 1,
+                 "Alpha8": 1, "R8": 1, "R16": 2, "RG16": 2, "RGB16": 2, "RGBA16": 2, "ARGB16": 2, "RGB24": 3,
+                 "RGBA32": 4, "ARGB32": 4, "RHalf": 2, "RGHalf": 4, "RGBAHalf": 8, "RFloat": 4, "RGFloat": 8,
+                 "RGBAFloat": 16, "RGB9E5": 4}  # bytes per texel of Unity's TextureImporterFormat
 _CHANNEL_BITS = re.compile(r"[RGBAXDSE](\d+)")
 UNCOMPRESSED_8BIT = ("R8G8B8A8", "B8G8R8A8", "R8G8B8X8", "B8G8R8X8")
 READS = {"PS_Resource": "ps", "VS_Resource": "vs", "CS_Resource": "cs", "All_Resource": "ps",
@@ -49,10 +56,17 @@ def format_bytes(fmt):
     return bits / 8 if bits else None
 
 
-def device_size(t):
-    """-> (device bytes per texel of top mip, device bytes of whole texture, "afbc" | "astc" | "capture").
+def android_bytes(fmt):
+    """-> bytes per texel of a Unity texture importer format ("ASTC_8x8" 0.25, "RGBA32" 4), None if unknown."""
+    m = _ASTC.fullmatch(fmt)
+    return 16 / (int(m.group(1)) * int(m.group(2))) if m else ANDROID_BYTES.get(fmt)
+
+
+def device_size(t, formats=None):
+    """-> (device bytes per texel of top mip, device bytes of whole texture, "afbc" | "android" | "astc" | "capture").
     An editor texture's byteSize is the desktop driver's allocation (D32S8 padded to 8 B, NVIDIA MSAA 4x 16 B per
-    4 B sample): it counts at most its format's size."""
+    4 B sample): it counts at most its format's size. formats: a PC frame's Android formats by texture name
+    (app/frame_textures), None when the editor did not answer."""
     bpt = t["bytes"] / max(1, texels(t))
     fmt = t.get("format") or ""
     real = None if t.get("native") else format_bytes(fmt)
@@ -60,9 +74,13 @@ def device_size(t):
         bpt, t = real, {**t, "bytes": real * texels(t)}
     if is_target(t):
         return bpt * AFBC, t["bytes"] * AFBC, "afbc"
-    if fmt.startswith(UNCOMPRESSED_8BIT) and not t.get("native"):
-        dev = ASSET_BITS / 8
-        return dev, t["bytes"] * dev / bpt, "astc"
+    if not t.get("native"):
+        dev = max((android_bytes(x["format"]) or 0 for x in (formats or {}).get(t["name"]) or []), default=0)
+        if dev:
+            return dev, t["bytes"] * dev / bpt, "android"
+        if formats is None and fmt.startswith(UNCOMPRESSED_8BIT):
+            dev = ASSET_BITS / 8
+            return dev, t["bytes"] * dev / bpt, "astc"
     return bpt, t["bytes"], "capture"
 
 
@@ -113,9 +131,10 @@ def _pass_name(names):
     return " + ".join(seen[:3]) + (f" +{len(seen) - 3}" if len(seen) > 3 else "") if seen else "—"
 
 
-def passes(textures, usage, actions, events, rows, cores):
+def passes(textures, usage, actions, events, rows, cores, formats=None):
     """textures / usage: rd_memory.py output; actions: rd_actions.json "actions"; events: with ev["rd"]
-    (core/events.match); rows: frame_cost.compute()["events"]. -> {"passes", "totals", "assumptions"} or None."""
+    (core/events.match); rows: frame_cost.compute()["events"]; formats: device_size().
+    -> {"passes", "totals", "assumptions"} or None."""
     tex = {int(t["id"]): t for t in textures}
     by_event = defaultdict(lambda: defaultdict(list))  # eid -> usage -> [texture id]
     for tid, us in usage.items():
@@ -162,10 +181,10 @@ def passes(textures, usage, actions, events, rows, cores):
             if on_tile:
                 tile_resolves.add(eid)
                 cur["resolves"].extend(tex[tid]["name"] for tid in dst)
-                cur["resolve_bytes"] += sum(device_size(tex[tid])[1] for tid in dst)
+                cur["resolve_bytes"] += sum(device_size(tex[tid], formats)[1] for tid in dst)
             else:
-                loose["copy"] += sum(device_size(tex[tid])[1] for tid in src if tid in tex)
-                loose["copy"] += sum(device_size(tex[tid])[1] for tid in dst)
+                loose["copy"] += sum(device_size(tex[tid], formats)[1] for tid in src if tid in tex)
+                loose["copy"] += sum(device_size(tex[tid], formats)[1] for tid in dst)
                 loose["events"].append(eid)
                 if cur is not None and (set(src) | set(dst)) & cur["ids"]:
                     cur = None
@@ -202,12 +221,12 @@ def passes(textures, usage, actions, events, rows, cores):
                 t = tex.get(tid)
                 if t is None or tid in cur["ids"]:
                     continue
-                per, whole, _ = device_size(t)
+                per, whole, _ = device_size(t, formats)
                 cur["tex"][tid] += whole if runs[stage] is None else min(runs[stage] * per, whole)
         for u in RW:
             for tid in use.get(u, []):
                 if tid in tex:
-                    cur["tex"][tid] += device_size(tex[tid])[1]
+                    cur["tex"][tid] += device_size(tex[tid], formats)[1]
                     written.add(tid)
         written.update(color + depth)
         cleared.difference_update(color + depth)
@@ -240,7 +259,7 @@ def passes(textures, usage, actions, events, rows, cores):
             "bytes": {"load": load, "store": store, "textures": texb, "total": total},
             "textures": [{"name": tex[tid]["name"], "format": tex[tid]["format"],
                           "size": [tex[tid]["width"], tex[tid]["height"]], "mips": tex[tid].get("mips"),
-                          "how": device_size(tex[tid])[2], "bytes": b} for tid, b in top],
+                          "how": device_size(tex[tid], formats)[2], "bytes": b} for tid, b in top],
             "cycles": cycles, "parts": parts, "roofline": {c: roofline(cycles[c], total, c) for c in cores}})
     frame_bytes = sum(p["bytes"]["total"] for p in res) + loose["copy"]
     for p in res:
@@ -263,15 +282,15 @@ def passes(textures, usage, actions, events, rows, cores):
                                                          sum(p["cycles"][c] for p in res))
                                  if sum(p["cycles"][c] for p in res) else 0.0}
     return {"passes": res, "totals": totals,
-            "assumptions": {"afbc": AFBC, "asset_bits": ASSET_BITS,
-                            "native": any(t.get("native") for t in textures),
+            "assumptions": {"afbc": AFBC, "textures": "native" if any(t.get("native") for t in textures) else
+                            "astc" if formats is None else "android",
                             "devices": {c: DEVICES[c] for c in cores if c in DEVICES}}}
 
 
 TILE_PRICE = 2.1  # cycles per Mali tile thread on G78 (K3.1): 2.12 in a clear + resolve pass without draws, 2.07 in the
 # transparent pass that loads MSAA colour + depth
 _BEGIN, _END = "vkCmdBeginRenderPass", "vkCmdEndRenderPass"
-_OPS = re.compile(r"\b(C|DS)=([A-Za-z' ]+?)[,)]")
+_OPS = re.compile(r"\b(C|DS|D)=([A-Za-z' ]+?)[,)]")
 _ONE_OP = re.compile(r"\((Load|Clear|Don't Care)\)")
 
 
@@ -313,7 +332,7 @@ def tile_threads(textures, usage, actions, events=None):
                     use[u] |= ids
             ops = dict(_OPS.findall(begin["name"]))
             one = _ONE_OP.search(begin["name"])
-            depth_load = (ops.get("DS") or (one.group(1) if one else "")) == "Load"
+            depth_load = (ops.get("DS") or ops.get("D") or (one.group(1) if one else "")) == "Load"
             depth = {i for i in use["DepthStencilTarget"] | use["Clear"] if (tex.get(i) or {}).get("depth_target")
                      or (tex.get(i) or {}).get("format", "").startswith(("D16", "D24", "D32", "S8"))}
             color = (use["ColorTarget"] | use["Clear"] | use["ResolveSrc"]) - depth

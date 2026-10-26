@@ -1,14 +1,15 @@
 MAIN_CORE = "Mali-G78"  # the core shown first and printed
 PRESETS = {
     # Bifrost low, Valhall mid / high / new, 5th Gen
-    "mobile": ["Mali-G52", "Mali-G57", "Mali-G78", "Mali-G715", "Mali-G720"],
+    "mobile": ["Mali-G52", "Mali-G57", "Mali-G78", "Mali-G710", "Mali-G715", "Mali-G720"],
 }
-# roofline device per core (core/memory.py): shader cores, GPU MHz, peak DRAM GB/s; G78 = the Galaxy S21 on hand,
-# the others are typical phones (unverified)
+# roofline device per core (core/memory.py): shader cores, GPU MHz, peak DRAM GB/s; G78 = the Galaxy S21 and G710 =
+# the Pixel 7 on hand, the others are typical phones (unverified)
 DEVICES = {
     "Mali-G52": {"device": "Helio G85 (G52 MC2)", "cores": 2, "mhz": 1000, "gbps": 14.9},
     "Mali-G57": {"device": "Dimensity 700 (G57 MC2)", "cores": 2, "mhz": 950, "gbps": 17.1},
     "Mali-G78": {"device": "Galaxy S21, Exynos 2100 (G78 MP14)", "cores": 14, "mhz": 854, "gbps": 51.2},
+    "Mali-G710": {"device": "Pixel 7, Tensor G2 (G710 MP7)", "cores": 7, "mhz": 848, "gbps": 51.2},
     "Mali-G715": {"device": "Dimensity 9200 (Immortalis-G715 MC11)", "cores": 11, "mhz": 981, "gbps": 68.3},
     "Mali-G720": {"device": "Dimensity 9300 (Immortalis-G720 MC12)", "cores": 12, "mhz": 1300, "gbps": 76.8},
 }

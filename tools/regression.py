@@ -35,7 +35,7 @@ def W(*p):
 
 def is_phone(path):
     with open(os.path.join(path, workspace.SNAPSHOT_FILE), encoding="utf-8") as f:
-        return '"source": "device"' in f.read(4096)
+        return bool(json.load(f).get("device"))
 
 
 def pick_inputs(snapshots=None, mats=None, phone=None):

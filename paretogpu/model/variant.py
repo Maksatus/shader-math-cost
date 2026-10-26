@@ -10,7 +10,7 @@ STAGE = {"vert": "vertex", "frag": "fragment", "comp": "compute"}
 SHORT = {v: k for k, v in STAGE.items()}
 COMPUTE = -1  # subshader of a compute kernel key
 CODE = "spirv "  # the "keyword" of a variant a device ran: the hash of its code (VariantKey.of)
-# ComputeShader.FindKernel / HasKernel and ShaderUtil.CompileComputeShaderVariant from a run_script crash the
+# ComputeShader.FindKernel / HasKernel and ShaderUtil.CompileComputeShaderVariant from a script run crash the
 # 6000.3.18f1 editor, on built-in and package compute shaders alike
 COMPUTE_NOT_COMPILED = "compute kernel not compiled: compiling compute shaders from a script crashes Unity 6000.3"
 NOT_IN_BUILD = "not among the variants a build has (Compile and show code)"

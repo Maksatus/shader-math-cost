@@ -111,8 +111,10 @@ def unfinished_run(raw):
     if os.path.exists(answer):
         with open(answer, encoding="utf-8") as f:
             result = json.load(f)
-        fits = not result.get("recovered") and len(result.get("variants") or []) == len(keys)
-        return (keys, result) if fits else None
+        if result.get("recovered") or len(result.get("variants") or []) != len(keys):
+            return None
+        _assemble_texts(raw, keys, result)
+        return keys, result
     files = {}
     for fn in os.listdir(raw):
         m = re.fullmatch(r"(\d+)_vulkan_(vert|frag|comp)\.bin", fn)

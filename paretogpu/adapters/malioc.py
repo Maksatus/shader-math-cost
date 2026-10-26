@@ -5,19 +5,17 @@ first read; v2 entries (old bench/run.py) lack "raw" and are recompiled when raw
 (changing it recompiles the whole cache); entries carry the malioc version instead, checked on read with the core
 and API of the raw result."""
 import atexit
-import glob
 import hashlib
 import json
 import os
-import re
 import shutil
 import sqlite3
 import subprocess
 import tempfile
 import threading
-import time
 import zlib
 
+from paretogpu.adapters import arm
 from paretogpu.adapters.gpu import Backend, read_source, register
 from paretogpu.model import cores as core_names
 from paretogpu.model.errors import ParetoError
@@ -30,15 +28,7 @@ __all__ = ["read_source", "stage_of", "STAGES", "EXT", "SPIRV_EXT"]
 def find_malioc():
     if os.environ.get("MALIOC"):
         return os.environ["MALIOC"]
-    found = []
-    for d in glob.glob(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Arm", "Arm Performance Studio *")):
-        exe = os.path.join(d, "mali_offline_compiler", "malioc.exe")
-        m = re.search(r"(\d+(?:\.\d+)*)$", d)
-        if m and os.path.exists(exe):
-            found.append((tuple(int(x) for x in m.group(1).split(".")), exe))
-    if found:
-        return max(found)[1]
-    return shutil.which("malioc") or "malioc"
+    return arm.studio_file("mali_offline_compiler", "malioc.exe") or shutil.which("malioc") or "malioc"
 
 
 MALIOC = find_malioc()
@@ -210,7 +200,6 @@ def _key_lock(key):
 
 class _Cache:
     def __init__(self, folder):
-        self.folder = folder
         self.path = os.path.join(folder, "malioc.sqlite")
         self.tls = threading.local()
         self.conns = []
@@ -241,31 +230,13 @@ class _Cache:
 
     def get(self, key):
         row = self._db().execute("SELECT value FROM entries WHERE key = ?", (key,)).fetchone()
-        if row:
-            return json.loads(zlib.decompress(row[0]))
-        old = self._read_file(os.path.join(self.folder, key + ".json"))
-        if old is not None:
-            self.put(key, old)
-        return old
+        return json.loads(zlib.decompress(row[0])) if row else None
 
     def put(self, key, entry):
         db = self._db()
         db.execute("INSERT OR REPLACE INTO entries (key, value) VALUES (?, ?)",
                    (key, zlib.compress(json.dumps(entry).encode("utf-8"), 6)))
         db.commit()
-
-    @staticmethod
-    def _read_file(path):
-        """Retries: on Windows a file being replaced by another process cannot be opened for a moment."""
-        for attempt in range(5):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    return json.load(f)
-            except FileNotFoundError:
-                return None
-            except (PermissionError, json.JSONDecodeError):
-                time.sleep(0.05 * (attempt + 1))
-        return None
 
 
 _caches = {}
@@ -307,8 +278,11 @@ def _cycles(perf, key):
     # malioc reports N/A (null) for the longest path of shaders with dynamic loops
     if not c or all(v is None for v in c["cycle_count"]):
         return None, []
-    return ({PIPE_NAMES.get(p, p): v for p, v in zip(perf["pipelines"], c["cycle_count"])},
-            [PIPE_NAMES.get(p, p) for p in c["bound_pipelines"]])
+    unknown = [p for p in perf["pipelines"] if p not in PIPE_NAMES]
+    if unknown:
+        raise MaliocError(f"unknown malioc pipeline {unknown}: add it to PIPE_NAMES and the price (core/pricing)")
+    return ({PIPE_NAMES[p]: v for p, v in zip(perf["pipelines"], c["cycle_count"])},
+            [PIPE_NAMES[p] for p in c["bound_pipelines"]])
 
 
 def parse(j):
@@ -362,8 +336,11 @@ def spills(rec):
 class Mali(Backend):
     name = "mali"
     pipes = MALI
-    tool = MALIOC
     Error = MaliocError
+
+    @property
+    def tool(self):
+        return f"{MALIOC}|{_version_of(MALIOC)}"
 
     def version(self):
         return version()

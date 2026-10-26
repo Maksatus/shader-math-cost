@@ -43,6 +43,14 @@ WARNINGS = {
                         "этих draw неизвестны.",
     "measured_fallback": "У {n} draw замер шейдера на телефоне ниже шума или не снят: у них цена модели ({share} "
                          "итога), в строке это отмечено.",
+    "texture_formats_unknown": "Форматы текстур Android не получены (редактор не отвечает или --no-compile): "
+                               "форматы — как в редакторе (ASTC там распакован в RGBA8), флаг «несжатая» может "
+                               "врать, трафик текстур во вкладке Passes — как ASTC 6×6.",
+    "loops_default": "У {n} events число повторов цикла неизвестно (граница не из параметров шейдера и не посчитана в "
+                     "кадре): взято n = {iters}.",
+    "loops_unforced": "У {n} шейдеров цикл не зафиксирован для malioc: их цена — по всему коду (total cycles).",
+    "device_unmeasured": "Цена шейдеров на телефоне не снята ({error}): в отчёте цена модели по коду шейдеров "
+                         "телефона, не замер.",
     "device_core_unpriced": "malioc не посчитал {gpu} телефона: цены и счётчики сравниваются с {core}.",
     "pass_unpriced": "проход {pass}: нет цены ({error})",
     "variants_unchecked": "Варианты не сверены с шейдерами (редактор не отвечал или --no-compile): цены могут быть "
@@ -57,9 +65,6 @@ class _Params(dict):
 
 
 def text(w):
-    """Plain strings come from older results and pass through."""
-    if isinstance(w, str):
-        return w
     body = WARNINGS.get(w.get("code"), w.get("code") or "").format_map(_Params(w))
     return f"{w['side']}: {body}" if w.get("side") else body
 

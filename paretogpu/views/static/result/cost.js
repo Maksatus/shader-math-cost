@@ -20,7 +20,6 @@ function renderCost() {
   </div>
   <div class="stagebar" id="stagebar"></div>
   <div class="stages" id="stages"></div>
-  <section id="hw"></section>
   <section id="memory"></section>
   <section id="main"></section>
   <section id="geometry"></section>
@@ -30,13 +29,9 @@ function renderCost() {
     "Shader · pass": "Шейдер и его pass: у одного шейдера несколько passes, у каждого своя цена",
   });
   const TOP = 50;
-  const STAGE_NAMES = {post: "post", opaque: "opaque", transparent: "transparent", shadow: "shadows", prepass: "prepass",
-                       ui: "UI", compute: "compute", tile: "Mali tile", other: "other"};
-  const STAGE_COLORS = {post: "#a594f0", opaque: "#7fb2e5", transparent: "#6cc4c4", shadow: "#8b939c", prepass: "#d9b36e",
-                        ui: "#e3a1c4", compute: "#b9a3e0", tile: "#9fb7a4", other: "#5f6873"};
   const BY = [["event", "events"], ["shader", "shader"], ["variant", "variant"], ["object", "object"], ["rt", "RT"]];
   const st = { core: D.main_core, part: "total", by: D.frame.device ? "shader" : "event", q: "", stage: "", all: false, sort: ["total", -1],
-               tab: D.frame.device && !D.measured ? "hw" : "frame", pf: "all", psort: ["px", -1], msort: ["time", -1], open: new Set() };
+               tab: "frame", pf: "all", psort: ["px", -1], msort: ["time", -1], open: new Set() };
   const P = D.project_shaders;
   const cyc = v => v == null ? "—" : v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2);
   const mc = v => v == null ? "—" : (v / 1e6).toFixed(v >= 1e8 ? 0 : v >= 1e7 ? 1 : 2);
@@ -170,7 +165,7 @@ function renderCost() {
     const A = MEM.assumptions;
     h += `</tbody></table></div><p class="sub">`
       + (dev ? `${dev.cores} ядер × ${dev.mhz} МГц, память ${dev.gbps} ГБ/с · ` : "")
-      + `за frame ${mb(T.bytes.total)} МБ · RT сжаты ×${A.afbc} (AFBC), ${A.native ? "текстуры в форматах телефона" : "текстуры как ASTC 6×6"}`
+      + `за frame ${mb(T.bytes.total)} МБ · RT сжаты ×${A.afbc} (AFBC), ${{native: "текстуры в форматах телефона", android: "текстуры в форматах Android из импортёра", astc: "текстуры как ASTC 6×6 (форматы Android не получены)"}[A.textures]}`
       + (model ? ` · циклы passes в сумме равны итогу frame без строк «тайл Mali» (потоки драйвера в тайле, в events)` : "") + `</p>`;
     el.innerHTML = h;
   }
@@ -188,7 +183,7 @@ function renderCost() {
     if (PHONE) return `<h2>Shadows and depth <small>замер телефона · не входят в итог, как и на ПК</small></h2>`
       + `<div class="wrap ev"><table><thead><tr><th class="l">Pass</th><th class="l">Shader</th><th class="num">Draw</th>`
       + `<th class="num">Vertices</th><th class="num">M cycles</th></tr></thead><tbody>`
-      + rows.map(a => `<tr><td class="l">${esc(STAGE_NAMES[a.stage] || a.stage)}</td><td class="l"><span class="shn">${esc(a.shader)}</span></td>`
+      + rows.map(a => `<tr><td class="l">${esc(STAGE[a.stage] || a.stage)}</td><td class="l"><span class="shn">${esc(a.shader)}</span></td>`
         + `<td class="num">${a.draws}</td><td class="num">${num(a.vertices)}</td><td class="num">${mc(a.cycles)}</td></tr>`).join("")
       + `</tbody></table></div>`;
     return `<h2>Not priced on PC <small>shadows and depth · ${plural(G.length, "draw", "draw", "draw")}</small></h2>`
@@ -196,8 +191,8 @@ function renderCost() {
       + `поэтому их нет в итоге frame и в процентах выше. Настоящая нагрузка — в snapshot с телефона.</p>`
       + `<div class="wrap ev"><table><thead><tr><th class="l">Pass</th><th class="l">Shader</th><th class="num">Draw</th>`
       + `<th class="num">Vertices</th><th class="num">Triangles</th></tr></thead><tbody>`
-      + rows.map(a => `<tr><td class="l"><span class="dot" style="background:${STAGE_COLORS[a.stage] || STAGE_COLORS.other}"></span>`
-        + `${esc(STAGE_NAMES[a.stage] || a.stage)}</td><td class="l"><span class="shn">${esc(a.shader)}</span>`
+      + rows.map(a => `<tr><td class="l"><span class="dot" style="background:${stageColor(a.stage)}"></span>`
+        + `${esc(STAGE[a.stage] || a.stage)}</td><td class="l"><span class="shn">${esc(a.shader)}</span>`
         + (a.objects.size > 1 ? ` <span class="st">${plural(a.objects.size, "object", "objects", "objects")}</span>` : "")
         + `</td><td class="num">${a.draws}</td><td class="num">${num(a.vertices)}</td><td class="num">${num(a.triangles)}</td></tr>`).join("")
       + `</tbody></table></div>`;
@@ -211,14 +206,14 @@ function renderCost() {
     }
     const g = [...acc.values()].sort((a, b) => b.total - a.total);
     document.getElementById("stagebar").innerHTML = g.map(a =>
-      `<span style="width:${100 * a.share}%;background:${STAGE_COLORS[a.key] || STAGE_COLORS.other}"></span>`).join("");
+      `<span style="width:${100 * a.share}%;background:${stageColor(a.key)}"></span>`).join("");
     const t = D.totals[st.core] || {};
     document.getElementById("stages").innerHTML =
       `<div class="stage ${st.stage ? "" : "on"}" data-s=""><div class="n">whole frame · ${short(st.core)}</div><b>${mc(t[st.part])}</b> <span class="n">M cycles</span>` +
       `<div class="n">pixels ${pc(t.total ? t.fragment / t.total : null)} · vertices ${pc(t.total ? t.vertex / t.total : null)}` +
       (t.compute ? ` · compute ${pc(t.compute / t.total)}` : "") + `</div></div>` +
       g.map(a => `<div class="stage ${st.stage === a.key ? "on" : ""}" data-s="${esc(a.key)}">` +
-        `<div class="n"><span style="color:${STAGE_COLORS[a.key] || STAGE_COLORS.other}">■</span> ${esc(STAGE_NAMES[a.key] || a.key)} · ${plural(a.events, "event", "events", "events")}</div>` +
+        `<div class="n"><span style="color:${stageColor(a.key)}">■</span> ${esc(STAGE[a.key] || a.key)} · ${plural(a.events, "event", "events", "events")}</div>` +
         `<b>${pc(a.share)}</b><div class="n">${mc(a.total)} M · ${num(a.pixels)} px · ${num(a.vertices)} vert</div></div>`).join("");
     document.querySelectorAll(".stage").forEach(el => el.onclick = () => { st.stage = el.dataset.s; draw(); });
   }
@@ -280,8 +275,18 @@ function renderCost() {
     const bad = flags.some(x => BAD_FLAGS.has(x));
     return ` <span class="fc ${bad ? "bad" : ""}">${bad ? "⚠ " : ""}${flags.length}</span>`;
   }
+  const texFlags = r => [...new Set((r.textures || []).flatMap(t => t.flags))];
+  const SOURCE = {editor: " (формат редактора)"};
+  function texturesBlock(r) {
+    if (!(r.textures || []).length) return "";
+    const line = t => `<div><span class="kw">${t.stage === "frag" ? "PS" : t.stage === "vert" ? "VS" : "CS"}</span> `
+      + `${esc(t.name || "—")} · ${t.size.join("×")}${t.cube ? " cube" : ""} · ${esc(t.format)}${SOURCE[t.source] || ""}`
+      + ` · ${plural(t.mips || 1, "мип", "мипа", "мипов")} · ${esc(t.filter || "выборка без фильтра")}`
+      + `${t.target ? ' <span class="st">RT</span>' : ""}${t.flags.map(f => ` <span class="flag ${f}">${esc(FLAG[f])}</span>`).join("")}</div>`;
+    return `<div class="dl tex">${r.textures.map(line).join("")}</div>`;
+  }
   const WHY = {noise: "ниже шума", not_swapped: "не подменён", no_output: "нет вывода"};
-  const unmeasured = c => Object.entries(c.unmeasured || {}).map(([p, w]) => `${p === "fragment" ? "пиксели" : "vertices"} — ${WHY[w] || w}`).join(", ");
+  const unmeasured = c => Object.entries(c.unmeasured || {}).map(([p, w]) => `${PART[p]} — ${WHY[w] || w}`).join(", ");
   function detailRow(r, c) {
     const item = (label, value) => `<div><span>${label}</span>${value}</div>`;
     const items = r.kind === "compute"
@@ -293,7 +298,7 @@ function renderCost() {
          item("Cycles / vertex", `${cyc(c.vtx_price)} · ${boundTag(c.vtx_bound)}`),
          item("Total: pixels / vertices", `${mc(c.fragment)} / ${mc(c.vertex)} M`)];
     if (!PHONE) items.push(item("Registers", `${c.px_regs ?? "—"}${c.vtx_regs != null ? " / " + c.vtx_regs : ""}${c.px_fp16 != null ? ` · fp16 ${c.px_fp16}%` : ""}`));
-    const tags = [`event ${r.index + 1}`, STAGE_NAMES[r.stage] || r.stage];
+    const tags = [`event ${r.index + 1}`, STAGE[r.stage] || r.stage];
     const ps = PASS_OF.get(r.index);
     if (ps && passBound(ps)) tags.push(`pass ${ps.name}: bottleneck в ${boundWord(passBound(ps))}`);
     if (r.kind === "compute") tags.push(`kernel ${r.kernel}`);
@@ -307,6 +312,7 @@ function renderCost() {
       + (r.pixel_note ? `<div class="dl note">${esc(r.pixel_note)}</div>` : "")
       + (unmeasured(c) ? `<div class="dl note">цена модели, не замер: ${esc(unmeasured(c))}</div>` : "")
       + (c.flags.length ? `<div class="dl">${c.flags.map(flagTag).join(" ")}</div>` : "")
+      + texturesBlock(r)
       + `<div class="dl">${tags.map(t => `<span class="kw">${esc(t)}</span>`).join("")}${kws}</div></td></tr>`;
   }
   function eventsTable() {
@@ -332,8 +338,8 @@ function renderCost() {
       const warn = r.pixel_method === "none" || r.pixel_note || unmeasured(c) ? ` <span class="pw">!</span>` : "";
       h += `<tr class="r ${open ? "open" : ""}" data-i="${r.index}">`
          + `<td class="l"><div class="pct"><span>${pc(c.share)}</span><i style="width:${Math.max(1, 100 * c.share / (max || 1))}%"></i></div></td>`
-         + `<td class="l"><span class="dot" style="background:${STAGE_COLORS[r.stage] || STAGE_COLORS.other}"></span>`
-         + `<span class="sh">${esc(names[0])}</span>${names.length > 1 ? ` <span class="st">+${names.length - 1}</span>` : ""}${flagCount(c.flags)}</td>`
+         + `<td class="l"><span class="dot" style="background:${stageColor(r.stage)}"></span>`
+         + `<span class="sh">${esc(names[0])}</span>${names.length > 1 ? ` <span class="st">+${names.length - 1}</span>` : ""}${flagCount([...c.flags, ...texFlags(r)])}</td>`
          + `<td class="l"><span class="shn">${esc(shaderName(r))}</span> <span class="pass">· ${esc(compute ? r.kernel : r.pass)}</span></td>`
          + `<td class="num">${VX() ? num(r.vertices) : num(compute ? r.threads : r.pixels) + warn}</td>`
          + `<td class="num">${VX() ? cyc(c.vtx_price) : cyc(compute ? c.cs_price : c.px_price) + loop}</td>`
@@ -358,7 +364,7 @@ function renderCost() {
       item("Vertices", num(a.vertices)), item("Cycles / vertex, avg", cyc(a.vtx_price) + range(a.vtxP)),
       item("Total: pixels / vertices", `${mc(a.fragment)} / ${mc(a.vertex)} M`)];
     if (a.threads) items.push(item("Compute", `${num(a.threads)} потоков · ${mc(a.compute)} млн`));
-    const stagesTag = [...a.stages].map(s => `<span class="kw"><span class="dot" style="background:${STAGE_COLORS[s] || STAGE_COLORS.other}"></span>${esc(STAGE_NAMES[s] || s)}</span>`).join("");
+    const stagesTag = [...a.stages].map(s => `<span class="kw"><span class="dot" style="background:${stageColor(s)}"></span>${esc(STAGE[s] || s)}</span>`).join("");
     const shaders = st.by !== "shader" && st.by !== "variant" ? [...a.shaders].map(s => `<span class="kw">${esc(s)}</span>`).join("") : "";
     return `<tr class="det"><td colspan="6"><div class="dg num">${items.join("")}</div>`
       + `<div class="dl">${stagesTag}${shaders}</div>`
@@ -378,7 +384,7 @@ function renderCost() {
        + th("pixels", VX() ? "Vertices" : "Pixels") + th("px_price", VX() ? "Cycles / vert" : "Cycles / px") + th("total", "Total, M") + `</tr></thead><tbody>`;
     for (const a of shown) {
       const open = st.open.has("g:" + st.by + ":" + a.key);
-      const dots = [...a.stages].map(s => `<span class="dot" style="background:${STAGE_COLORS[s] || STAGE_COLORS.other}"></span>`).join("");
+      const dots = [...a.stages].map(s => `<span class="dot" style="background:${stageColor(s)}"></span>`).join("");
       const sub = st.by === "object" || st.by === "rt" ? ` <span class="st">${esc([...a.shaders].join(", "))}</span>` : "";
       h += `<tr class="r ${open ? "open" : ""}" data-g="${esc("g:" + st.by + ":" + a.key)}">`
          + `<td class="l"><div class="pct"><span>${pc(a.share)}</span><i style="width:${Math.max(1, 100 * a.share / (max || 1))}%"></i></div></td>`
@@ -468,22 +474,16 @@ function renderCost() {
   }
 
   function bindOpen() {
-    document.querySelectorAll("#main tr.r, #project tr.r, #memory tr.r, #hw tr.r").forEach(el => el.onclick = () => {
+    document.querySelectorAll("#main tr.r, #project tr.r, #memory tr.r").forEach(el => el.onclick = () => {
       const k = el.dataset.g ?? +el.dataset.i; st.open.has(k) ? st.open.delete(k) : st.open.add(k); draw(); });
   }
   function draw() {
     tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.tab));
     pfSeg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === st.pf));
-    const proj = st.tab === "project", passes = st.tab === "passes", hw = st.tab === "hw";
+    const proj = st.tab === "project", passes = st.tab === "passes";
     document.querySelectorAll(".project-only").forEach(el => el.classList.toggle("hide", !proj));
     for (const id of ["stagebar", "stages", "main", "geometry", "missing"]) document.getElementById(id).classList.toggle("hide", st.tab !== "frame");
     document.getElementById("memory").classList.toggle("hide", !passes);
-    document.getElementById("hw").classList.toggle("hide", !hw);
-    document.querySelector(".controls").classList.toggle("hide", hw);
-    if (hw) {
-      document.getElementById("hw").innerHTML = `<h2>Phone</h2><p class="verdict">Замер на телефоне не удался.</p>`;
-      return;
-    }
     bySeg.closest(".group").classList.toggle("hide", st.tab !== "frame");
     partSeg.closest(".group").classList.toggle("hide", st.tab !== "frame");
     for (const id of ["q", "all"]) document.getElementById(id).closest(".group").classList.toggle("hide", passes);
@@ -517,7 +517,7 @@ function renderCost() {
     document.getElementById("geometry").innerHTML = geometryTable();
     document.getElementById("missing").innerHTML = D.missing.length
       ? `<h2>No price <small>${D.missing.length} — не входят в итог</small></h2><div class="wrap"><table><tbody>`
-        + D.missing.map(m => `<tr><td class="num">${m.index + 1}</td><td class="l">${esc(STAGE_NAMES[m.stage] || m.stage)}</td>`
+        + D.missing.map(m => `<tr><td class="num">${m.index + 1}</td><td class="l">${esc(STAGE[m.stage] || m.stage)}</td>`
           + `<td class="l">${esc(objName(m.object))}</td><td class="l">${esc(m.shader)} ${m.pass ? "· " + esc(m.pass) : ""}</td>`
           + `<td class="l fail">${esc(m.reason)}</td></tr>`).join("") + "</tbody></table></div>" : "";
   }

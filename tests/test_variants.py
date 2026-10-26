@@ -301,7 +301,7 @@ class CapturedTest(unittest.TestCase):
 
 
 class LoopsPerCoreTest(unittest.TestCase):
-    """Loops are forced only on cores whose longest path is N/A; one core's N/A must not change another's price."""
+    """A file with a dynamic loop in its SPIR-V is forced on every core, also where malioc unrolls it to its cap."""
 
     @staticmethod
     def record(longest):
@@ -310,10 +310,16 @@ class LoopsPerCoreTest(unittest.TestCase):
              "fp16_pct": 50}
         return {"ok": True, "variants": {"main": v}}
 
-    def test_only_the_cores_without_a_longest_path(self):
-        key = VariantKey("S", 0, 0, "P")
-        state = {"keys": [key], "files": {key: {"frag": "S.frag.spv"}},
-                 "measurements": {"S.frag.spv": {"Mali-G78": self.record(True), "Mali-G715": self.record(False)}}}
+    def test_every_core_of_a_file_with_a_dynamic_loop(self):
+        keys = [VariantKey("S", 0, 0, "P"), VariantKey("F", 0, 0, "P")]
+        names = ["S.frag.spv", "F.frag.spv"]
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        for fn, code in zip(names, (b"loop", b"flat")):
+            with open(os.path.join(root, fn), "wb") as f:
+                f.write(code)
+        state = {"keys": keys, "files": {k: {"frag": fn} for k, fn in zip(keys, names)},
+                 "measurements": {fn: {"Mali-G78": self.record(True), "Mali-G715": self.record(False)} for fn in names}}
         asked = []
 
         class Engine:
@@ -323,10 +329,11 @@ class LoopsPerCoreTest(unittest.TestCase):
             def get(self, rule, keys):
                 asked.extend(keys)
                 return {k: {"loops": [{}]} for k in keys}
-        with mock.patch.object(variants, "Engine", Engine):
-            out = variants.loops_of(state, "root", ["Mali-G78", "Mali-G715"], rep=QUIET)
-        self.assertEqual(asked, [("S.frag.spv", "Mali-G715")])
-        self.assertEqual(list(out["S.frag.spv"]), ["Mali-G715"])
+        with mock.patch.object(variants, "Engine", Engine), \
+                mock.patch.object(variants.loops, "outer_loops", lambda b: [{}] if b == b"loop" else None):
+            out = variants.loops_of(state, root, ["Mali-G78", "Mali-G715"], rep=QUIET)
+        self.assertEqual(asked, [("S.frag.spv", "Mali-G78"), ("S.frag.spv", "Mali-G715")])
+        self.assertEqual({fn: list(p) for fn, p in out.items()}, {"S.frag.spv": ["Mali-G78", "Mali-G715"]})
 
 
 if __name__ == "__main__":

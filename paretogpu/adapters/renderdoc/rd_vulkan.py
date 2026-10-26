@@ -17,7 +17,8 @@ DYNAMIC = (8, 9)  # VK_DESCRIPTOR_TYPE_*_BUFFER_DYNAMIC
 UNUSED = 0xFFFFFFFF
 STAGES = {1: "vert", 16: "frag", 32: "comp"}
 DYN_VIEWPORT, DYN_SCISSOR, DYN_DEPTH_BIAS = 0, 1, 3
-SETUP = {"vkCreateBuffer", "vkAllocateMemory", "vkBindBufferMemory", "vkCreateImageView", "vkCreateShaderModule",
+SETUP = {"vkCreateBuffer", "vkAllocateMemory", "vkBindBufferMemory", "vkCreateImageView", "vkCreateSampler",
+         "vkCreateShaderModule",
          "vkCreateDescriptorSetLayout", "vkAllocateDescriptorSets", "vkCreateRenderPass", "vkCreateRenderPass2",
          "vkCreateFramebuffer", "vkCreateGraphicsPipelines", "vkCreateComputePipelines", "Internal::Initial Contents"}
 DRAWS = {"vkCmdDraw", "vkCmdDrawIndexed", "vkCmdDrawIndirect", "vkCmdDrawIndexedIndirect", "vkCmdDrawIndirectCount",
@@ -56,6 +57,7 @@ class Frame:
 
     def __init__(self):
         self.buffers, self.memory, self.views, self.modules, self.layouts = {}, {}, {}, {}, {}
+        self.samplers, self.immutable, self.sampled = {}, {}, {}
         self.set_layout, self.sets, self.passes, self.framebuffers, self.pipelines = {}, {}, {}, {}, {}
         self.calls, self.render, self.target, self.reflected = {}, None, None, {}
         self.reset()
@@ -75,11 +77,15 @@ class Frame:
             self.buffers[c["buffer"]].update(memory=c["memory"], offset=c["memoryOffset"])
         elif name == "vkCreateImageView":
             self.views[c["View"]] = ci["image"]
+        elif name == "vkCreateSampler":
+            self.samplers[c["Sampler"]] = filtering(ci)
         elif name == "vkCreateShaderModule":
             self.modules[c["ShaderModule"]] = ci["pCode"]
         elif name == "vkCreateDescriptorSetLayout":
             self.layouts[c["SetLayout"]] = sorted((b["binding"], b["descriptorType"], b["descriptorCount"])
                                                   for b in ci["pBindings"] or [])
+            self.immutable[c["SetLayout"]] = {b["binding"]: b["pImmutableSamplers"][0] for b in ci["pBindings"] or []
+                                              if b.get("pImmutableSamplers")}
         elif name == "vkAllocateDescriptorSets":
             self.set_layout[c["DescriptorSet"]] = c["AllocateInfo"]["pSetLayouts"][0]
         elif name in ("vkCreateRenderPass", "vkCreateRenderPass2"):
@@ -120,6 +126,8 @@ class Frame:
             if isinstance(info, dict) and "buffer" in info:
                 slot[k] = {"type": w["descriptorType"], "resource": info["buffer"], "offset": info["offset"],
                            "range": info["range"]}
+            elif isinstance(info, dict) and "imageView" in info:  # as the capture's Initial Contents slots
+                slot[k] = {"type": w["descriptorType"], "resource": info["imageView"], "sampler": info.get("sampler")}
             else:
                 slot[k] = {"type": w["descriptorType"], "resource": None}
             elem += 1
@@ -226,6 +234,35 @@ class Frame:
                 out[f"@{s}.{b}"] = base64.b64encode(self.read(d["resource"], off, size or min(rng, 65536))).decode()
         return out
 
+    def _textures(self, bp, stages):
+        """-> [{"image", "stage", "filter"}] the stages sample or fetch (rd_spirv.sampled), first of an array."""
+        out = {}
+        for short, (module, _) in stages.items():
+            if module not in self.sampled:
+                self.sampled[module] = rd_spirv.sampled(self.modules[module])
+            for (s, b), smp in self.sampled[module]:
+                img = self.views.get((self._descriptor(bp, s, b) or {}).get("resource"))
+                if img is None:
+                    continue
+                flt = self._sampler(bp, *smp) if smp is not None else None
+                if (img, short) not in out or flt:
+                    out[(img, short)] = {"image": img, "stage": short, "filter": flt}
+        return list(out.values())
+
+    def _sampler(self, bp, s, b):
+        dset = self.bound_sets[bp].get(s, (None, {}))[0]
+        sid = (self._descriptor(bp, s, b) or {}).get("sampler") or \
+            self.immutable.get(self.set_layout.get(dset), {}).get(b)
+        return self.samplers.get(sid)
+
+    def _descriptor(self, bp, s, b):
+        dset = self.bound_sets[bp].get(s, (None, {}))[0]
+        if dset is None or dset not in self.set_layout:
+            return None
+        slot = self.sets.get(dset, [])
+        k = self._slot(dset, b, 0)
+        return slot[k] if k < len(slot) else None
+
     def _stages(self, pipe):
         ci = self.pipelines[pipe]
         stages = ci.get("pStages") or [ci["stage"]]
@@ -250,7 +287,8 @@ class Frame:
         bindings = sorted(self.vbs)
         indexed = "Indexed" in name
         state = {
-            "pipeline": pipe, "stages": stages, "blocks": self._blocks(0, stages), "outs": outs, "depth": depth,
+            "pipeline": pipe, "stages": stages, "blocks": self._blocks(0, stages), "textures": self._textures(0, stages),
+            "outs": outs, "depth": depth,
             "blend": (f"{BLEND[att['srcColorBlendFactor']] if att['srcColorBlendFactor'] < len(BLEND) else 'One'} "
                       f"{BLEND[att['dstColorBlendFactor']] if att['dstColorBlendFactor'] < len(BLEND) else 'Zero'}"
                       if att and att["blendEnable"] else "One Zero"),
@@ -281,9 +319,20 @@ class Frame:
         pipe = self.bound[1]
         stages = self._stages(pipe)
         module, entry = stages["comp"]
-        return {"pipeline": pipe, "stages": stages, "blocks": self._blocks(1, stages),
+        return {"pipeline": pipe, "stages": stages, "blocks": self._blocks(1, stages), "textures": self._textures(1, stages),
                 "groups": [c["x"], c["y"], c["z"]] if "x" in c else [None, None, None],
                 "group_size": self.interface(module, entry)["local_size"]}
+
+
+def filtering(ci):
+    """VkSamplerCreateInfo -> "point" | "bilinear" | "trilinear" | "aniso Nx", "+ compare" for a shadow sampler."""
+    if ci.get("anisotropyEnable") and ci.get("maxAnisotropy", 1) > 1:
+        text = f"aniso {round(ci['maxAnisotropy'])}x"
+    elif ci["minFilter"] == 0:
+        text = "point"
+    else:
+        text = "trilinear" if ci["mipmapMode"] == 1 and ci.get("maxLod", 0) > 0 else "bilinear"
+    return text + (" + compare" if ci.get("compareEnable") else "")
 
 
 def frame(sd, events):
@@ -318,11 +367,12 @@ def describe(state, names, textures, write):
     for short, (module, entry) in state["stages"].items():
         sh[short] = {**write(module, entry, short), "name": names.get(module)}
     if "groups" in state:
-        return {"shaders": sh, "blocks": state["blocks"], "groups": state["groups"], "group_size": state["group_size"]}
+        return {"shaders": sh, "blocks": state["blocks"], "textures": state["textures"], "groups": state["groups"],
+                "group_size": state["group_size"]}
     target = (state["outs"] or [state["depth"]])[0]
     tex = textures.get(target)
     return {
-        "shaders": sh, "blocks": state["blocks"], "pipeline": names.get(state["pipeline"]),
+        "shaders": sh, "blocks": state["blocks"], "textures": state["textures"], "pipeline": names.get(state["pipeline"]),
         "rt": {"id": target, "name": names.get(target) or "", "width": tex["width"] if tex else None,
                "height": tex["height"] if tex else None, "samples": tex["samples"] if tex else 1,
                "count": len(state["outs"]), "backbuffer": bool(tex and tex["swapchain"])},

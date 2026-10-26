@@ -9,7 +9,6 @@ from paretogpu.model.errors import ParetoError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CS = os.path.join(HERE, "cs")
-HUB_EDITORS = r"C:\Program Files\Unity\Hub\Editor"
 
 
 class UnityError(ParetoError):
@@ -26,28 +25,6 @@ def editor_version(project):
     if not m:
         raise UnityError(f"no m_EditorVersion in {project}/ProjectSettings/ProjectVersion.txt")
     return m.group(1)
-
-
-def hub_editor_dirs():
-    dirs = []
-    try:
-        with open(os.path.join(os.environ.get("APPDATA", ""), "UnityHub", "secondaryInstallPath.json"),
-                  encoding="utf-8") as f:
-            p = json.load(f)
-        if isinstance(p, str) and p:
-            dirs.append(p)
-    except (OSError, ValueError):
-        pass
-    return dirs + [HUB_EDITORS]
-
-
-def unity_exe(project):
-    ver = editor_version(project)
-    cands = [os.path.join(d, ver, "Editor", "Unity.exe") for d in hub_editor_dirs()]
-    exe = os.environ.get("UNITY_EDITOR") or next((c for c in cands if os.path.exists(c)), cands[-1])
-    if not os.path.exists(exe):
-        raise UnityError(f"Unity {editor_version(project)} not found at {exe} (set UNITY_EDITOR)")
-    return exe
 
 
 def android_package(project):
@@ -85,7 +62,7 @@ def editor_ready(project, allow_play=False):
     if not unity_cli():
         return False
     try:
-        d = cli_json(["command", "editor_status", "--project-path", project], 60)
+        d = cli_json(["command", "editor", "status", "--project-path", project], 60)
     except subprocess.TimeoutExpired:
         return False
     res = ((d.get("data") or {}).get("result") or {}) if d.get("success") else {}

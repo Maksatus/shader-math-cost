@@ -34,7 +34,7 @@ def renderdoc_pixels(project, out, rd, events, rep=CONSOLE):
             os.remove(rdc)
         shutil.move(rd["capture"], rdc)
         acts = rdoc.counters(rdc, os.path.join(out, "rd_actions.json"))
-        matched, missing, mismatched = match(events, acts["actions"], acts.get("counters"))
+        matched, missing, mismatched = match(events, acts["actions"], acts["counters"])
         if not want or matched >= RD_MIN_MATCHED * want:
             break
         calls = sum(1 for a in acts["actions"] if "draw" in a["kinds"] or "dispatch" in a["kinds"])

@@ -76,9 +76,10 @@ class Compare(unittest.TestCase):
         self.assertEqual((water["status"], water["variants"][0]["unpriced"]), ("unpriced", "A"))
 
     def test_split_is_exact(self):
-        a = run([event(0, "Lit", 1000, 10.0, 200, 3.0), event(1, "Fog", 4000, 2.0), event(2, "Old", 100, 5.0)])
-        b = run([event(0, "Lit", 1500, 7.0, 260, 3.5), event(1, "Fog", 4000, 2.0, keywords=["_HQ"]),
-                 event(2, "New", 300, 1.0)], frame_dir="G")
+        a = run([event(0, "Lit", 1000, 10.0, 200, 3.0), event(1, "Fog", 4000, 2.0, obj="fog"),
+                 event(2, "Old", 100, 5.0, obj="old")])
+        b = run([event(0, "Lit", 1500, 7.0, 260, 3.5), event(1, "Fog", 4000, 2.0, keywords=["_HQ"], obj="fog2"),
+                 event(2, "New", 300, 1.0, obj="new")], frame_dir="G")
         c = compare.compare(a, b)
         self.assertFalse(c["same_frame"])
         x = c["by_core"][CORE]
@@ -94,6 +95,19 @@ class Compare(unittest.TestCase):
         self.assertEqual(by["New"]["status"], "new")
         self.assertEqual(by["Fog"]["status"], "mixed")  # other keywords: a new variant
         self.assertAlmostEqual(by["Fog"]["delta"], 0.0)
+
+    def test_a_swap_on_the_same_draws_is_price(self):
+        a = run([event(0, "Ground", 1000, 13.0, obj="t1", flags=["low_fp16"]), event(1, "Ground", 500, 13.0, obj="t2"),
+                 event(2, "Lit", 100, 5.0, obj="x")])
+        b = run([event(0, "Terrain", 1000, 10.0, obj="t1"), event(1, "Terrain", 500, 10.0, obj="t2"),
+                 event(2, "Lit", 100, 5.0, obj="y")], frame_dir="G")
+        x = compare.compare(a, b)["by_core"][CORE]
+        by = {s["shader"]: s for s in x["shaders"]}
+        sw = by["Ground → Terrain"]
+        self.assertEqual((sw["status"], sw["mix"], sw["flags_removed"]), ("both", 0.0, ["low_fp16"]))
+        self.assertAlmostEqual(sw["price"], -4500.0)
+        self.assertEqual(sw["variants"][0]["replaced"], "Ground | 0.0 P | -")
+        self.assertEqual(sorted(by), ["Ground → Terrain", "Lit"])
 
     def test_flags_and_warnings(self):
         a = run([event(0, "Lit", 1000, 10.0, flags=["spilling"])])
@@ -124,20 +138,26 @@ class Compare(unittest.TestCase):
         self.assertEqual((x["index_a"], x["index_b"], x["delta"]), (0, 6, 300.0))
 
     def test_model_against_phone(self):
-        pc = run([event(0, "S", 100, 2.0), event(1, "S", 50, 2.0, obj="o2")])
-        sc = {"error": None, "frame": 900.0, "shaders": [
-            {"mode": "colour", "shader": "S", "draw_stage": "opaque", "names": {"S": 2}, "exec": 150.0, "noise": 5.0,
-             "pipes": {"A": 200.0}},
-            {"mode": "draw", "shader": "S", "draw_stage": "opaque", "names": {"S": 1, "T": 1}, "exec": 400.0,
-             "noise": 5.0, "pipes": {"A": 1.0}}]}
-        phone = run([event(0, "S", 100, 1.0)], frame_dir="P", hardware={"core": CORE, "shader_cost": sc})
+        pc = run([event(0, "S", 100, 2.0), event(1, "S", 50, 2.0, obj="o2"), event(2, "T", 100, 1.0),
+                  event(3, "U", 10, 1.0), event(4, "PcOnly", 10, 1.0)])
+        u = event(7, "U", 10, 2.0)
+        u["cost"][CORE]["unmeasured"] = {"fragment": "noise"}
+        t = event(6, "T", 100, 3.0, 1, 1.0)
+        t["cost"][CORE]["unmeasured"] = {"vertex": "noise"}
+        phone = run([event(5, "S", 100, 1.0), t, u], frame_dir="P", measured="streamline", hardware={"core": CORE})
         m = compare.compare(pc, phone)["model_vs_phone"]
-        self.assertEqual((m["phone"], m["frame"]["model"], m["frame"]["phone"]), ("b", 300.0, 100.0))
-        self.assertEqual([(r["mode"], r["model"], r["exec"], r["cycles"]) for r in m["rows"]],
-                         [("colour", 300.0, 150.0, 200.0)])
+        self.assertEqual((m["phone"], m["frame"]["model"], m["frame"]["phone"]), ("b", 420.0, 421.0))
+        k = m["rank"]
+        self.assertEqual([(r["shader"], r["phone_rank"], r["model_rank"], r["unmeasured"]) for r in k["rows"]],
+                         [("T", 1, 2, False), ("S", 2, 1, False), ("U", 3, 3, True)])
+        self.assertAlmostEqual(k["rows"][0]["model_share"], 100 / 410)
+        self.assertAlmostEqual(k["rows"][0]["phone_share"], 301 / 421)
+        self.assertAlmostEqual(k["spearman"], 0.5)
+        self.assertEqual((k["top5"], k["only_pc"], k["only_phone"]), (3, ["PcOnly"], []))
         self.assertEqual(compare.compare(phone, pc)["model_vs_phone"]["phone"], "a")
         other = run([event(0, "S", 100, 1.0)], cores=[{"name": "Mali-G52"}])
         self.assertEqual(compare.compare(other, phone)["model_vs_phone"]["error"], "core_missing")
+        self.assertEqual(compare.compare(pc, phone)["warnings"], [])
 
     def test_archive_and_render(self):
         with tempfile.TemporaryDirectory() as d:

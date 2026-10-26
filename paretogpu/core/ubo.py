@@ -5,26 +5,12 @@ The dynamic access chains get a BufferBlock twin of their block (same layout, un
 accesses keep the original block and stay in uniform registers."""
 import struct
 
+from paretogpu.core import spirv
+
 OP_DECORATE, OP_MEMBER_DECORATE, OP_TYPE_STRUCT, OP_TYPE_POINTER, OP_VARIABLE = 71, 72, 30, 32, 59
 OP_CONSTANT, OP_SPEC_CONSTANT, OP_ACCESS_CHAIN, OP_IN_BOUNDS_ACCESS_CHAIN, OP_FUNCTION = 43, 50, 65, 66, 54
 UNIFORM = 2
 BLOCK, BUFFER_BLOCK, NON_WRITABLE, BINDING, DESCRIPTOR_SET = 2, 3, 24, 33, 34
-
-
-def _parse(data):
-    if len(data) % 4 or len(data) < 20:
-        return None
-    words = list(struct.unpack(f"<{len(data) // 4}I", data))
-    if words[0] != 0x07230203:
-        return None
-    insts, i = [], 5
-    while i < len(words):
-        wc = words[i] >> 16
-        if wc == 0:
-            return None
-        insts.append(words[i:i + wc])
-        i += wc
-    return words[:5], insts
 
 
 def _inst(op, *ops):
@@ -34,7 +20,7 @@ def _inst(op, *ops):
 def dynamic_as_buffer(data: bytes) -> bytes:
     """-> data with every dynamically indexed uniform block read through a storage-buffer twin; data unchanged when
     there is none (or it is not SPIR-V 1.0-1.2, where BufferBlock exists)."""
-    parsed = _parse(data)
+    parsed = spirv.parse(data)
     if parsed is None or parsed[0][1] > 0x10200:
         return data
     header, insts = parsed

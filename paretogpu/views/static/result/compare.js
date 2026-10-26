@@ -63,7 +63,7 @@ function details(s) {
   const same = s.variants.filter(v => v.status === "both" && Math.abs(v.delta) < 1);
   const shown = s.variants.filter(v => !same.includes(v));
   return (shown.length ? shown : same).map(v => {
-    const st = v.unpriced ? `<span class="badge mixed">нет цены в ${v.unpriced}</span>` : v.status === "new" ? `<span class="badge new">только в B</span>` : v.status === "gone" ? `<span class="badge gone">только в A</span>` : "";
+    const st = v.unpriced ? `<span class="badge mixed">нет цены в ${v.unpriced}</span>` : v.status === "new" ? `<span class="badge new">только в B</span>` : v.status === "gone" ? `<span class="badge gone">только в A</span>` : v.replaced ? `<span class="badge mixed">заменён: ${esc(v.replaced)}</span>` : "";
     const a = v.stats_a || {}, b = v.stats_b || {};
     const ch = (k, label, f = x => x ?? "—") => (a[k] != null || b[k] != null) ? `<div><span class="k">${label}:</span> ${v.status === "both" ? `${f(a[k])} → ${f(b[k])}` : f((v.stats_b || v.stats_a)[k])}</div>` : "";
     const parts = Object.entries(v.stages).map(([k, p]) => `<div><span class="k">${PART[k]}:</span> ${v.status === "both"
@@ -88,20 +88,22 @@ function details(s) {
 function modelVsPhone(m) {
   const pcSide = m.phone === "a" ? "B" : "A", phSide = m.phone.toUpperCase();
   if (m.error) return `<div class="card"><h2>Модель ПК и замер телефона</h2><p class="muted">Snapshot ${pcSide} (ПК) посчитан без ядра ${esc(m.core)} телефона: пересчитайте его с этим ядром.</p></div>`;
-  const ratio = (a, b) => a != null && b > 0 ? `×${(a / b).toFixed(2)}` : "—";
-  const MODE = {colour: "цвет пиксельного шейдера", draw: "draw целиком"};
-  const rows = [...m.rows].sort((a, b) => b.cycles - a.cycles);
-  const off = r => r.model != null && r.cycles > 0 && (r.model / r.cycles > 1.5 || r.model / r.cycles < 0.67);
-  return `<div class="card"><h2>Модель ПК и замер телефона <small>${esc(m.core)}</small></h2>
-    <p>Snapshot ${pcSide} — расчёт на ПК, snapshot ${phSide} — замер на телефоне подменой шейдеров. Так проверяется модель: те же шейдеры, расчёт против железа.
-    Сцены должны совпадать (ракурс, толпа), иначе разница — ещё и объём работы.</p>
-    <div class="kpis"><div class="kpi"><div class="k">Модель ПК, frame</div><div class="v">${M(m.frame.model)}</div><div class="s">млн циклов, без теней и depth (${M(m.frame.model_geometry)})</div></div>
-      <div class="kpi"><div class="k">Телефон, frame</div><div class="v">${M(m.frame.phone)}</div><div class="s">замер по тем же правилам, тени и depth ${M(m.frame.phone_geometry)}</div></div>
-      <div class="kpi"><div class="k">Модель / телефон</div><div class="v">${ratio(m.frame.model, m.frame.phone)}</div><div class="s">&nbsp;</div></div></div>
-    <table style="margin-top:12px"><tr><th>Shader</th><th>Что</th><th>Стадия</th><th class="n">Модель ПК</th><th class="n">Phone</th><th class="n">± замера</th><th class="n">Модель / телефон</th></tr>
-    ${rows.map(r => `<tr><td><b>${esc(r.shader)}</b></td><td class="muted">${MODE[r.mode] || r.mode}</td><td>${esc(String(r.stage || "").split("+").map(x => STAGE[x] || x).join(" + "))}</td>
-      <td class="n">${r.model == null ? "нет в ПК" : M(r.model)}</td><td class="n"><b>${M(r.cycles)}</b></td><td class="n muted">${M(r.noise)}</td>
-      <td class="n ${off(r) ? "bad" : ""}">${r.cycles > 0 ? ratio(r.model, r.cycles) : "шум"}</td></tr>`).join("")}</table>
-    <p class="small muted" style="margin-top:8px">млн циклов на ядре телефона: сумма units (арифметика, LS, текстуры, varying), как в модели; «± замера» — разброс Execution core active. Красным — модель ошибается больше чем в 1.5 раза. «Draw целиком» — только vertex шейдеры одного шейдера Unity; общий полноэкранный vertex шейдер post-process не сравнивается.</p></div>`;
+  const k = m.rank, pct = x => `${(x * 100).toFixed(1)}%`;
+  const off = r => !r.unmeasured && r.phone_share > 0 && (r.model_share / r.phone_share > 1.5 || r.model_share / r.phone_share < 0.67);
+  const n = k.rows.length, top = (x, of) => `${x} из ${Math.min(of, n)}`;
+  const only = (side, list) => list.length ? `<div class="small muted">Только в ${side}: ${list.map(esc).join(", ")}</div>` : "";
+  return `<div class="card"><h2>Рейтинг шейдеров: модель ПК и замер телефона <small>${esc(m.core)}</small></h2>
+    <p>Snapshot ${pcSide} — расчёт на ПК, snapshot ${phSide} — замер на телефоне. Абсолютные числа разные (размер frame, ракурс), сравнивается порядок: доля каждого шейдера в своём frame.</p>
+    <div class="kpis"><div class="kpi"><div class="k">Совпадение рейтинга</div><div class="v">${k.spearman == null ? "—" : k.spearman.toFixed(2)}</div><div class="s">Spearman: 1 — порядок тот же, 0 — не связан; ${plural(n, "шейдер", "шейдера", "шейдеров")}</div></div>
+      <div class="kpi"><div class="k">Top-5</div><div class="v">${top(k.top5, 5)}</div><div class="s">шейдеров в обоих top-5</div></div>
+      <div class="kpi"><div class="k">Top-10</div><div class="v">${top(k.top10, 10)}</div><div class="s">шейдеров в обоих top-10</div></div></div>
+    <table style="margin-top:12px"><tr><th class="n"># телефон</th><th class="n"># ПК</th><th>Shader</th><th class="n">Доля, телефон</th><th class="n">Доля, ПК</th><th class="n">ПК / телефон</th></tr>
+    ${k.rows.map(r => `<tr><td class="n"><b>${r.phone_rank}</b></td><td class="n ${Math.abs(r.model_rank - r.phone_rank) > 2 ? "bad" : ""}">${r.model_rank}</td>
+      <td><b>${esc(r.shader)}</b>${r.unmeasured ? ` <span class="small muted">цена модели: замер не снят</span>` : ""}</td>
+      <td class="n"><b>${pct(r.phone_share)}</b> <span class="small muted">${M(r.phone)}</span></td>
+      <td class="n">${pct(r.model_share)} <span class="small muted">${M(r.model)}</span></td>
+      <td class="n ${off(r) ? "bad" : ""}">${r.phone_share > 0 ? `×${(r.model_share / r.phone_share).toFixed(2)}` : "—"}</td></tr>`).join("")}</table>
+    ${only("ПК", k.only_pc)}${only("телефоне", k.only_phone)}
+    <p class="small muted" style="margin-top:8px">Доля — от суммы шейдеров, которые есть на обеих сторонах; рядом млн циклов на ядре телефона (frame: ПК ${M(m.frame.model)}, телефон ${M(m.frame.phone)}). Красным: место отличается больше чем на 2 или доля — больше чем в 1.5 раза.</p></div>`;
 }
 VIEWS.compare = renderCompare;

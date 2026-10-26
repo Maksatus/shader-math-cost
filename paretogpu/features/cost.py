@@ -55,7 +55,7 @@ def print_summary(c, n_variants):
         mc = c["main_core"]
         print(f"{mc}: {t['total'] / 1e6:.1f} M cycles (pixels {100 * t['fragment'] / t['total']:.0f}%, "
               f"vertices {100 * t['vertex'] / t['total']:.0f}%, compute {100 * t['compute'] / t['total']:.1f}%); "
-              "by stage: " + ", ".join(f"{a['key']} {100 * a['share']:.1f}%" for a in c["groups"][mc]["stage"]))
+              "by stage: " + ", ".join(f"{a['key']} {100 * a['share']:.1f}%" for a in frame_cost.group(c["events"], mc, "stage")))
         for r in [r for r in c["events"] if mc in r["cost"]][:10]:
             x = r["cost"][mc]
             work = (f"threads {r['threads']:>8,} x {x['cs_price']:6.2f}" if r["kind"] == "compute" else

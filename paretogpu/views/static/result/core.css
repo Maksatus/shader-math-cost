@@ -1,0 +1,4 @@
+.bnd { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 0 7px; border-radius: 999px; background: var(--chip); cursor: help; white-space: nowrap; }
+.bnd i { font-style: normal; font-weight: 400; color: var(--muted); }
+.costhelp { color: var(--accent); font-size: 12px; text-decoration: none; }
+.costhelp:hover { text-decoration: underline; }

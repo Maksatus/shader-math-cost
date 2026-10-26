@@ -25,7 +25,7 @@ class CodeVersionTest(unittest.TestCase):
     def test_compare_warns_about_two_versions(self):
         def run(v):
             return {"code_version": v, "cores": [{"name": "Mali-G78"}], "main_core": "Mali-G78", "totals": {},
-                    "events": [], "groups": {}}
+                    "events": []}
         codes = lambda a, b: [w["code"] for w in compare.compare(run(a), run(b))["warnings"]]
         self.assertIn("code_differs", codes("aaa", "bbb"))
         self.assertIn("code_differs", codes(None, "bbb"))

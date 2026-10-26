@@ -21,10 +21,8 @@ class StageCosts(TypedDict, total=False):
     px_regs: int
     vtx_regs: int
     px_fp16: int
-    total_by_n: dict      # {n: total} with the dynamic loops at n iterations
     px_loops: list        # [{"n", "cycles"}] per outer loop (core/pricing.loop_parts)
     cs_loops: list        # the same for a compute kernel
-    px_price_by_n: dict
     px_ref: float
     vtx_ref: float
     cs_ref: float
@@ -37,7 +35,7 @@ EventCost = TypedDict("EventCost", {
     "threads": int, "thread_method": str, "kernel": str, "variant": str, "files": dict,
     "cost": dict,      # {core: StageCosts}
     "reason": str,     # why there is no price
-    "loop": dict,      # {"n", "fixed"} when its dynamic loops are priced at n
+    "loop": dict,      # {"n", "loops": [{"n", "from", ...}]} when its dynamic loops are priced by trip count
 }, total=False)
 
 
@@ -49,11 +47,10 @@ class CostRun(TypedDict, total=False):
     cores: list           # [{"name", "arch"}]
     main_core: str
     totals: dict          # {core: {"total", "fragment", "vertex", "compute"}}
-    loops: dict           # {"n", "overrides", "range", "events", "files", "unforced", "by_n"}
+    loops: dict           # {"n" (default), "events", "files", "bounded", "measured", "unknown", "unforced"}
     coverage: dict
     pixel_methods: dict
     vertex_methods: dict
-    groups: dict          # {core: {group: [{key, events, pixels, ..., total, share}]}}
     missing: list
     events: list          # [EventCost]
     variants_checked: bool

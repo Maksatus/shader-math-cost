@@ -20,7 +20,6 @@ from paretogpu.model.cost import CostRun, CostSummary
 from paretogpu.model.frame import Event
 from paretogpu.model.variant import VariantKey, VariantState
 
-GROUPS = ("stage", "shader", "variant", "object", "rt")
 REF_N = 1
 
 
@@ -78,11 +77,28 @@ FRAG = (".frag", ".frag.spv")
 
 
 class _Counts:
-    """Outer loop trip counts: uniform bound from params, else measured mean per pixel (frag only), else LOOP_ITERS."""
+    """Outer loop trip counts: uniform bound from params, else measured mean per pixel (frag only), else LOOP_ITERS.
+    calls {event: rd_actions action}: an SRP batch's calls draw objects of other uniform values (block bytes per call),
+    their counts are averaged by the call's invocations of the stage."""
 
-    def __init__(self, ev, loop_data, bounds, iters=None):
+    def __init__(self, ev, loop_data, bounds, iters=None, calls=None):
         self.ev, self.loop_data, self.bounds, self.n = ev, loop_data, bounds, LOOP_ITERS
         self.iters = iters
+        self.calls = [calls[e] for e in (ev.get("rd") or {}).get("events") or [] if e in (calls or {})]
+
+    def _uniform(self, b, fn):
+        """-> (trip count, bound value) of bound b, None if unreadable."""
+        params = self.ev.get("params") or {}
+        counter = ("ps_invocations" if fn.endswith(FRAG) else "cs_invocations" if self.ev["kind"] == "compute"
+                   else "vs_invocations")
+        calls = [({**params, **(a.get("blocks") or {})}, a.get(counter) or 0) for a in self.calls] or [(params, 0)]
+        vals = [(loops.bound_value(b, p), w) for p, w in calls]
+        if any(v is None for v, _ in vals):
+            return None
+        total = sum(w for _, w in vals)
+        share = [w / total if total else 1 / len(vals) for _, w in vals]
+        return (sum(max(0, math.ceil(v - 1e-6)) * k for (v, _), k in zip(vals, share)),
+                sum(v * k for (v, _), k in zip(vals, share)))
 
     def sources(self, fn):
         p = next(iter((self.loop_data.get(fn) or {}).values()), None)
@@ -92,10 +108,9 @@ class _Counts:
         measured = self.iters if self.iters and len(self.iters["n"]) == size and fn.endswith(FRAG) else None
         out = []
         for k, b in enumerate(self.bounds.get(fn) or [None] * size):
-            v = loops.bound_value(b, self.ev.get("params"))
-            if v is not None:
-                out.append({"n": max(0, math.ceil(v - 1e-6)), "from": "uniform", "bound": loops.bound_text(b),
-                            "value": v})
+            u = self._uniform(b, fn)
+            if u is not None:
+                out.append({"n": u[0], "from": "uniform", "bound": loops.bound_text(b), "value": u[1]})
             elif measured:
                 out.append({"n": measured["n"][k], "from": "frame", "pixels": measured["pixels"]})
             else:
@@ -206,6 +221,13 @@ def _totals(rows, cores):
     return totals
 
 
+def _default_loop(r):
+    """A row with work whose dynamic loop runs the default trip count (LOOP_ITERS), not its parameters' or the capture's."""
+    lp = r["loop"]
+    return bool(lp and (r["pixels"] or r["threads"]) and (not lp["loops"] or any(x["from"] not in KNOWN
+                                                                                    for x in lp["loops"])))
+
+
 def _unforced(loop_data, measurements, cores):
     """Files without loop data on a core where malioc's longest path is N/A (priced by total cycles there)."""
     def na(fn, c):
@@ -215,9 +237,9 @@ def _unforced(loop_data, measurements, cores):
 
 
 def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
-            main_core=MAIN_CORE, tiles=None) -> CostRun:
+            main_core=MAIN_CORE, tiles=None, calls=None) -> CostRun:
     """-> frame_cost.json. An event priced on only some cores is in "missing" with "cores" = the unpriced ones.
-    tiles: core/memory.tile_threads(), priced as rows of kind "tile"."""
+    tiles: core/memory.tile_threads(), priced as rows of kind "tile"; calls: {event: rd_actions action} (_Counts)."""
     pix = px.resolve(events)
     loop_data = state.get("loops") or {}
     bounds = state.get("loop_bounds") or {}
@@ -229,7 +251,7 @@ def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
             continue
         recs, why = variants.match(ev, state)
         row = _event_row(ev, pix, why)
-        counts = _Counts(ev, loop_data, bounds, iters.get(ev["index"]))
+        counts = _Counts(ev, loop_data, bounds, iters.get(ev["index"]), calls)
         if recs and "compute" in recs:
             found_cores.update(_price_compute(row, recs, counts, loop_data))
         elif recs and (len(recs) == 2 or (set(recs) == {"vertex"} and not why)):
@@ -274,15 +296,13 @@ def compute(meta: dict, events: list[Event], state: VariantState, cores=None,
                                                                          for x in r["loop"]["loops"] or [])),
                   "measured": sum(1 for r in rows if r["loop"] and any(x["from"] == "frame"
                                                                           for x in r["loop"]["loops"] or [])),
-                  "unknown": sum(1 for r in rows if r["loop"] and (r["pixels"] or r["threads"]) and (
-                      not r["loop"]["loops"] or any(x["from"] not in KNOWN for x in r["loop"]["loops"]))),
+                  "unknown": sum(1 for r in rows if _default_loop(r)),
                   "unforced": _unforced(loop_data, state.get("measurements") or {}, cores)},
         "coverage": {"draws": len(draws), "draws_priced": sum(1 for r in draws if r["cost"]),
                      "events": len(rows) + len(geometry) - len(tiles or []),
                      "events_priced": sum(1 for r in rows + geometry if r["cost"] and r["kind"] != "tile")},
         "pixel_methods": dict(sorted(_count(r["pixel_method"] for r in draws).items())),
         "vertex_methods": dict(sorted(_count(r["vertex_method"] for r in draws).items())),
-        "groups": {c: groups(rows, c) for c in cores},
         "missing": missing, "events": rows, "geometry": geometry,
     }
 
@@ -294,25 +314,24 @@ def _count(it):
     return d
 
 
-def groups(rows, core):
-    out = {}
-    for g in GROUPS:
-        acc = OrderedDict()
-        for r in rows:
-            c = r["cost"].get(core)
-            if not c:
-                continue
-            k = {"stage": r["stage"], "shader": r["shader"], "rt": r["rt"], "object": r["object"],
-                 "variant": r["variant"]}[g] or "—"
-            a = acc.setdefault(k, {"key": k, "events": 0, "pixels": 0, "vertices": 0, "threads": 0,
-                                   "fragment": 0.0, "vertex": 0.0, "compute": 0.0, "total": 0.0, "share": 0.0})
-            a["events"] += 1
-            for f in ("pixels", "vertices", "threads"):
-                a[f] += r[f]
-            for f in ("fragment", "vertex", "compute", "total", "share"):
-                a[f] += c[f]
-        out[g] = sorted(acc.values(), key=lambda a: -a["total"])
-    return out
+def group(rows, core, by):
+    """Rows priced on core summed by "stage" | "shader" | "variant" | "object" | "rt", costliest first (the report
+    groups in the page, views/static/result/cost.js)."""
+    acc = OrderedDict()
+    for r in rows:
+        c = r["cost"].get(core)
+        if not c:
+            continue
+        k = r[by] or "—"
+        a = acc.setdefault(k, {"key": k, "events": 0, "pixels": 0, "vertices": 0, "threads": 0,
+                               "fragment": 0.0, "vertex": 0.0, "compute": 0.0, "total": 0.0})
+        a["events"] += 1
+        for f in ("pixels", "vertices", "threads"):
+            a[f] += r[f]
+        for f in ("fragment", "vertex", "compute", "total"):
+            a[f] += c[f]
+    t = sum(a["total"] for a in acc.values())
+    return sorted(({**a, "share": a["total"] / t if t else 0.0} for a in acc.values()), key=lambda a: -a["total"])
 
 
 def summary(c: CostRun) -> CostSummary:
@@ -322,7 +341,7 @@ def summary(c: CostRun) -> CostSummary:
     t = (c.get("totals") or {}).get(mc) or {}
     missing = [m for m in c.get("missing") or [] if not m.get("cores") or len(m["cores"]) == len(c.get("cores") or [])]
     failed = [m for m in missing if m.get("kind") == "draw"]
-    top = (((c.get("groups") or {}).get(mc) or {}).get("shader") or [])[:5]
+    top = group(c.get("events") or [], mc, "shader")[:5]
     return {"snapshot": os.path.basename(fd.rstrip("\\/")) or None, "frame_dir": fd, "project": frame.get("project"),
             "computed_at": c.get("computed_at"), "code_version": c.get("code_version"),
             "malioc": c.get("malioc"), "main_core": mc,
@@ -412,16 +431,17 @@ def measured(c, sc, events, core):
                 x.update(fragment=x["fragment"] + vert[i], vertex=0.0)
         x["px_price"] = x["fragment"] / r["pixels"] if r["pixels"] else None
         x["vtx_price"] = x["vertex"] / r["vertices"] if r["vertices"] else None
-        x["total"] = x["fragment"] + x["vertex"]
+        x["total"] = x["fragment"] + x["vertex"] + x["compute"]
         x["unmeasured"] = {p: why.get((i, p), "not_swapped") for p, done in
                            (("fragment", i in frag or not r["pixels"]), ("vertex", i in vert or i in frag
-                                                                          and r["pixels"] >= r["vertices"]))
+                                                                          and r["pixels"] >= r["vertices"]),
+                            ("compute", False))
                            if not done and (m or {}).get(p)}
         if not r.get("geometry"):
             fallback += sum((m or {}).get(p) or 0.0 for p in x["unmeasured"])
         r["cost"] = {core: x}
         priced.append(r)
-    done = {r["index"] for r in priced}
+    done = {r["index"] for r in priced if r["cost"]}
     missing = [x for x in c["missing"] if x["index"] not in done]
     events_ = [r for r in priced if not r.get("geometry")] + [r for r in c["events"] if r["kind"] == "tile"]
     for r in events_:
@@ -429,9 +449,11 @@ def measured(c, sc, events, core):
             r["cost"] = {core: r["cost"][core]} if core in r["cost"] else {}
     geometry = [r for r in priced if r.get("geometry")]
     events_.sort(key=lambda r: -(r["cost"].get(core) or {}).get("total", 0.0))
+    c["loops"]["unknown"] = sum(1 for r in events_ if _default_loop(r) and {"fragment", "compute"} & set(
+        (r["cost"].get(core) or {}).get("unmeasured") or {}))  # a measured part does not use the loop's trip count
     c.update({"events": events_, "geometry": geometry, "missing": missing, "main_core": core,
               "cores": [x for x in c["cores"] if x["name"] == core] or [{"name": core, "arch": None}],
-              "totals": _totals(events_, [core]), "groups": {core: groups(events_, core)},
+              "totals": _totals(events_, [core]),
               "measured": sc.get("source") or "renderdoc",
               "measured_fallback": {"events": sum(1 for r in events_ if (r["cost"].get(core) or {}).get("unmeasured")),
                                     "cycles": fallback}})

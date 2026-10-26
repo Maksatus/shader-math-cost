@@ -119,27 +119,11 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(self.snap["device"]["imgui_draws"], 1)
         self.assertEqual(self.snap["device"]["discard_unshaded"], 0)
 
-    def test_hardware_beside_the_model(self):
-        names = [device.EXEC, "Arithmetic unit issue cycles"]
-        dev = {"mali": {"names": names, "passes": {"10": [400, 100], "20": [900, 300], "30": [50, 40]},
-                        "error": None}}
-        rows = [{"index": e["index"], "kind": "draw", "stage": e["stage"], "path": e["path"], "shader": f"S{e['index'] % 2}",
-                 "cost": {"Mali-G78": {"total": t}}} for e, t in zip(self.ev, (100.0, 500.0, 20.0, 60.0))]
-        rows.append({"index": 9, "kind": "tile", "stage": "tile", "path": "", "tile_event": 20,
-                     "cost": {"Mali-G78": {"total": 200.0}}})
-        h = device.hardware(dev, FRAME["actions"], self.ev, rows, "Mali-G78")
-        self.assertEqual([(p["event"], p["name"], p["draws"], p["model"], p["tile"], p["hw"][device.EXEC])
-                          for p in h["passes"]],
-                         [(10, "shadow", 1, 100.0, 0.0, 400), (20, "opaque", 2, 720.0, 200.0, 900),
-                          (30, "Uber PP", 1, 60.0, 0.0, 50)])
-        self.assertEqual((h["model"], h["exec"]), (880.0, 1350))
-        self.assertEqual(h["passes"][1]["shaders"], {"S1": 1, "S0": 1})
-        geo = device.hardware(dev, FRAME["actions"], self.ev, [dict(rows[0], geometry=True)] + rows[1:], "Mali-G78")
-        self.assertEqual((geo["model"], geo["exec"], geo["exec_geometry"]), (780.0, 950, 400))
+    def test_hardware_without_counters(self):
+        self.assertIsNone(device.hardware({}, FRAME["actions"], "Mali-G78"))
         crashed = device.hardware({"mali": {"names": [], "passes": {}, "error": "crashed"}}, FRAME["actions"],
-                                  self.ev, rows, "Mali-G78")
-        self.assertEqual((crashed["error"], crashed["passes"]), ("crashed", []))
-        self.assertIsNone(device.hardware({}, FRAME["actions"], self.ev, rows, "Mali-G78"))
+                                  "Mali-G78")
+        self.assertEqual(crashed, {"core": "Mali-G78", "error": "crashed", "shader_cost": None})
 
     def test_shader_cost_by_swap(self):
         names = [device.EXEC, "Arithmetic unit issue cycles", "Texture unit issue cycles"]
@@ -153,19 +137,13 @@ class Snapshot(unittest.TestCase):
                            "passes": {"20": [700, 250, 70]}}]}
         dev = {"mali": {"names": names, "passes": {"10": [400, 100, 0], "20": [900, 300, 80], "30": [50, 40, 5]},
                         "error": None}, "knockout": ko}
-        rows = [{"index": e["index"], "kind": "draw", "stage": e["stage"], "path": e["path"], "shader": e["shader"],
-                 "pixels": 100, "vertices": 30, "cost": {"Mali-G78": {"total": 3.0, "fragment": 2.0}}}
-                for e in self.ev]
-        sc = device.hardware(dev, FRAME["actions"], self.ev, rows, "Mali-G78")["shader_cost"]
-        top, draw, broken = sc["shaders"]
-        self.assertEqual((top["mode"], top["pixels"], top["model"]), ("colour", 100, 2.0))
-        self.assertEqual((draw["stage"], draw["exec"], draw["model"], draw["vertices"]), ("vert", 200, 3.0, 30))
-        self.assertEqual(sc["frame"], 1350)
-        self.assertEqual((top["shader"], top["exec"], top["noise"], top["pipes"]),
-                         ("Kefir/Lit (PBR)", 300, 20, {"A": 180, "T": 50}))
-        self.assertEqual([(p["event"], p["name"]) for p in top["passes"]], [(20, "opaque")])
-        self.assertEqual((broken["error"], broken["exec"]), ("no_output", 0.0))
-        self.assertEqual(device.hardware({**dev, "knockout": {"error": "crashed"}}, FRAME["actions"], self.ev, rows,
+        sc = device.hardware(dev, FRAME["actions"], "Mali-G78")["shader_cost"]
+        top, broken, draw = sc["shaders"]
+        self.assertEqual((top["mode"], top["file"], top["pipes"]), ("colour", "b2.frag.spv", {"A": 180, "T": 50}))
+        self.assertEqual((draw["stage"], draw["mode"], draw["pipes"]), ("vert", "draw", {"A": 50, "T": 10}))
+        self.assertEqual((broken["error"], broken["pipes"]), ("no_output", {"A": 0.0, "T": 0.0}))
+        self.assertEqual(sc["source"], "renderdoc")
+        self.assertEqual(device.hardware({**dev, "knockout": {"error": "crashed"}}, FRAME["actions"],
                                          "Mali-G78")["shader_cost"], {"error": "crashed", "shaders": []})
 
     def test_shader_cost_of_the_whole_frame(self):
@@ -173,18 +151,11 @@ class Snapshot(unittest.TestCase):
         names = [device.EXEC, "Arithmetic unit issue cycles", "Texture unit issue cycles"]
         ko = {"names": names, "base": {"frame": [1000, 300, 80]}, "spread": {"frame": 30}, "source": "streamline",
               "shaders": [{"stage": "frag", "mode": "colour", "file": "b2.frag.spv", "events": [lit],
-                           "passes": {"frame": [995, 200, 80]}},
-                          {"stage": "frag", "mode": "colour", "file": "c3.frag.spv", "events": [],
-                           "passes": {"frame": [960, 290, 75]}}]}
+                           "passes": {"frame": [995, 200, 80]}}]}
         dev = {"mali": {"names": [], "passes": {}, "error": "crashed"}, "knockout": ko}
-        rows = [{"index": e["index"], "kind": "draw", "stage": e["stage"], "path": e["path"], "shader": e["shader"],
-                 "cost": {}} for e in self.ev]
-        h = device.hardware(dev, FRAME["actions"], self.ev, rows, "Mali-G78")
-        sc = h["shader_cost"]
-        self.assertEqual((h["error"], sc["source"], sc["frame"]), ("crashed", "streamline", 1000))
-        top = sc["shaders"][0]  # ranked by its busiest unit (A 100), not its noisy exec (5 vs 40)
-        self.assertEqual((top["file"], top["exec"], top["pipes"], top["noise"]), ("b2.frag.spv", 5, {"A": 100, "T": 0}, 30))
-        self.assertEqual([(p["event"], p["name"]) for p in top["passes"]], [(None, "весь frame")])
+        h = device.hardware(dev, FRAME["actions"], "Mali-G78")
+        self.assertEqual((h["error"], h["shader_cost"]["source"]), ("crashed", "streamline"))
+        self.assertEqual(h["shader_cost"]["shaders"][0]["pipes"], {"A": 100, "T": 0})
 
     def test_actions_and_memory(self):
         by = {a["event"]: a for a in self.actions["actions"]}
@@ -201,9 +172,15 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(workspace.capture_of("D:/snap", {}), (None, None))
 
     def test_native_textures_as_they_are(self):
-        rgba = {"width": 4, "height": 4, "bytes": 64, "format": "R8G8B8A8_UNORM"}
-        self.assertEqual(memory.device_size(rgba)[2], "astc")  # the editor's RGBA8 of an asset is ASTC on Mali
+        rgba = {"name": "albedo", "width": 4, "height": 4, "bytes": 64, "format": "R8G8B8A8_UNORM"}
+        self.assertEqual(memory.device_size(rgba)[2], "astc")  # no Android formats: the editor's RGBA8 counts as ASTC
         self.assertEqual(memory.device_size(dict(rgba, native=True))[1:], (64, "capture"))
+
+    def test_pc_textures_in_their_android_format(self):
+        rgba = {"name": "albedo", "width": 4, "height": 4, "bytes": 64, "format": "R8G8B8A8_UNORM"}
+        self.assertEqual(memory.device_size(rgba, {"albedo": [{"format": "ASTC_8x8"}]})[1:], (4.0, "android"))
+        self.assertEqual(memory.device_size(rgba, {"albedo": [{"format": "RGBA32"}]})[1:], (64.0, "android"))
+        self.assertEqual(memory.device_size(rgba, {"albedo": []})[1:], (64, "capture"))  # not an asset: as captured
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ Per variant and stage (w = pixels / vertices / threads, p = cycles / w, r = refe
   (trip counts equal on both sides: price = (pB - pA) * (wA + wB) / 2, loops = 0; r would misplace an edit of a loop
   body run n != 1 times)
   work  = (wB - wA) * (pA + pB) / 2           work changed (scene, camera, LOD)
-price + loops + work = B - A exactly; a variant on one side only is `mix`. Warning texts: views/messages.py.
+price + loops + work = B - A exactly; a variant on one side only is `mix`, unless another one on the other side draws
+exactly its events (a swap: priced as one variant). Warning texts: views/messages.py.
 """
 import os
 import time
@@ -115,8 +116,11 @@ def _events(va, vb):
 
 def _variant_row(va, vb):
     v = vb or va
-    row = {"variant": v["variant"], "shader": v["shader"], "pass": v["pass"], "keywords": v["keywords"],
+    swap = va and vb and va["variant"] != vb["variant"]
+    shader = f"{va['shader']} → {vb['shader']}" if swap and va["shader"] != vb["shader"] else v["shader"]
+    row = {"variant": v["variant"], "shader": shader, "pass": v["pass"], "keywords": v["keywords"],
            "kind": v["kind"], "status": "both" if va and vb else "new" if vb else "gone",
+           "replaced": va["variant"] if swap else None,
            "a": va["total"] if va else 0.0, "b": vb["total"] if vb else 0.0, "price": 0.0, "loops": 0.0, "work": 0.0,
            "mix": 0.0, "stages": {}}
     row["delta"] = row["b"] - row["a"]
@@ -153,10 +157,26 @@ def _variant_row(va, vb):
     return row
 
 
+def _swaps(va, vb):
+    """{variant only in A: variant only in B} drawing exactly the same events (object, stage, rt, occurrence): a shader
+    or keyword swap on the same draws, priced as a change of price, not of the frame's mix."""
+    def keys(v):
+        return frozenset(e["key"] for e in v["events"])
+    new, out = [k for k in vb if k not in va], {}
+    for g in (k for k in va if k not in vb):
+        cands = [n for n in new if n not in out.values() and keys(vb[n]) == keys(va[g])]
+        if cands:
+            out[g] = next((n for n in cands if vb[n]["pass"] == va[g]["pass"]), cands[0])
+    return out
+
+
 def compare_core(a, b, core):
     va, sa, unpriced_a = _side(a, core)
     vb, sb, unpriced_b = _side(b, core)
-    rows = [_variant_row(va.get(k), vb.get(k)) for k in dict.fromkeys(list(va) + list(vb))]
+    swaps = _swaps(va, vb)
+    taken = set(swaps.values())
+    rows = [_variant_row(va.get(k), vb.get(swaps.get(k, k))) for k in dict.fromkeys(list(va) + list(vb))
+            if k not in taken]
     for r in rows:
         if (r["status"], r["variant"]) in {("new", k) for k in unpriced_a} | {("gone", k) for k in unpriced_b}:
             r["unpriced"] = "A" if r["status"] == "new" else "B"
@@ -243,44 +263,54 @@ def compare(a: CostRun, b: CostRun) -> dict:
 
 
 def _measured(c):
-    sc = (c.get("hardware") or {}).get("shader_cost")
-    return sc if sc and not sc.get("error") else None
+    return c.get("measured")
 
 
 def model_vs_phone(pc, phone):
-    """The PC snapshot's model against the phone's measured shader cost (core/device.shader_cost), per shader and draw
-    stage on the phone's core: "colour" rows against the model's fragment cycles, whole-draw rows (one shader name only)
-    against the model's total; a row's phone cycles = its unit deltas summed, as the model sums pipes. Frame: both
-    snapshots' totals by the same rules (shadows and depth apart, in "geometry").
-    -> {"core", "frame": {"model", "phone", "model_geometry", "phone_geometry"}, "rows"} or {"core", "error"}."""
-    sc, core = _measured(phone), phone["hardware"]["core"]
+    """The PC snapshot's model against the phone's measured frame (core/frame_cost.measured) on the phone's core: the
+    shaders ranked by their share of the frame on each side (the frames differ in size, the ranking must not).
+    rank: {"spearman", "top5", "top10" (shaders in both top lists), "only_pc", "only_phone", "rows": [{"shader",
+    "model", "phone", "model_share", "phone_share", "model_rank", "phone_rank", "unmeasured"}]}; unmeasured: every
+    phone draw of the shader kept the model's price. Frame: both snapshots' totals (shadows and depth in "geometry").
+    -> {"core", "frame": {"model", "phone", "model_geometry", "phone_geometry"}, "rank"} or {"core", "error"}."""
+    core = phone["hardware"]["core"]
     if core not in [x["name"] for x in pc.get("cores") or []]:
         return {"core": core, "error": "core_missing"}
-    model = Counter()
-    for r in (pc.get("events") or []) + (pc.get("geometry") or []):
-        x = (r.get("cost") or {}).get(core)
-        if x:
-            model[("colour", r.get("shader"), r["stage"])] += x.get("fragment") or 0.0
-            model[("draw", r.get("shader"), r["stage"])] += x.get("total") or 0.0
-    rows = {}
-    for s in sc["shaders"]:
-        if s.get("error") or s["mode"] not in ("colour", "draw") or (s["mode"] == "draw" and len(s["names"]) != 1):
-            continue
-        k = (s["mode"], s["shader"], s.get("draw_stage"))
-        have = [(k[0], k[1], st) for st in (k[2] or "").split("+") if (k[0], k[1], st) in model]
-        r = rows.setdefault(k, {"mode": k[0], "shader": k[1], "stage": k[2],
-                                "model": sum(model[x] for x in have) if have else None, "exec": 0.0,
-                                "noise": 0.0, "cycles": 0.0})
-        r["exec"] += s["exec"]
-        r["noise"] += s["noise"]
-        r["cycles"] += frame_cost.knockout_cycles(s)
-    rows = list(rows.values())
+
+    def by_shader(c):
+        cycles, unmeasured = Counter(), {}
+        for r in c.get("events") or []:
+            x = (r.get("cost") or {}).get(core)
+            if x and r["kind"] != "tile":
+                s = r.get("shader") or "—"
+                cycles[s] += x.get("total") or 0.0
+                u = x.get("unmeasured") or {}
+                unmeasured[s] = unmeasured.get(s, True) and bool(u) and all(p in u for p, _, _ in STAGES if x.get(p))
+        return cycles, unmeasured
+
+    model, _ = by_shader(pc)
+    measured, unmeasured = by_shader(phone)
+    both = [s for s in measured if s in model]
+    mt, pt = sum(model[s] for s in both), sum(measured[s] for s in both)
+    m_rank = {s: i + 1 for i, s in enumerate(sorted(both, key=lambda s: -model[s]))}
+    p_rank = {s: i + 1 for i, s in enumerate(sorted(both, key=lambda s: -measured[s]))}
+    n = len(both)
+    spearman = 1 - 6 * sum((m_rank[s] - p_rank[s]) ** 2 for s in both) / (n * (n * n - 1)) if n > 1 else None
+
+    def top(k):
+        return len({s for s in both if m_rank[s] <= k} & {s for s in both if p_rank[s] <= k})
+    rank = {"spearman": spearman, "top5": top(5), "top10": top(10),
+            "only_pc": sorted(s for s in model if s not in measured),
+            "only_phone": sorted(s for s in measured if s not in model),
+            "rows": [{"shader": s, "model": model[s], "phone": measured[s], "model_share": model[s] / mt if mt else 0.0,
+                      "phone_share": measured[s] / pt if pt else 0.0, "model_rank": m_rank[s], "phone_rank": p_rank[s],
+                      "unmeasured": unmeasured[s]} for s in sorted(both, key=p_rank.get)]}
 
     def total(c, part):
         if part == "events":
             return ((c.get("totals") or {}).get(core) or {}).get("total")
         return sum(((r.get("cost") or {}).get(core) or {}).get("total") or 0.0 for r in c.get(part) or [])
-    return {"core": core, "error": None, "rows": rows,
+    return {"core": core, "error": None, "rank": rank,
             "frame": {"model": total(pc, "events"), "phone": total(phone, "events"),
                       "model_geometry": total(pc, "geometry"), "phone_geometry": total(phone, "geometry")}}
 

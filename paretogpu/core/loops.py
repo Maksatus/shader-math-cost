@@ -1,9 +1,11 @@
-"""Shader price vs dynamic-loop trip counts: malioc's longest path is N/A for dynamic loops, so each outer loop's exit
-test is forced to `counter < n` (body and breaks kept) and the forced variants are measured."""
+"""Shader price vs dynamic-loop trip counts: malioc's longest path is N/A for dynamic loops (or a capped loop's cap),
+so each outer loop's exit test is forced to `counter < n` (body and breaks kept) and the forced variants are measured."""
 import base64
 import struct
 
-MODEL = "per-loop/4"  # rename whenever plan() / cycles_at() change
+from paretogpu.core import spirv
+
+MODEL = "per-loop/4"  # in the memo key of loop profiles: rename whenever plan() / profile() / rules.parametric change
 SLOPE_M = 32  # loops measured at M, 2M, 4M iterations: at fewer, malioc unrolls and keeps uniform reads in registers
 
 OP_TYPE_BOOL, OP_TYPE_INT, OP_CONSTANT_TRUE, OP_CONSTANT = 20, 21, 41, 43
@@ -36,22 +38,6 @@ def _owners(spans):
     index = {i: k for k, i in enumerate(outer)}
     return [index[i] if i in index else next(index[j] for j in outer if spans[j][0] < spans[i][0] < spans[j][1])
             for i in range(len(spans))], outer
-
-
-def _parse_spirv(data):
-    if len(data) % 4 or len(data) < 20:
-        return None
-    words = list(struct.unpack(f"<{len(data) // 4}I", data))
-    if words[0] != 0x07230203:
-        return None
-    header, insts, i = words[:5], [], 5
-    while i < len(words):
-        wc = words[i] >> 16
-        if wc == 0:
-            return None
-        insts.append(words[i:i + wc])
-        i += wc
-    return header, insts
 
 
 def _loop_plans(insts):
@@ -113,7 +99,7 @@ def _loop_plans(insts):
 
 def force_spirv(data, n, nested=1, describe=False):
     """n, nested: scalar or one per outer loop; a nested loop runs min(n_k, 1) * nested_k times. None if unforceable."""
-    parsed = _parse_spirv(data)
+    parsed = spirv.parse(data)
     if parsed is None:
         return None
     header, insts = parsed
@@ -456,7 +442,7 @@ def spirv_bounds(data):
     """Bound per outer dynamic loop (force_spirv numbering), None where not from uniform blocks; None if unforceable.
     Unity's SPIR-V has no member names, so uniforms are ["b", ...] read from the call's block bytes; HLSLcc counters
     are stored/loaded locals, not SSA."""
-    parsed = _parse_spirv(data)
+    parsed = spirv.parse(data)
     lp = _loop_plans(parsed[1]) if parsed else None
     if not lp or not lp[1]:
         return None

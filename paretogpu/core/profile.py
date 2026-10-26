@@ -1,8 +1,18 @@
+import re
 from collections import Counter
 
-from paretogpu.core.device import markers
+SKIP = re.compile(r"^(vkCmd|ID3D|RenderLoop\.|Shadows\.|Camera\.|GUI\.|UI\.|Setup |PlayerEndOfFrame|FrameTime\.|"
+                  r"Inl_|Clear Rendering State|ScriptableRenderer)")
+_RP = re.compile(r"^\(RP \d+:\d+\) ")
 
 MOBILE_TARGETS = ("Android",)
+
+
+def markers(path):
+    segs = (path or "").split("/")
+    if "ExecuteRenderGraph" in segs:
+        segs = segs[segs.index("ExecuteRenderGraph") + 1:]
+    return [m for m in (_RP.sub("", s) for s in segs) if m and not SKIP.match(m)]
 
 
 def frame_size(rows):

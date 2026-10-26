@@ -41,11 +41,6 @@ class RenderDocMatchTest(unittest.TestCase):
         renderdoc.match(evs, acts, ["vs_invocations"])
         self.assertEqual((evs[0]["rd"]["vs_invocations"], evs[0]["rd"]["vertex_method"]), (18, "indices"))
 
-    def test_without_counter_list_old_behaviour(self):
-        evs = [draw(0, "Cam/Opaque", 6)]
-        renderdoc.match(evs, [action(10, "Cam/Opaque", 6, ps=100)])
-        self.assertEqual(evs[0]["rd"]["vs_invocations"], 0)
-
     def test_extra_call_is_reported(self):
         # one extra RenderDoc draw on the path shifts the order: index counts disagree
         evs = [draw(0, "Cam/Opaque", 6), draw(1, "Cam/Opaque", 36)]
@@ -81,6 +76,15 @@ class RenderDocMatchTest(unittest.TestCase):
                 action(12, "Cam/RenderLoop.Draw", 3), action(13, "Cam/RenderLoop.Draw", 6), action(20, "Cam/TAA", 3)]
         self.assertEqual(renderdoc.match(evs, acts, []), (4, 0, 0))
         self.assertEqual([e["rd"]["events"] for e in evs], [[10], [11], [12, 13], [20]])
+
+    def test_last_draws_under_another_path_take_the_calls_before_the_editors(self):
+        evs = [draw(0, "Cam/Opaque", 6), draw(1, "DrawScreenSpaceUI/Canvas.RenderOverlays", 12),
+               draw(2, "DrawScreenSpaceUI/Canvas.RenderOverlays", 18)]
+        acts = [action(10, "Cam/Opaque", 6), action(20, "vkCmdExecuteCommands(1)/Canvas.RenderOverlays/UI", 12),
+                action(21, "vkCmdExecuteCommands(1)/Canvas.RenderOverlays/UI", 18),
+                action(30, "GUITexture.Draw", 6), action(31, "Graphics.Blit", 3)]
+        self.assertEqual(renderdoc.match(evs, acts, []), (3, 0, 0))
+        self.assertEqual([e["rd"]["events"] for e in evs], [[10], [20], [21]])
 
     def test_calls_between_that_do_not_fit_are_not_taken(self):
         evs = [draw(0, "Cam/Transparent", 6), draw(1, "Cam/Transparent", 12), draw(2, "Cam/TAA", 3)]

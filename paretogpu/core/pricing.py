@@ -38,15 +38,20 @@ def combined(rec: Measurement, model: PipeModel = MALI):
     return out
 
 
+def raised(c, model: PipeModel = MALI):
+    """c with 'arith' raised to its busiest part: malioc's arith is never below it, per-pipe loop interpolation
+    (core/loops.cycles_at) can put it there."""
+    sub = [c[p] for p in model.arith_sub if c.get(p) is not None]
+    return {**c, model.arith: max(c.get(model.arith) or 0.0, *sub)} if sub else c
+
+
 def pipe_cycles(c, model: PipeModel = MALI):
     """-> (sum of the pipes' cycles, [busiest pipes]). Bifrost reports only 'arith'; on Valhall+ 'arith' is the total and
-    fma / cvt / sfu its breakdown, named as the busiest when equal to it. malioc's arith is never below its busiest
-    part; per-pipe loop interpolation (core/loops.cycles_at) can put it there, so it is raised to it."""
+    fma / cvt / sfu its breakdown, named as the busiest when equal to it."""
     arith = model.arith
-    vals = {p: c[p] for p in model.pipes if c.get(p) is not None}
-    sub = {p: vals.pop(p) for p in model.arith_sub if p in vals}
-    if sub:
-        vals[arith] = max(vals.get(arith, 0.0), *sub.values())
+    sub = {p: c[p] for p in model.arith_sub if c.get(p) is not None}
+    r = raised(c, model)
+    vals = {p: r[p] for p in model.pipes if p not in model.arith_sub and r.get(p) is not None}
     if not vals:
         return 0.0, []
     top = max(vals.values())

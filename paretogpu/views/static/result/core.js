@@ -4,11 +4,13 @@ const sM = x => (x = z(x), x > 0 ? "+" : x < 0 ? "−" : "±") + M(Math.abs(x));
 const pct = (d, a) => !a ? (d ? "нов." : "0%") : (d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(100 * d / a).toFixed(Math.abs(d / a) < 0.1 ? 1 : 0) + "%";
 const cls = d => d < 0 ? "good" : d > 0 ? "bad" : "";
 const pr = x => x == null ? "—" : (+x).toFixed(2);
-const STAGE = {opaque: "opaque", transparent: "transparent", post: "post-process", shadow: "shadows", prepass: "препасс",
+const STAGE = {opaque: "opaque", transparent: "transparent", post: "post", shadow: "shadows", prepass: "prepass",
   ui: "UI", compute: "compute", tile: "Mali tile", other: "other"};
+const stageColor = s => `var(--stage-${s in STAGE ? s : "other"})`;
 const PART = {fragment: "pixels", vertex: "vertices", compute: "compute"};
 const UNIT = {fragment: "пикс.", vertex: "vert.", compute: "потоков"};
-const FLAG = {spilling: "spilling", regs_gt32: "регистров > 32", low_fp16: "мало fp16", dynamic_loop: "динамический цикл", sfu_bound: "bottleneck в SFU"};
+const FLAG = {spilling: "spilling", regs_gt32: "регистров > 32", low_fp16: "мало fp16", dynamic_loop: "динамический цикл", sfu_bound: "bottleneck в SFU",
+  uncompressed: "несжатая", no_mips: "без мипов"};
 const PIPE = {
   arith: ["A", "арифметика"],
   fma: ["FMA", "умножение/сложение"],
@@ -39,9 +41,8 @@ function side(i, tag) {
     <div class="small muted">malioc ${esc(i.malioc || "?")}${i.resolution ? " · " + i.resolution.join("×") : ""}${i.quality ? " · " + esc(i.quality) : ""}</div></div>`;
 }
 
-// older results hold plain strings instead of {code, ...params}
 const fill = (t, p) => t.replace(/\{(\w+)\}/g, (_, k) => p[k] ?? "?");
-const msg = w => typeof w === "string" ? w : (w.side ? w.side + ": " : "") + fill(MSG.warnings[w.code] || w.code || "", w);
+const msg = w => (w.side ? w.side + ": " : "") + fill(MSG.warnings[w.code] || w.code || "", w);
 
 const VIEWS = {};
 function render() {

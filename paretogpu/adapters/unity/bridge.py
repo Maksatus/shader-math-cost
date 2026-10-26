@@ -1,4 +1,4 @@
-"""Runs cs/ scripts in the open editor via `unity command run_script` (protocol: cs/ParetoGpuJob.cs).
+"""Runs cs/ scripts in the open editor via `unity command script run` (protocol: cs/ParetoGpuJob.cs).
 Python writes <out>/<name>_config.json, the entry answers <out>/<name>.json; <name>.progress -> on_progress,
 <name>.error "[code] message" -> the caller's error with that code. An entry returning "started" works on editor ticks
 and its answer is polled for."""
@@ -20,7 +20,7 @@ FAILURE = re.compile(r"\[(\w+)\] ")
 
 
 def source(script):
-    """ParetoGpuJob.cs + cs/<script> merged, usings first (run_script compiles one file); folder named by content."""
+    """ParetoGpuJob.cs + cs/<script> merged, usings first (script run compiles one file); folder named by content."""
     usings, bodies = [], []
     for fn in (JOB, script):
         with open(os.path.join(CS, fn), encoding="utf-8") as f:
@@ -60,9 +60,8 @@ def run(project, script, entry, args, error, timeout=120):
     """-> the string <Class>.<entry> returns. timeout: seconds the editor may run it."""
     cls = os.path.splitext(script)[0]
     try:
-        d = cli_json(["command", "run_script", "--project-path", project, "--timeout", str(timeout),
-                      "--timeout_ms", str(timeout * 1000), "--file", source(script), "--entry", f"{cls}.{entry}",
-                      "--args", json.dumps(args)], timeout + 60)
+        d = cli_json(["command", "script", "run", "--project-path", project, "--timeout", str(timeout),
+                      "--file", source(script), "--entry", f"{cls}.{entry}", "--args", json.dumps(args)], timeout + 60)
     except subprocess.TimeoutExpired:
         raise error(f"{entry}: Unity CLI did not answer in {timeout + 60} s") from None
     res = (d.get("data") or {}).get("result") or {}

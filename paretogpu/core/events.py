@@ -161,7 +161,7 @@ def _check(ev, sel, ps):
     return None
 
 
-def match(events: list[Event], actions, counters=None):
+def match(events: list[Event], actions, counters):
     """Sets ev["rd"] from the next m_DrawCallCount calls whose marker path ends with the event's (whole segments).
     The scan stops at a call of the next event's path, so a missing event never takes a later one's calls.
     A counter not in `counters` (rd_actions.json) is None, not 0: Mali has no pipeline statistics.
@@ -172,7 +172,7 @@ def match(events: list[Event], actions, counters=None):
     spans = [None] * len(wanted)
 
     def total(sel, name):
-        if counters is not None and name not in counters:
+        if name not in counters:
             return None
         return sum(a.get(name) or 0 for a in sel)
 
@@ -182,12 +182,10 @@ def match(events: list[Event], actions, counters=None):
         if vs is not None and any(u is not None for u in unique):  # as a device frame: IDVS shades each index once
             vs = sum(u * max(1, a.get("instances") or 1) if u is not None else a.get("vs_invocations") or 0
                      for u, a in zip(unique, sel))
-        gpu = total(sel, "gpu_duration")
         ev["rd"] = {"calls": len(sel), "events": [a["event"] for a in sel], "ps": ps, "vs": vs,
                     "ps_invocations": ps, "vs_invocations": vs, "cs_invocations": cs,
                     **({"vertex_method": "indices"} if any(u is not None for u in unique) else {}),
-                    "samples": total(sel, "samples_passed"),
-                    "gpu_ms": None if gpu is None else round(gpu * 1000, 4)}
+                    "samples": total(sel, "samples_passed")}
         if sel[0].get("blocks"):  # the call's uniform bytes: SPIR-V loop bounds (core/loops.spirv_bounds)
             ev["params"] = {**(ev.get("params") or {}), **sel[0]["blocks"]}
         bad = _check(ev, sel, ps) if ev["kind"] == "draw" else None
@@ -217,7 +215,8 @@ def match(events: list[Event], actions, counters=None):
         spans[i] = (got[0], got[-1])
         mismatched += assign(ev, [calls[k] for k in got])
     # Unity can close a marker early (the capture's path differs): a run of unmatched draws between two matched events
-    # takes the calls between them when their numbers and index counts agree exactly
+    # takes the calls between them when their numbers and index counts agree exactly; after the frame's last event
+    # come the editor's own calls
     i = 0
     while i < len(wanted):
         if spans[i] is not None:
@@ -237,7 +236,7 @@ def match(events: list[Event], actions, counters=None):
                 break
             sels.append(sel)
             p += n
-        if len(sels) == j - i and p == len(gap):
+        if len(sels) == j - i and (p == len(gap) or j == len(wanted)):
             for k, (ev, sel) in enumerate(zip(wanted[i:j], sels)):
                 spans[i + k] = (lo, lo)
                 mismatched += assign(ev, sel)

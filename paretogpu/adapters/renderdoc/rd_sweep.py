@@ -42,9 +42,9 @@ def main():
                      "events": events, "error": None})
 
     def group(k):
-        if rp.moved + job["repeats"] + 4 >= rd_replay.REOPEN and not rp.swaps:
+        if rp.moved + job["repeats"] + 4 >= rd_replay.REOPEN:
             rp.moved = rd_replay.REOPEN
-            rp.go(last, True)  # reopens the capture now, not inside the group
+            rp.go(last, True)  # reopens the capture (swaps set again) now, not inside the group
             time.sleep(PAUSE)
         for _ in range(job["repeats"]):
             marks.append([k, time.time()])

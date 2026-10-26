@@ -134,3 +134,13 @@ class BuildPipelineTest(unittest.TestCase):
                                                             "path": "Assets/Settings/Mobile_RP.asset"})
         self.write(1, False)
         self.assertEqual(materials.build_pipeline(self.p)["path"], "Assets/Settings/PC_RP.asset")
+
+
+class PipesTableTest(unittest.TestCase):
+    def test_the_shown_pipes_add_up_to_the_price(self):
+        c = {"arith": 1.627, "fma": 18.94, "cvt": 0.5, "sfu": 0.25, "ls": 33.0, "t": 4.0, "v": 3.125}
+        rec = {"arch": "Valhall", "variants": {"main": {"longest": c, "shortest": c, "total": c, "work_regs": 20,
+                                                        "spilling": False, "fp16_pct": 50}}}
+        p = shaders._pipes(rec, "S.frag.spv", "Mali-G78", [2], {})["longest"]["2"]
+        self.assertEqual((p["arith"], p["ls"], p["fma"]), (18.94, 8.25, 18.94))
+        self.assertAlmostEqual(sum(p[x] for x in ("arith", "ls", "t", "v")), shaders.heavy.score(rec)["cycles"])

@@ -62,7 +62,7 @@ async function loadMaterials() {
   $("#tab-compare").classList.add("matmode");
   if (!$("#matProject").options.length) {
     const ps = OPT.unity_projects.filter(p => !p.device);
-    $("#matProject").innerHTML = ps.map(p => `<option value="${esc(p.path)}">${esc(p.title)}</option>`).join("");
+    $("#matProject").innerHTML = editorGroups();
     const saved = (store.get("matcompare") || {}).project || store.get("project");
     if (ps.some(p => p.path === saved)) $("#matProject").value = saved;
     else { const open = ps.find(p => p.open); if (open) $("#matProject").value = open.path; }

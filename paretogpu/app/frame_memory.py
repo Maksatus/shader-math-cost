@@ -29,10 +29,10 @@ def read(frame_dir, frame, rep=CONSOLE):
         return {**raw, "actions": json.load(f)["actions"]}
 
 
-def passes(capture, events, rows, cores, rep=CONSOLE):
+def passes(capture, events, rows, cores, formats, rep=CONSOLE):
     if not capture:
         return None
-    res = memory.passes(capture["textures"], capture["usage"], capture["actions"], events, rows, cores)
+    res = memory.passes(capture["textures"], capture["usage"], capture["actions"], events, rows, cores, formats)
     if res:
         rep.log(f"  {len(res['passes'])} passes, {res['totals']['bytes']['total'] / 2 ** 20:.1f} MB of memory traffic")
     return res

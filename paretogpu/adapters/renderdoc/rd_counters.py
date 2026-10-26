@@ -1,6 +1,7 @@
 # Runs inside qrenderdoc --python (RenderDoc's UI python, not the normal interpreter).
 # In: capture PARETOGPU_RDC, PARETOGPU_LIB. Out: PARETOGPU_OUT {"counters", "actions": leaf actions with marker path,
-# counters (*_invocations = times that shader stage ran) and a call's uniform "blocks" {"@set.binding": base64}};
+# counters (*_invocations = times that shader stage ran), a call's uniform "blocks" {"@set.binding": base64} and the
+# "textures" it reads [{"image", "stage", "filter"}] (rd_vulkan)};
 # a traceback goes to <out>.error.
 import json
 import os
@@ -32,8 +33,7 @@ def main():
         raise RuntimeError(f"cannot replay capture: {r}")
     sf = controller.GetStructuredFile()
     wanted = {rd.GPUCounter.PSInvocations: "ps_invocations", rd.GPUCounter.VSInvocations: "vs_invocations",
-              rd.GPUCounter.CSInvocations: "cs_invocations", rd.GPUCounter.SamplesPassed: "samples_passed",
-              rd.GPUCounter.RasterizedPrimitives: "rasterized_primitives", rd.GPUCounter.EventGPUDuration: "gpu_duration"}
+              rd.GPUCounter.CSInvocations: "cs_invocations", rd.GPUCounter.SamplesPassed: "samples_passed"}
     avail = set(controller.EnumerateCounters())
     use = [c for c in wanted if c in avail]
     counters = {}
@@ -58,7 +58,8 @@ def main():
                 actions.append({"event": a.eventId, "name": name, "path": "/".join(path), "kinds": kinds,
                                 "indices": a.numIndices, "instances": a.numInstances,
                                 **counters.get(a.eventId, {}),
-                                **({"blocks": calls[a.eventId]["blocks"]} if {"draw", "dispatch"} & set(kinds) else {}),
+                                **({"blocks": calls[a.eventId]["blocks"], "textures": calls[a.eventId]["textures"]}
+                                   if {"draw", "dispatch"} & set(kinds) else {}),
                                 **({"unique_vertices": calls[a.eventId]["unique_vertices"]} if "draw" in kinds else {})})
 
     walk(controller.GetRootActions(), [])

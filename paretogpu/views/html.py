@@ -38,7 +38,7 @@ def render_result(doc, title="Сравнение кадров"):
     # < > & as JSON escapes: no name can close the <script> or open a comment in it
     data = json.dumps(doc, ensure_ascii=False).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     page = (_template("result_view.html").replace("/*THEME*/\n", _static("theme.css"))
-            .replace("/*PAGE_CSS*/\n", _static("result", page_css(doc.get("kind"))))
+            .replace("/*PAGE_CSS*/\n", _static("result", "core.css") + _static("result", page_css(doc.get("kind"))))
             .replace("/*SCRIPTS*/\n", "".join(_static(*fn) for fn in result_scripts())))
     msg = json.dumps(messages.export(), ensure_ascii=False).replace("<", "\\u003c")
     return (page.replace("/*COMPARE_DATA*/null", data).replace("/*MESSAGES*/null", msg)

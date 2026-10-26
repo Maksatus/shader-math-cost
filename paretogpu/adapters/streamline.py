@@ -1,17 +1,17 @@
 """Arm Streamline (Performance Studio): Mali hardware counters of a debuggable Android process over time, without root:
 gatord pushed to the device and run against the package, Streamline-cli turning the capture into a timeline table."""
 import csv
-import glob
 import io
 import os
-import re
 import shutil
 import subprocess
+
+from paretogpu.adapters import arm
 
 REMOTE = "/data/local/tmp"
 COUNTERS = ("GPU_ACTIVE", "EXEC_CORE_ACTIVE", "EXEC_INSTR_FMA", "EXEC_INSTR_CVT", "EXEC_INSTR_SFU",
             "TEX_FILT_NUM_OPERATIONS", "LS_MEM_READ_FULL", "LS_MEM_READ_SHORT", "LS_MEM_WRITE_FULL",
-            "LS_MEM_WRITE_SHORT", "VARY_INSTR", "FRAG_ACTIVE", "TILER_ACTIVE")
+            "LS_MEM_WRITE_SHORT", "VARY_SLOT_16", "VARY_SLOT_32", "FRAG_ACTIVE", "TILER_ACTIVE")
 
 
 class StreamlineError(RuntimeError):
@@ -19,14 +19,10 @@ class StreamlineError(RuntimeError):
 
 
 def studio():
-    found = []
-    for d in glob.glob(os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Arm", "Arm Performance Studio *")):
-        m = re.search(r"(\d+(?:\.\d+)*)$", d)
-        if m and os.path.exists(os.path.join(d, "streamline", "Streamline-cli.exe")):
-            found.append((tuple(int(x) for x in m.group(1).split(".")), os.path.join(d, "streamline")))
-    if not found:
+    cli = arm.studio_file("streamline", "Streamline-cli.exe")
+    if not cli:
         raise StreamlineError("Streamline not found: install Arm Performance Studio")
-    return max(found)[1]
+    return os.path.dirname(cli)
 
 
 def config(gpu):

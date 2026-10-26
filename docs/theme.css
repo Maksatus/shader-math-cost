@@ -4,6 +4,8 @@
   --accent: #34d399; --on-accent: #062a1d; --chip: #232830; --hover: #20252b;
   --cheap: #8bd99b; --medium: #e8c27a; --heavy: #f2877b; --info: #7fb2e5; --bar: #55606c;
   --part-px: #7fb2e5; --part-vx: #b9a3e0; --part-cs: #6cc4c4;
+  --stage-post: #a594f0; --stage-opaque: #7fb2e5; --stage-transparent: #6cc4c4; --stage-shadow: #8b939c;
+  --stage-prepass: #d9b36e; --stage-ui: #e3a1c4; --stage-compute: #b9a3e0; --stage-tile: #9fb7a4; --stage-other: #5f6873;
   --sans: Manrope, system-ui, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 }

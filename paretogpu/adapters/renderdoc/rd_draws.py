@@ -26,7 +26,7 @@ EXACT_SRC = {"One", "SrcAlpha"}  # these leave a count written with alpha 1 as i
 TIMING = Counter()
 NONZERO = bytes([0] + [1] * 255)
 WRITES = (rd.ActionFlags.Drawcall | rd.ActionFlags.Dispatch | rd.ActionFlags.Clear | rd.ActionFlags.Copy
-          | rd.ActionFlags.Resolve)
+          | rd.ActionFlags.Resolve | rd.ActionFlags.BeginPass)  # a pass's load op may clear its targets
 
 
 def _small_float(bits, mbits):

@@ -8,7 +8,7 @@ Compute = TypedDict("Compute", {"shader": str, "kernel": str, "groups": list, "g
 # the event's RenderDoc calls (core/events.match); a counter the capture does not have is None, not 0
 RdCounters = TypedDict("RdCounters", {
     "calls": int, "events": list, "ps": int, "vs": int, "ps_invocations": int, "vs_invocations": int,
-    "cs_invocations": int, "samples": int, "gpu_ms": float, "count_mismatch": list, "mismatch": str}, total=False)
+    "cs_invocations": int, "samples": int, "count_mismatch": list, "mismatch": str}, total=False)
 
 # one Frame Debugger event (core/events.normalize); kind: draw | compute | other;
 # stage: shadow | prepass | opaque | transparent | post | ui | compute | other
